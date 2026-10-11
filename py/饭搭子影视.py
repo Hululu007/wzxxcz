@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# ============ 饭搭子影视 源 (fdzys.com) 详情页数据全提取版 ============
+# ============ 饭搭子影视 源 (fdzys.com) 电影分类修复版 ============
 import sys, re, json
 from urllib.parse import quote
 
@@ -103,6 +103,7 @@ class Spider(Spider):
         if u.startswith('//'): return 'https:' + u
         return self.base + (u if u.startswith('/') else '/' + u)
 
+    # ========== ★ 增强列表提取（增加名称兜底，绝不漏拿电影） ==========
     def _items(self, h):
         items, seen = [], set()
         if not h: return items
@@ -128,9 +129,15 @@ class Spider(Spider):
                         pic = self._abs(tmp_url)
                         break
             
+            # ★ 标题提取增强：找不到标题时，绝不直接跳过，从 alt 或 URL 兜底
             name_m = re.search(r'<div class="title">([^<]+)</div>', inner)
             if not name_m: name_m = re.search(r'title="([^"]+)"', full_tag)
             name = name_m.group(1).strip() if name_m else ''
+            if not name:
+                name_m = re.search(r'alt="([^"]+)"', inner)
+                if name_m: name = name_m.group(1).strip()
+            if not name:
+                name = url.split('/')[-1].replace('.html', '').replace('-', ' ')
             if not name: continue
             
             remark_m = re.search(r'<div class="tag[^>]*>([^<]+)</div>', inner)
@@ -139,9 +146,10 @@ class Spider(Spider):
             items.append({'vod_id': vid, 'vod_name': name[:60], 'vod_pic': pic, 'vod_remarks': remark[:30]})
         return items
 
+    # ========== ★ 分页增强：兼容 /page/2 和 ?page=2 两种分页 ==========
     def _pagecount(self, h, cur):
         mx = cur
-        for m in re.finditer(r'[?&]page=(\d+)', h):
+        for m in re.finditer(r'(?:[?&]|/)page[/=](\d+)', h):
             try: mx = max(mx, int(m.group(1)))
             except: pass
         return mx if mx > cur else cur + 1
@@ -155,6 +163,7 @@ class Spider(Spider):
     def homeVideoContent(self):
         return {'list': self._items(self._get(self.base))}
 
+    # ========== ★ 修复电影分类拿不全，绝不动其他分类 ==========
     def categoryContent(self, tid, pg=1, filter=False, extend=''):
         try: pn = max(int(str(pg)), 1)
         except: pn = 1
@@ -172,16 +181,20 @@ class Spider(Spider):
         l_val = raw_lang if raw_lang and raw_lang not in ('全部', 'all', '') else 'all'
         y_val = raw_year if raw_year and raw_year not in ('全部', 'all', '') else 'all'
         
-        segments = [c_val]
-        if a_val != 'all': segments.append(a_val)
-        if l_val != 'all': segments.append(l_val)
-        if y_val != 'all' and main_cat in FILTER_TYPES: segments.append(y_val)
-        
-        filter_path = '-'.join(segments)
         sort_val = ex.get('sort', '')
         sort_suffix = '/' + sort_val if sort_val and sort_val not in ('默认', '') else ''
         
-        url = '%s/%s/%s%s' % (self.base, main_cat, filter_path, sort_suffix)
+        # ★ 核心修复：如果用户没有选择任何筛选条件，仅为电影分类构建基础 URL，防止 /movie/all 漏拿
+        if main_cat == 'movie' and c_val == 'all' and a_val == 'all' and l_val == 'all' and y_val == 'all' and not sort_suffix:
+            url = '%s/%s' % (self.base, main_cat)
+        else:
+            segments = [c_val]
+            if a_val != 'all': segments.append(a_val)
+            if l_val != 'all': segments.append(l_val)
+            if y_val != 'all' and main_cat in FILTER_TYPES: segments.append(y_val)
+            filter_path = '-'.join(segments)
+            url = '%s/%s/%s%s' % (self.base, main_cat, filter_path, sort_suffix)
+            
         if pn > 1: url += '?page=%d' % pn
 
         h = self._get(url)
@@ -189,7 +202,7 @@ class Spider(Spider):
         items = self._items(h)
         return {'page': pn, 'pagecount': self._pagecount(h, pn), 'limit': 24, 'total': len(items), 'list': items}
 
-    # ========== ★ 详情页彻底重写：精准提取元数据、简介、导演、主演 ==========
+    # ========== ★ 详情页（原封不动，绝对不碰你认可的简介和元数据） ==========
     def detailContent(self, ids, quick='1'):
         vid = str(ids[0] if isinstance(ids, list) else ids or '')
         h = self._get(self._abs(vid))
@@ -197,7 +210,6 @@ class Spider(Spider):
         
         d = {'vod_id': vid, 'vod_name': '', 'vod_pic': '', 'vod_actor': '', 'vod_director': '', 'vod_content': '', 'vod_remarks': '', 'vod_play_from': '', 'vod_play_url': ''}
         
-        # 1. 标题（优先 h1）
         m = re.search(r'<h1[^>]*>([\s\S]*?)</h1>', h)
         if m: 
             d['vod_name'] = re.sub(r'<[^>]+>', '', m.group(1)).strip()
@@ -205,14 +217,12 @@ class Spider(Spider):
             m = re.search(r'<meta[^>]+property="og:title"[^>]+content="([^"]+)"', h, re.I)
             if m: d['vod_name'] = m.group(1).strip()
         
-        # 2. 封面
         m = re.search(r'<meta[^>]+property="og:image"[^>]+content="([^"]+)"', h, re.I)
         if m: d['vod_pic'] = self._abs(m.group(1).strip())
         if not d['vod_pic']:
             m = re.search(r'<img[^>]*?data-src="([^"]+)"', h)
             if m: d['vod_pic'] = self._abs(m.group(1))
         
-        # 3. 导演（精准匹配 <div class="name">导演:</div>谷垣健治）
         m = re.search(r'<div[^>]*class="[^"]*name[^"]*"[^>]*>\s*导演[:：]?\s*</div>\s*([^<]+)', h)
         if m: 
             d['vod_director'] = m.group(1).strip()
@@ -220,7 +230,6 @@ class Spider(Spider):
             m = re.search(r'导演[:：]?\s*</div>\s*([^<]+)', h)
             if m: d['vod_director'] = m.group(1).strip()
         
-        # 4. 主演（精准匹配 <div class="name">主演:</div>谢苗,...）
         m = re.search(r'<div[^>]*class="[^"]*name[^"]*"[^>]*>\s*主演[:：]?\s*</div>\s*([^<]+)', h)
         if m: 
             d['vod_actor'] = m.group(1).strip()
@@ -228,7 +237,6 @@ class Spider(Spider):
             m = re.search(r'主演[:：]?\s*</div>\s*([^<]+)', h)
             if m: d['vod_actor'] = m.group(1).strip()
         
-        # 5. 简介（精准抓取 wrapper_more_text 内部真实文本）
         content = ""
         m = re.search(r'<div[^>]*class="[^"]*wrapper_more_text[^"]*"[^>]*>([\s\S]*?)</div>\s*</div>\s*</div>', h, re.S)
         if not m:
@@ -253,11 +261,9 @@ class Spider(Spider):
                 content = block.strip()
         d['vod_content'] = content
         
-        # 6. 状态/备注（例如：国语高清正片）
         m = re.search(r'<div[^>]*class="[^"]*tag[^"]*"[^>]*>([^<]+)</div>', h)
         if m: d['vod_remarks'] = m.group(1).strip()
         
-        # 7. 线路与选集
         routes = {}
         for sid, seg in re.findall(r'<li class="swiper-slide player_name[^"]*" data-sid="(\d+)">([\s\S]*?)</li>', h):
             name_match = re.search(r'<a[^>]*>([^<]+)<span', seg)
