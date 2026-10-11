@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
-# ============ 饭搭子影视 源 (fdzys.com) 完美修复版 ============
-import sys, re, json
-from urllib.parse import quote
+# ============ 饭搭子影视 源 (fdzys.com) 终极修复版 ============
+import sys, re, json, urllib.parse
 
 sys.path.append('..')
 try:
@@ -19,6 +18,7 @@ HOST = 'https://fdzys.com'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 VIDEO_EXTS = 'm3u8|mp4|flv|mkv|avi|ts'
 
+# 1. 精简分类（完全按照你网页导航栏的显示，去掉了繁杂的二级分类）
 CATEGORIES = [
     {'type_id': 'movie',   'type_name': '电影'},
     {'type_id': 'tv',      'type_name': '电视剧'},
@@ -28,6 +28,7 @@ CATEGORIES = [
     {'type_id': 'duanju',  'type_name': '短剧'},
 ]
 
+# 筛选选项（保留用户需要的地区、年份、语言、剧情等）
 FILTER_OPTIONS = {
     'movie': {
         'class': [('dongzuo','动作'),('xiju','喜剧'),('aiqing','爱情'),('kehuan','科幻'),('kongbu','恐怖'),('juqing','剧情'),('zhanzheng','战争'),('fanzui','犯罪')],
@@ -98,18 +99,18 @@ class Spider(Spider):
         if u.startswith('//'): return 'https:' + u
         return self.base + (u if u.startswith('/') else '/' + u)
 
-    # ========== ★ 重写列表卡片解析（彻底修复没图片问题） ==========
+    # ========== ★ 彻底修复列表卡片（解决没图片） ==========
     def _items(self, h):
         items, seen = [], set()
         if not h: return items
         
-        # 1. 先宽松匹配所有可能包含影视链接的 a 标签
+        # 宽松匹配所有 a 标签
         for m in re.finditer(r'<a\s+[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>', h):
             url = m.group(1)
             inner = m.group(2)
             full_tag = m.group(0)
             
-            # 只保留包含具体分类路径的链接，过滤掉广告或导航
+            # 只保留影视详情链接
             if not re.search(r'/(?:movie|tv|dongman|zongyi|tiyu|duanju)/', url):
                 continue
                 
@@ -117,22 +118,29 @@ class Spider(Spider):
             if vid in seen: continue
             seen.add(vid)
             
-            # 2. 提取图片：优先 data-src、data-original，过滤掉 loading 图
+            # 1. 提取真实图片（防懒加载和占位图）
             pic = ''
-            for p in re.finditer(r'<img[^>]*?(?:data-original|data-src|src)=["\']([^"\']+)["\']', inner):
-                img_url = p.group(1)
-                if 'base64' not in img_url and 'loading' not in img_url and '.gif' not in img_url:
-                    pic = self._abs(img_url)
-                    break
-            
-            # 3. 提取标题：优先 title 属性，其次 div.title
-            name_m = re.search(r'title="([^"]+)"', full_tag)
+            for attr in ['data-src', 'data-original', 'src']:
+                m_pic = re.search(r'<img[^>]*?' + attr + r'=["\']([^"\']+)["\']', inner)
+                if m_pic:
+                    tmp_url = m_pic.group(1)
+                    # 过滤掉 base64 和 loading 占位图
+                    if 'base64' not in tmp_url and 'loading' not in tmp_url and '.gif' not in tmp_url:
+                        pic = self._abs(tmp_url)
+                        break
+                        
+            # ★ 使用本地代理解决防盗链（解决 TVBox 图片不显示）
+            if pic:
+                pic = self.base + "/proxy?url=" + urllib.parse.quote(pic)
+                
+            # 2. 提取标题
+            name_m = re.search(r'<div class="title">([^<]+)</div>', inner)
             if not name_m:
-                name_m = re.search(r'<div class="title">([^<]+)</div>', inner)
+                name_m = re.search(r'title="([^"]+)"', full_tag)
             name = name_m.group(1).strip() if name_m else ''
             if not name: continue
             
-            # 4. 提取备注（如“全剧集”、“更新至第30集”）
+            # 3. 提取备注
             remark_m = re.search(r'<div class="tag[^>]*>([^<]+)</div>', inner)
             remark = remark_m.group(1).strip() if remark_m else ''
             
@@ -180,7 +188,7 @@ class Spider(Spider):
         items = self._items(h)
         return {'page': pn, 'pagecount': self._pagecount(h, pn), 'limit': 24, 'total': len(items), 'list': items}
 
-    # ========== ★ 重写详情页（彻底修复简介没取对问题） ==========
+    # ========== ★ 彻底修复详情页（解决简介没取对） ==========
     def detailContent(self, ids, quick='1'):
         vid = str(ids[0] if isinstance(ids, list) else ids or '')
         h = self._get(self._abs(vid))
@@ -195,19 +203,34 @@ class Spider(Spider):
         # 封面
         m = re.search(r'<meta[^>]+property="og:image"[^>]+content="([^"]+)"', h, re.I)
         if m: d['vod_pic'] = self._abs(m.group(1).strip())
+        if not d['vod_pic']:
+            m = re.search(r'<img[^>]*?data-src="([^"]+)"', h)
+            if m: d['vod_pic'] = self._abs(m.group(1))
+        # 详情页图片同样走代理
+        if d['vod_pic']:
+            d['vod_pic'] = self.base + "/proxy?url=" + urllib.parse.quote(d['vod_pic'])
         
-        # ★ 简介修复：抓取 info-intro 内的所有文本
-        m = re.search(r'<div class="info-intro">([\s\S]*?)</div>', h)
+        # ★ 简介修复：贪婪匹配到 info-bottom，彻底防止截断
+        content = ""
+        m = re.search(r'<div[^>]*class="[^"]*info-intro[^"]*"[^>]*>([\s\S]*?)<div[^>]*class="[^"]*info-bottom[^"]*"', h)
+        if not m:
+            m = re.search(r'<div[^>]*class="[^"]*info-intro[^"]*"[^>]*>([\s\S]*?)</div>', h)
         if m:
             raw_intro = m.group(1)
-            # 移除“简介：”字样和 HTML 标签
+            # 剥离“简介：”字样和所有 HTML 标签
             raw_intro = re.sub(r'简介[:：]?', '', raw_intro)
-            d['vod_content'] = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', '', raw_intro)).strip()
-        else:
-            # 兜底方案：如果找不到 info-intro，尝试抓取 meta description
-            m = re.search(r'<meta[^>]+name="description"[^>]+content="([^"]*)"', h)
-            if m: d['vod_content'] = m.group(1).strip()
+            raw_intro = re.sub(r'<[^>]+>', '', raw_intro)
+            content = re.sub(r'\s+', ' ', raw_intro).strip()
             
+        if not content:
+            # 兜底：如果 info-intro 没找到，尝试抓取 meta description
+            m = re.search(r'<meta[^>]+property="og:description"[^>]+content="([^"]*)"', h, re.I)
+            if not m:
+                m = re.search(r'<meta[^>]+name="description"[^>]+content="([^"]*)"', h, re.I)
+            if m: content = m.group(1).strip()
+            
+        d['vod_content'] = content
+        
         # 演员
         m = re.search(r'<div class="info-roles">主演：([^<]+)</div>', h)
         if m: d['vod_actor'] = m.group(1).strip()
@@ -270,6 +293,29 @@ class Spider(Spider):
         path = m2.group(1)
         final = path if path.startswith('http') else ((re.match(r'https?://[^/]+', share).group(0) if re.match(r'https?://[^/]+', share) else self.base) + path if path.startswith('/') else share.rsplit('/', 1)[0] + '/' + path)
         return {'parse': 0, 'url': final, 'header': json.dumps(self._hd)}
+
+    # ========== ★ 本地图片代理（解决防盗链导致的灰图） ==========
+    def localProxy(self, param):
+        try:
+            url = ''
+            if isinstance(param, dict):
+                url = param.get('url', '')
+            elif isinstance(param, str):
+                parsed = urllib.parse.parse_qs(param)
+                url = parsed.get('url', [''])[0]
+            if not url: return [200, "image/jpeg", b"", ""]
+            
+            url = urllib.parse.unquote(url) if '%' in url else url
+            
+            headers = {'User-Agent': UA, 'Referer': self.base + '/'}
+            rsp = self.fetch(url, headers=headers, timeout=15)
+            content = rsp.content
+            ctype = rsp.headers.get('Content-Type', 'image/jpeg')
+            if not ctype.startswith('image/'): ctype = 'image/jpeg'
+            return [200, ctype, content, ""]
+        except Exception as e:
+            self.log("localProxy error: %s" % e)
+            return [200, "image/jpeg", b"", ""]
 
     def isVideoFormat(self, url): return bool(url) and ('.m3u8' in url or bool(re.search(r'\.(?:%s)(?:\?|$)' % VIDEO_EXTS, url, re.I)))
     def manualVideoCheck(self): return False
