@@ -1,12 +1,11 @@
 # coding=utf-8
 """
-嘀嗒影视 didahd.xyz | TVBox Python 爬虫 (V1.1 简介修复版)
+嘀嗒影视 didahd.xyz | TVBox Python 爬虫 (V1.3 简介完整修复版)
 特点:
   - 适配 MyUI + MacCMS 模板
   - 支持分类筛选（地区/剧情/年份/排序）
   - 播放页 player_aaaa encrypt=3 采用 parse:1 让 TVBox 嗅探
-  - 简介添加指定前缀
-  - 修复详情页简介、导演、主演提取不完整的问题
+  - 简介完美提取：优先提取隐藏的完整剧情（data span），精准去除标签
 """
 import re
 import sys
@@ -89,7 +88,6 @@ _AREAS = [
     {"n": "意大利", "v": "意大利"},
 ]
 
-# 剧情分类（各主分类通用，可根据实际调整）
 _CLASS_OPTIONS = [
     {"n": "全部", "v": ""},
     {"n": "剧情", "v": "剧情"}, {"n": "喜剧", "v": "喜剧"},
@@ -167,10 +165,11 @@ _RE_PLAYER_AA = re.compile(r'var\s+player_aaaa\s*=\s*(\{.*?\});', re.S)
 _RE_H1 = re.compile(r'<h1[^>]*>([\s\S]*?)</h1>', re.I)
 _RE_TITLE = re.compile(r'<title>(.*?)</title>', re.S | re.I)
 
-# 详情页简介、导演、主演修复正则
-_RE_CONTENT_DIV = re.compile(r'<div class="col-pd text-collapse content">([\s\S]*?)</div>', re.I)
-_RE_INTRO_DATA = re.compile(r'<span\s+class="data"\s+style="display:\s*none;">([\s\S]*?)</span>\s*<a', re.I)
+# 简介提取正则（核心修复）
+_RE_INTRO_DATA = re.compile(r'<span\s+class="data"\s+style="display:\s*none;">([\s\S]*?)</span>', re.I)
 _RE_INTRO_SKETCH = re.compile(r'<span\s+class="sketch\s+content">([\s\S]*?)</span>', re.I)
+_RE_META_DESC = re.compile(r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', re.I)
+
 _RE_DIRECTOR = re.compile(r'<span\s+class="text-muted">导演：</span>([\s\S]*?)</p>', re.S | re.I)
 _RE_ACTOR = re.compile(r'<span\s+class="text-muted">主演：</span>([\s\S]*?)</p>', re.S | re.I)
 _RE_SCORE = re.compile(r'pic-tag-right[^>]*>([\d.]+)分<', re.I)
@@ -342,7 +341,6 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        # 清理空值
         for k in list(extend.keys()):
             if extend[k] in ("", None, "全部"):
                 del extend[k]
@@ -352,9 +350,6 @@ class Spider(Spider):
         year = extend.get("year", "")
         sort = extend.get("sort_field", "time")
 
-        # URL 模板: /show/{tid}-{area}--{cls}-----{sort}---{page}.html
-        # 参考: /show/16-美国--喜剧-----2---.html
-        #       /show/13-大陆----------2026.html
         if sort == "time":
             sort_seg = ""
         else:
@@ -422,38 +417,30 @@ class Spider(Spider):
         if m:
             pic = self._fix_url(m.group(1))
 
-        # ===== 修复：简介提取（提取完整版，包含导演、主演、剧情）=====
+        # ===== 简介提取（完美版：优先 data 完整版，再 sketch 截断版，最后 meta）=====
         content = ""
-        # 1. 提取整个简介容器，并移除截断的折叠内容，只保留完整版
-        m_div = _RE_CONTENT_DIV.search(html)
-        if m_div:
-            content_raw = m_div.group(1)
-            # 移除截断的 sketch 部分
-            content_raw = re.sub(r'<span class="sketch content">[\s\S]*?</span>', '', content_raw, flags=re.I)
-            content = self._clean(content_raw)
         
-        # 2. 如果上面的方法失败，尝试直接从 data span 提取
-        if not content:
-            m_data = _RE_INTRO_DATA.search(html)
-            if m_data:
-                content = self._clean(m_data.group(1))
-                
-        # 3. 还是失败则使用折叠内容兜底
+        # 1. 优先提取隐藏的完整 data span（你截图要求的完整剧情）
+        m_data = _RE_INTRO_DATA.search(html)
+        if m_data:
+            content = self._clean(m_data.group(1))
+            
+        # 2. 如果失败，尝试提取截断的 sketch span
         if not content:
             m_sketch = _RE_INTRO_SKETCH.search(html)
             if m_sketch:
                 content = self._clean(m_sketch.group(1))
-
-        # 4. 最终兜底 meta 标签
+                
+        # 3. 最终兜底：提取 meta description
         if not content:
-            m_meta = re.search(r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', html, re.I)
+            m_meta = _RE_META_DESC.search(html)
             if m_meta:
                 content = self._clean(m_meta.group(1))
 
         # 添加前缀
         content = INTRO_PREFIX + "\n" + content if content else INTRO_PREFIX
 
-        # ===== 修复：导演和主演提取 =====
+        # ===== 导演和主演提取 =====
         director = ""
         m = _RE_DIRECTOR.search(html)
         if m:
@@ -548,7 +535,6 @@ class Spider(Spider):
         if m:
             try:
                 raw = m.group(1)
-                # 清理 JS 转义
                 raw = (raw.replace("\\\\u0026", "&").replace("\\u0026", "&")
                           .replace("\\\\u0022", '"').replace("\\u0022", '"')
                           .replace("\\/", "/"))
@@ -558,7 +544,6 @@ class Spider(Spider):
 
                 self.log("  encrypt=%s, url_len=%d" % (encrypt, len(url_val)))
 
-                # encrypt==0: 明文直链
                 if encrypt == 0 and url_val.startswith("http"):
                     res = {
                         "parse": 0, "playUrl": "",
@@ -568,7 +553,6 @@ class Spider(Spider):
                     self._play_cache[play_page] = (now, res)
                     return res
 
-                # encrypt==1: unescape
                 if encrypt == 1:
                     url_dec = urllib.parse.unquote(url_val)
                     if url_dec.startswith("http"):
@@ -580,7 +564,6 @@ class Spider(Spider):
                         self._play_cache[play_page] = (now, res)
                         return res
 
-                # encrypt==2: base64 解码后 unescape
                 if encrypt == 2:
                     try:
                         import base64
@@ -597,12 +580,10 @@ class Spider(Spider):
                     except Exception as e:
                         self.log("  base64 解码失败: %s" % e)
 
-                # encrypt==3: AES 加密，让 TVBox 嗅探
                 self.log("  encrypt=3, 交给 TVBox 嗅探")
             except Exception as e:
                 self.log("  解析 player_aaaa 失败: %s" % e)
 
-        # 兜底：交给 TVBox 嗅探
         res = {
             "parse": 1, "playUrl": "",
             "url": play_page,
