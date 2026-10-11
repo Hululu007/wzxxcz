@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# ============ 饭搭子影视 源 (fdzys.com) 图片修复版 ============
+# ============ 饭搭子影视 源 (fdzys.com) 精准修复版 ============
 import sys, re, json
 from urllib.parse import quote
 
@@ -15,12 +15,12 @@ except ImportError:
             r.encoding = 'utf-8'
             return r
 
-# ============ ★ 配置区 ============
+# ============ ★ CONFIG ============
 HOST = 'https://fdzys.com'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 VIDEO_EXTS = 'm3u8|mp4|flv|mkv|avi|ts'
 
-# 1. 精简分类（完全对应导航栏）
+# ★ 1. 分类：死死锁定这 6 个，绝不衍生多余的分类
 CATEGORIES = [
     {'type_id': 'movie',   'type_name': '电影'},
     {'type_id': 'tv',      'type_name': '电视剧'},
@@ -30,7 +30,7 @@ CATEGORIES = [
     {'type_id': 'duanju',  'type_name': '短剧'},
 ]
 
-# 2. 动态筛选选项
+# ★ 2. 筛选选项：点击对应分类后，才显示的筛选菜单
 FILTER_OPTIONS = {
     'movie': {
         'class': [('dongzuo','动作'),('xiju','喜剧'),('aiqing','爱情'),('kehuan','科幻'),('kongbu','恐怖'),('juqing','剧情'),('zhanzheng','战争'),('fanzui','犯罪')],
@@ -65,7 +65,6 @@ FILTER_OPTIONS = {
         'area': [], 'lang': [], 'year': [],
     },
 }
-
 SORT_OPTIONS = [{'n': '默认', 'v': ''}, {'n': '最热', 'v': 'hot'}, {'n': '最新', 'v': 'new'}]
 FILTER_TYPES = ('movie', 'tv', 'dongman', 'zongyi')
 
@@ -73,7 +72,12 @@ FILTER_TYPES = ('movie', 'tv', 'dongman', 'zongyi')
 class Spider(Spider):
     def init(self, extend=''):
         self.base = HOST.rstrip('/')
-        self._hd = {'User-Agent': UA, 'Referer': self.base + '/'}
+        self.ua = UA
+        # ★ 直接将类型锁死为 6 个分类
+        self.types = {c['type_id']: c['type_name'] for c in CATEGORIES}
+        self._hd = {'User-Agent': self.ua, 'Referer': self.base + '/',
+                    'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
+                    'Accept-Language': 'zh-CN,zh;q=0.9'}
 
     def _build_filters(self):
         fs = {}
@@ -91,7 +95,7 @@ class Spider(Spider):
 
     def _get(self, url):
         try:
-            r = self.fetch(url, headers=self._hd, timeout=15000)
+            r = self.fetch(url, headers=self._hd, timeout=12000)
             return r.text if hasattr(r, 'text') else str(r)
         except Exception:
             return ''
@@ -102,7 +106,7 @@ class Spider(Spider):
         if u.startswith('//'): return 'https:' + u
         return self.base + (u if u.startswith('/') else '/' + u)
 
-    # ========== ★ 修复图片获取（真实海报） ==========
+    # ========== ★ 列表提取（修复图片与漏抓） ==========
     def _items(self, h):
         items, seen = [], set()
         if not h: return items
@@ -119,7 +123,7 @@ class Spider(Spider):
             if vid in seen: continue
             seen.add(vid)
             
-            # 1. ★ 恢复图片：兼容 data-src / data-original / src，过滤掉 loading 占位图
+            # 图片提取（兼容懒加载）
             pic = ''
             for attr in ['data-src', 'data-original', 'src']:
                 m_pic = re.search(r'<img[^>]*?' + attr + r'=["\']([^"\']+)["\']', inner)
@@ -129,23 +133,15 @@ class Spider(Spider):
                         pic = self._abs(tmp_url)
                         break
             
-            # 2. 提取标题
             name_m = re.search(r'<div class="title">([^<]+)</div>', inner)
-            if not name_m:
-                name_m = re.search(r'title="([^"]+)"', full_tag)
+            if not name_m: name_m = re.search(r'title="([^"]+)"', full_tag)
             name = name_m.group(1).strip() if name_m else ''
             if not name: continue
             
-            # 3. 提取备注
             remark_m = re.search(r'<div class="tag[^>]*>([^<]+)</div>', inner)
             remark = remark_m.group(1).strip() if remark_m else ''
             
-            items.append({
-                'vod_id': vid,
-                'vod_name': name[:60],
-                'vod_pic': pic,     # 真实图片链接
-                'vod_remarks': remark[:30]
-            })
+            items.append({'vod_id': vid, 'vod_name': name[:60], 'vod_pic': pic, 'vod_remarks': remark[:30]})
         return items
 
     def _pagecount(self, h, cur):
@@ -155,8 +151,10 @@ class Spider(Spider):
             except: pass
         return mx if mx > cur else cur + 1
 
+    # ========== 首页 ==========
     def homeContent(self, filter=False):
-        r = {'class': [{'type_id': k, 'type_name': v} for k, v in {c['type_id']: c['type_name'] for c in CATEGORIES}.items()]}
+        # 首页只返回这 6 个分类
+        r = {'class': [{'type_id': k, 'type_name': v} for k, v in self.types.items()]}
         if filter: r['filters'] = self._build_filters()
         r['list'] = self.homeVideoContent().get('list', [])
         return r
@@ -164,12 +162,15 @@ class Spider(Spider):
     def homeVideoContent(self):
         return {'list': self._items(self._get(self.base))}
 
+    # ========== ★ 分类筛选（动态拼接） ==========
     def categoryContent(self, tid, pg=1, filter=False, extend=''):
         try: pn = max(int(str(pg)), 1)
         except: pn = 1
         ex = json.loads(extend) if isinstance(extend, str) and extend else (extend if isinstance(extend, dict) else {})
         
         main_cat = str(tid).split('/')[0]
+        
+        # 根据用户选择动态拼接 URL：/movie/dongzuo-dalu-guoyu-2026/hot
         segments = [ex.get('class') or 'all']
         if ex.get('area'): segments.append(ex['area'])
         if ex.get('lang'): segments.append(ex['lang'])
@@ -181,9 +182,11 @@ class Spider(Spider):
         if pn > 1: url += '?page=%d' % pn
 
         h = self._get(url)
+        if not h: return {'page': pn, 'pagecount': pn, 'limit': 24, 'total': 0, 'list': []}
         items = self._items(h)
         return {'page': pn, 'pagecount': self._pagecount(h, pn), 'limit': 24, 'total': len(items), 'list': items}
 
+    # ========== ★ 详情页（修复简介与图片） ==========
     def detailContent(self, ids, quick='1'):
         vid = str(ids[0] if isinstance(ids, list) else ids or '')
         h = self._get(self._abs(vid))
@@ -191,18 +194,17 @@ class Spider(Spider):
         
         d = {'vod_id': vid, 'vod_name': '', 'vod_pic': '', 'vod_actor': '', 'vod_content': '', 'vod_remarks': '', 'vod_play_from': '', 'vod_play_url': ''}
         
-        # 标题
-        m = re.search(r'<h1[^>]*>([\s\S]*?)</h1>', h) or re.search(r'<div class="info-title">([^<]+)</div>', h)
+        m = re.search(r'<h1[^>]*>([\s\S]*?)</h1>', h)
         if m: d['vod_name'] = re.sub(r'<[^>]+>', '', m.group(1)).strip()
         
-        # ★ 详情页图片（恢复真实图片提取）
+        # 封面图
         m = re.search(r'<meta[^>]+property="og:image"[^>]+content="([^"]+)"', h, re.I)
         if m: d['vod_pic'] = self._abs(m.group(1).strip())
         if not d['vod_pic']:
             m = re.search(r'<img[^>]*?data-src="([^"]+)"', h)
             if m: d['vod_pic'] = self._abs(m.group(1))
         
-        # 简介
+        # 简介（彻底抛弃 meta description，取真实剧情）
         content = ""
         m = re.search(r'<div[^>]*class="[^"]*info-intro[^"]*"[^>]*>([\s\S]*?)<div[^>]*class="[^"]*info-bottom[^"]*"', h)
         if not m:
@@ -212,18 +214,14 @@ class Spider(Spider):
             raw_intro = re.sub(r'简介[:：]?', '', raw_intro)
             raw_intro = re.sub(r'<[^>]+>', '', raw_intro)
             content = re.sub(r'\s+', ' ', raw_intro).strip()
-            
         if not content:
             m = re.search(r'<meta[^>]+property="og:description"[^>]+content="([^"]*)"', h, re.I)
             if m: content = m.group(1).strip()
-            
         d['vod_content'] = content
         
-        # 演员
         m = re.search(r'<div class="info-roles">主演：([^<]+)</div>', h)
         if m: d['vod_actor'] = m.group(1).strip()
         
-        # 状态
         m = re.search(r'<div class="tag[^>]*>([^<]+)</div>', h)
         if m: d['vod_remarks'] = m.group(1).strip()
 
@@ -259,6 +257,7 @@ class Spider(Spider):
         h = self._get('%s/yu-%s-xiangquan-de-yingpian-shippin-zhibo' % (self.base, quote(str(key))))
         return {'list': self._items(h) if h else []}
 
+    # ========== 播放链 ==========
     def playerContent(self, flag, id, vipFlags=None):
         url = str(id)
         if not url.startswith('http'): url = self._abs(url)
