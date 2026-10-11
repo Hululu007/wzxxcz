@@ -1,9 +1,6 @@
 # coding=utf-8
 """
-大米星球 TVBox Python 爬虫
-基于你提供的 dmxq.fun / 大米星球 HTML 结构编写
-默认域名: https://www.dmxq.fun
-可在 extend 中传: {"site":"https://当前域名"}
+大米星球 TVBox Python 爬虫 (基于 dmxq40.com 结构优化版)
 """
 
 import sys
@@ -33,11 +30,7 @@ except ImportError:
             if self._session is None:
                 self._session = _rq.Session()
                 self._session.verify = False
-                adapter = _rq.adapters.HTTPAdapter(
-                    pool_connections=20,
-                    pool_maxsize=20,
-                    max_retries=0
-                )
+                adapter = _rq.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=0)
                 self._session.mount('https://', adapter)
                 self._session.mount('http://', adapter)
             return self._session
@@ -56,7 +49,8 @@ except ImportError:
     Spider = _BaseSpider
 
 
-HOST = "https://www.dmxq.fun"
+# 默认域名 (请在 TVBox 配置中传入 {"site":"https://当前可用域名"} 来覆盖)
+HOST = "https://dmxq40.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
@@ -68,10 +62,8 @@ CLASSES = [
     {"type_id": "23", "type_name": "综艺"},
 ]
 
-_YEARS = [{"n": "全部", "v": ""}] + [
-    {"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)
-]
-
+# 筛选器配置 (与网站实际筛选器对应)
+_YEARS = [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]
 _SORTS = [
     {"n": "时间", "v": "time"},
     {"n": "人气", "v": "hits"},
@@ -82,6 +74,8 @@ FILTERS = {}
 for c in CLASSES:
     tid = c["type_id"]
     FILTERS[tid] = [
+        {"key": "area", "name": "地区", "value": [{"n": "全部", "v": ""}, {"n": "大陆", "v": "大陆"}, {"n": "香港", "v": "香港"}, {"n": "台湾", "v": "台湾"}, {"n": "美国", "v": "美国"}, {"n": "日本", "v": "日本"}, {"n": "韩国", "v": "韩国"}]},
+        {"key": "class", "name": "剧情", "value": [{"n": "全部", "v": ""}, {"n": "剧情", "v": "剧情"}, {"n": "喜剧", "v": "喜剧"}, {"n": "动作", "v": "动作"}, {"n": "爱情", "v": "爱情"}, {"n": "科幻", "v": "科幻"}]},
         {"key": "year", "name": "年份", "value": _YEARS},
         {"key": "sort", "name": "排序", "value": _SORTS},
     ]
@@ -103,8 +97,6 @@ class Spider(Spider):
             "User-Agent": UA,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Cache-Control": "no-cache",
-            "Pragma": "no-cache",
             "Referer": self.site_url + "/",
         }
         self._play_cache = {}
@@ -163,36 +155,46 @@ class Spider(Spider):
         if not html:
             return items
 
-        # 匹配所有详情页链接，再截取附近内容
-        for m in re.finditer(r'<a\s+href="(/voddetail/[^"]+?\.html)"[^>]*>', html, re.I):
-            href = m.group(1)
+        # 针对分类页和首页的提取正则
+        pattern = r'<a\s+href="(/voddetail/[^"]+?\.html)"[^>]*?title="([^"]*)"[^>]*?>[\s\S]*?<img[^>]*?(?:data-original|src)="([^"]+)"'
+        matches = re.findall(pattern, html, re.S | re.I)
+
+        for href, title, pic in matches:
             if href in seen:
                 continue
             seen.add(href)
-
-            block = html[m.start():m.start() + 1800]
-
-            img = re.search(r'<img[^>]*?(?:data-original|src)="([^"]+)"', block, re.I)
-            title = re.search(r'title="([^"]*)"', block, re.I)
-            if not title:
-                title = re.search(r'alt="([^"]*)"', block, re.I)
-            if not title:
-                title = re.search(r'<strong><em>(.*?)</em></strong>', block, re.S | re.I)
-            if not title:
-                title = re.search(r'<div class="module-poster-item-title"[^>]*>(.*?)</div>', block, re.S | re.I)
-
-            note = re.search(r'<div class="module-item-note">([^<]*)</div>', block, re.I)
-
-            name = self._clean(title.group(1)) if title else href
-            pic = self._fix_url(img.group(1)) if img else ""
-            remarks = self._clean(note.group(1)) if note else ""
+            
+            # 尝试提取备注 (如 "更新至第05集", "全24集")
+            remark = ""
+            # 在卡片内部查找 module-item-note
+            remark_match = re.search(r'<div class="module-item-note">([^<]*)</div>', html[html.find(href):html.find(href)+1500], re.I)
+            if remark_match:
+                remark = self._clean(remark_match.group(1))
 
             items.append({
                 "vod_id": href,
-                "vod_name": name,
-                "vod_pic": pic,
-                "vod_remarks": remarks,
+                "vod_name": self._clean(title),
+                "vod_pic": self._fix_url(pic),
+                "vod_remarks": remark,
             })
+
+        # 兜底提取 (针对搜索结果页的 module-card-item 结构)
+        if not items:
+            pattern2 = r'<a\s+href="(/voddetail/[^"]+?\.html)"[^>]*?>[\s\S]*?<img[^>]*?(?:data-original|src)="([^"]+)"'
+            matches2 = re.findall(pattern2, html, re.S | re.I)
+            for href, pic in matches2:
+                if href in seen:
+                    continue
+                seen.add(href)
+                # 尝试找标题
+                title_match = re.search(r'<div class="module-card-item-title[^"]*">\s*<a[^>]*>([^<]*)</a>', html[html.find(href):html.find(href)+2000], re.I)
+                title = self._clean(title_match.group(1)) if title_match else href
+                items.append({
+                    "vod_id": href,
+                    "vod_name": title,
+                    "vod_pic": self._fix_url(pic),
+                    "vod_remarks": "",
+                })
 
         return items
 
@@ -212,34 +214,15 @@ class Spider(Spider):
                     pass
         return 9999
 
-    # ===================== 首页 =====================
+    # ===================== TVBox 接口实现 =====================
 
     def homeContent(self, filter=False):
-        return {
-            "class": CLASSES,
-            "filters": FILTERS,
-        }
+        return {"class": CLASSES, "filters": FILTERS}
 
     def homeVideoContent(self):
+        """解析首页 /index/home.html 的推荐内容"""
         html = self._fetch(self.site_url + "/index/home.html")
         return {"list": self._extract_list(html)}
-
-    # ===================== 分类 =====================
-
-    def _build_show_url(self, tid, pg, extend):
-        year = extend.get("year", "") or ""
-        sort = extend.get("sort", "") or ""
-        pg = int(pg) if pg else 1
-
-        # 根据你给的 HTML 推出来的 URL 规律
-        if pg <= 1:
-            if sort:
-                return f"{self.site_url}/vodshow/{tid}--{sort}---------{year}.html"
-            return f"{self.site_url}/vodshow/{tid}-----------{year}.html"
-        else:
-            if sort:
-                return f"{self.site_url}/vodshow/{tid}--{sort}------{pg}---{year}.html"
-            return f"{self.site_url}/vodshow/{tid}--------{pg}---{year}.html"
 
     def categoryContent(self, tid, pg, filter, extend):
         if isinstance(extend, str):
@@ -251,7 +234,18 @@ class Spider(Spider):
             extend = {}
 
         page = int(pg) if pg else 1
-        url = self._build_show_url(tid, page, extend)
+        area = extend.get("area", "")
+        cls = extend.get("class", "")
+        sort = extend.get("sort", "time")
+        year = extend.get("year", "2026")
+
+        # 对参数进行 URL 编码
+        area = urllib.parse.quote(area) if area else ""
+        cls = urllib.parse.quote(cls) if cls else ""
+
+        # 拼接分类 URL (核心修复点)
+        # 格式: /vodshow/{tid}-{area}-{class}-{sort}-{pg}---{year}.html
+        url = f"{self.site_url}/vodshow/{tid}-{area}-{cls}-{sort}-{page}---{year}.html"
         self.log("category:", url)
 
         html = self._fetch(url)
@@ -266,12 +260,11 @@ class Spider(Spider):
             "total": pagecount * 24,
         }
 
-    # ===================== 搜索 =====================
-
     def searchContent(self, key, quick, pg="1"):
         page = int(pg) if pg else 1
         kw = urllib.parse.quote(key, safe="")
-
+        
+        # 拼接搜索 URL
         if page <= 1:
             url = f"{self.site_url}/vodsearch/{kw}-------------.html"
         else:
@@ -291,8 +284,6 @@ class Spider(Spider):
 
     def searchContentPage(self, key, quick, pg="1"):
         return self.searchContent(key, quick, pg)
-
-    # ===================== 详情 =====================
 
     def detailContent(self, ids):
         if not ids:
@@ -328,10 +319,7 @@ class Spider(Spider):
 
         # 简介
         content = ""
-        m = re.search(
-            r'<div class="module-info-introduction-content[^"]*"[^>]*>([\s\S]*?)</div>',
-            html, re.S | re.I
-        )
+        m = re.search(r'<div class="module-info-introduction-content[^"]*"[^>]*>([\s\S]*?)</div>', html, re.S | re.I)
         if m:
             content = self._clean(m.group(1))
         if not content:
@@ -339,57 +327,41 @@ class Spider(Spider):
             if m:
                 content = self._clean(m.group(1))
 
-        # 导演
+        # 导演、主演
         director = ""
-        m = re.search(
-            r'<span class="module-info-item-title">导演：</span>\s*'
-            r'<div class="module-info-item-content">([\s\S]*?)</div>',
-            html, re.S | re.I
-        )
+        m = re.search(r'<span class="module-info-item-title">导演：</span>\s*<div class="module-info-item-content">([\s\S]*?)</div>', html, re.S | re.I)
         if m:
             director = self._clean(m.group(1))
 
-        # 主演
         actor = ""
-        m = re.search(
-            r'<span class="module-info-item-title">主演：</span>\s*'
-            r'<div class="module-info-item-content">([\s\S]*?)</div>',
-            html, re.S | re.I
-        )
+        m = re.search(r'<span class="module-info-item-title">主演：</span>\s*<div class="module-info-item-content">([\s\S]*?)</div>', html, re.S | re.I)
         if m:
             actor = self._clean(m.group(1))
 
-        # 播放列表：按 sid 分组
+        # 播放列表提取 (核心修复点)
+        # 1. 提取源名称 (tab-item)
+        source_tabs = re.findall(r'<div class="module-tab-item tab-item[^"]*"[^>]*data-dropdown-value="([^"]+)"', html, re.I)
+        
+        # 2. 提取所有剧集链接，按 sid 分组
         play_groups = {}
-        for m in re.finditer(
-            r'<a[^>]*class="module-play-list-link[^"]*"[^>]*'
-            r'href="(/vodplay/(\d+)-(\d+)-(\d+)\.html)"[^>]*>'
-            r'[\s\S]*?<span>([^<]*)</span>',
-            html, re.I
-        ):
+        for m in re.finditer(r'href="(/vodplay/(\d+)-(\d+)-(\d+)\.html)"[^>]*?><span>([^<]+)</span>', html, re.I):
             href, vid, sid, nid, ep = m.groups()
             sid = int(sid)
-            play_groups.setdefault(sid, []).append(
-                (self._clean(ep), self._fix_url(href))
-            )
+            play_groups.setdefault(sid, []).append((self._clean(ep), self._fix_url(href)))
 
         if not play_groups:
             return {"list": []}
 
-        # 播放源名称：按页面 tab 顺序对应 sid 排序
-        tabs = re.findall(
-            r'<div class="module-tab-item tab-item[^"]*"[^>]*data-dropdown-value="([^"]+)"',
-            html, re.I
-        )
-
-        sorted_sids = sorted(play_groups.keys())
+        # 3. 按源顺序分配剧集
         play_from = []
         play_url = []
-
+        # 按 sid 排序或者按出现顺序
+        sorted_sids = sorted(play_groups.keys())
+        
         for i, sid in enumerate(sorted_sids):
-            alias = tabs[i] if i < len(tabs) else f"线路{sid}"
-            eps = play_groups[sid]
+            alias = source_tabs[i] if i < len(source_tabs) else f"线路{sid}"
             play_from.append(alias)
+            eps = play_groups[sid]
             play_url.append("#".join(f"{n}${u}" for n, u in eps))
 
         return {
@@ -406,8 +378,6 @@ class Spider(Spider):
             }]
         }
 
-    # ===================== 播放 =====================
-
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player:", play_page)
@@ -419,8 +389,8 @@ class Spider(Spider):
                 return res
 
         html = self._fetch(play_page)
-
         url = ""
+
         # 解析 player_aaaa
         m = re.search(r'player_aaaa\s*=\s*({.*?})\s*</script>', html, re.S)
         if not m:
@@ -455,7 +425,7 @@ class Spider(Spider):
             self.log("player url:", url[:200])
             return res
 
-        # 兜底：交给 TVBox 嗅探/解析
+        # 兜底：交给 TVBox 嗅探
         res = {
             "parse": 1,
             "playUrl": "",
@@ -467,8 +437,6 @@ class Spider(Spider):
         }
         self._play_cache[play_page] = (now, res)
         return res
-
-    # ===================== 其他 =====================
 
     def localProxy(self, param):
         try:
@@ -485,10 +453,7 @@ class Spider(Spider):
                 return [200, "image/jpeg", b"", ""]
             url = urllib.parse.unquote(url) if "%" in url else url
             url = self._fix_url(url)
-            r = self.fetch(url, headers={
-                "User-Agent": UA,
-                "Referer": self.site_url + "/"
-            }, timeout=15)
+            r = self.fetch(url, headers={"User-Agent": UA, "Referer": self.site_url + "/"}, timeout=15)
             content = r.content
             ctype = r.headers.get("Content-Type", "image/jpeg")
             if not ctype.startswith("image/"):
