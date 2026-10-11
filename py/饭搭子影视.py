@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# ============ 饭搭子影视 源 (fdzys.com) 筛选完美修复版 ============
+# ============ 饭搭子影视 源 (fdzys.com) 终极稳定版 ============
 import sys, re, json
 from urllib.parse import quote
 
@@ -155,7 +155,7 @@ class Spider(Spider):
     def homeVideoContent(self):
         return {'list': self._items(self._get(self.base))}
 
-    # ========== ★ 核心修复：确保“全部”拼接为 all，解决只选年份没数据的问题 ==========
+    # ========== ★ 终极修复：彻底解决“全部”过滤问题 ==========
     def categoryContent(self, tid, pg=1, filter=False, extend=''):
         try: pn = max(int(str(pg)), 1)
         except: pn = 1
@@ -163,18 +163,34 @@ class Spider(Spider):
         
         main_cat = str(tid).split('/')[0]
         
-        # 强制将 class 默认值设为 all，防止只选年份时 URL 变成 /movie/2026 导致空数据
-        class_val = ex.get('class') or 'all'
-        segments = [class_val]
-        if ex.get('area'): segments.append(ex['area'])
-        if ex.get('lang'): segments.append(ex['lang'])
-        if ex.get('year') and main_cat in FILTER_TYPES: segments.append(ex['year'])
+        # 提取用户的选择，并进行彻底清洗
+        raw_class = ex.get('class', 'all')
+        raw_area = ex.get('area', 'all')
+        raw_lang = ex.get('lang', 'all')
+        raw_year = ex.get('year', 'all')
+        
+        # 过滤掉“全部”、空字符串、中文“全部”等所有非有效值
+        c_val = raw_class if raw_class and raw_class not in ('全部', 'all', '') else 'all'
+        a_val = raw_area if raw_area and raw_area not in ('全部', 'all', '') else 'all'
+        l_val = raw_lang if raw_lang and raw_lang not in ('全部', 'all', '') else 'all'
+        y_val = raw_year if raw_year and raw_year not in ('全部', 'all', '') else 'all'
+        
+        # 构造拼接数组：class 永远存在，其他有值才拼
+        segments = [c_val]
+        if a_val != 'all': segments.append(a_val)
+        if l_val != 'all': segments.append(l_val)
+        if y_val != 'all' and main_cat in FILTER_TYPES: segments.append(y_val)
         
         filter_path = '-'.join(segments)
-        sort_suffix = '/' + ex['sort'] if ex.get('sort') else ''
+        
+        # 排序后缀：只在有排序值时添加
+        sort_val = ex.get('sort', '')
+        sort_suffix = '/' + sort_val if sort_val and sort_val not in ('默认', '') else ''
+        
         url = '%s/%s/%s%s' % (self.base, main_cat, filter_path, sort_suffix)
-            
         if pn > 1: url += '?page=%d' % pn
+        
+        self.log("Request URL: %s" % url)  # 关键调试日志，务必查看
 
         h = self._get(url)
         if not h: return {'page': pn, 'pagecount': pn, 'limit': 24, 'total': 0, 'list': []}
