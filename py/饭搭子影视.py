@@ -234,7 +234,8 @@ class Spider(Spider):
                 block = block.replace('　　', '').replace('\u3000\u3000', '')
                 content = block.strip()
 
-        d['vod_content'] = content
+        # ★★★ 唯一的修改：加上你指定的前缀 ★★★
+        d['vod_content'] = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！\n" + content
         
         m = re.search(r'导演[:：]?\s*</div>\s*([^<]+)', h)
         if m: d['vod_director'] = m.group(1).strip()
