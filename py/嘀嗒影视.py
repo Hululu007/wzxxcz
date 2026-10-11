@@ -1,11 +1,11 @@
 # coding=utf-8
 """
-嘀嗒影视 didahd.xyz | TVBox Python 爬虫 (V1.5 AES解密版)
+嘀嗒影视 didahd.xyz | TVBox Python 爬虫 (V2.0 直链嗅探版)
 特点:
   - 适配 MyUI + MacCMS 模板
   - 支持分类筛选（地区/剧情/年份/排序）
-  - 播放页 encrypt=3 采用 AES 解密，直接返回真实 m3u8（parse:0）
-  - 解密失败时自动回退 TVBox 嗅探（parse:1）
+  - encrypt=3 时直接返回 Artplayer iframe URL 交给 TVBox 嗅探（少一层加载，更稳）
+  - 不再依赖 pycryptodome，开箱即用
   - 简介完美提取：精准提取隐藏的完整剧情
 """
 import re
@@ -182,10 +182,6 @@ _RE_YEAR = re.compile(r'<span\s+class="text-muted\s+hidden-xs">年份：</span>(
 _RE_POW_HASH = re.compile(r"var\s+hash\s*=\s*['\"]([a-f0-9]{40})['\"]")
 _RE_POW_TARGET = re.compile(r"var\s+target\s*=\s*['\"]([a-f0-9]{40})['\"]")
 
-# Artplayer 页面提取
-_RE_ART_TS = re.compile(r'const\s+timestamp\s*=\s*"(\d+)"', re.I)
-_RE_ART_QUALITIES = re.compile(r'const\s+qualities\s*=\s*(\[.*?\]);', re.S | re.I)
-
 
 class Spider(Spider):
 
@@ -224,7 +220,6 @@ class Spider(Spider):
             else:
                 text = str(rsp)
 
-            # PoW 检测（保留兼容）
             if ("正在检测" in text) or ("sha1(hash" in text and "attack_key" in text):
                 self.log("⚠️ 遇到 PoW 挑战")
                 attack_key = self._solve_pow(text)
@@ -302,7 +297,6 @@ class Spider(Spider):
                 "vod_remarks": "",
             })
 
-        # 兜底：分开匹配
         if not videos:
             hrefs = re.findall(r'href="(/detail/\d+\.html)"', html)
             imgs = re.findall(r'data-original="([^"]+)"', html)
@@ -406,7 +400,6 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # 标题
         name = ""
         m = _RE_H1.search(html)
         if m:
@@ -417,13 +410,11 @@ class Spider(Spider):
                 name = self._clean(m.group(1).split("_")[0].split("-")[0])
         name = re.sub(r"\s*\(\d{4}\)\s*$", "", name).strip() or vod_id
 
-        # 封面
         pic = self.default_pic
         m = _RE_PIC_FALLBACK.search(html)
         if m:
             pic = self._fix_url(m.group(1))
 
-        # ===== 简介提取 =====
         content = ""
         m_data = _RE_INTRO_DATA.search(html)
         if m_data:
@@ -439,7 +430,6 @@ class Spider(Spider):
 
         content = INTRO_PREFIX + "\n" + content if content else INTRO_PREFIX
 
-        # ===== 导演和主演 =====
         director = ""
         m = _RE_DIRECTOR.search(html)
         if m:
@@ -465,7 +455,6 @@ class Spider(Spider):
         if m:
             year = self._clean(m.group(1))
 
-        # ===== 剧集提取 =====
         play_from = []
         play_url = []
 
@@ -513,7 +502,7 @@ class Spider(Spider):
             "vod_play_url": "$$$".join(play_url),
         }]}
 
-    # ---------- 播放解析 ----------
+    # ---------- 播放解析（直链嗅探版）----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -529,7 +518,9 @@ class Spider(Spider):
             return {"parse": 1, "playUrl": "", "url": play_page,
                     "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
 
-        # 尝试提取 player_aaaa
+        # 解析 player_aaaa
+        encrypt = 0
+        url_val = ""
         m = _RE_PLAYER_AA.search(html)
         if m:
             try:
@@ -540,107 +531,65 @@ class Spider(Spider):
                 player_data = json.loads(raw)
                 encrypt = player_data.get("encrypt", 0)
                 url_val = player_data.get("url", "")
-
                 self.log("  encrypt=%s, url_len=%d" % (encrypt, len(url_val)))
+            except Exception as e:
+                self.log("  解析 player_aaaa 失败: %s" % e)
 
-                if encrypt == 0 and url_val.startswith("http"):
+        # ---------- encrypt 0/1/2：直接处理 ----------
+        if encrypt == 0 and url_val.startswith("http"):
+            res = {
+                "parse": 0, "playUrl": "",
+                "url": url_val,
+                "header": {"User-Agent": UA, "Referer": self.site_url + "/"},
+            }
+            self._play_cache[play_page] = (now, res)
+            return res
+
+        if encrypt == 1 and url_val:
+            url_dec = urllib.parse.unquote(url_val)
+            if url_dec.startswith("http"):
+                res = {
+                    "parse": 0, "playUrl": "",
+                    "url": url_dec,
+                    "header": {"User-Agent": UA, "Referer": self.site_url + "/"},
+                }
+                self._play_cache[play_page] = (now, res)
+                return res
+
+        if encrypt == 2 and url_val:
+            try:
+                url_dec = urllib.parse.unquote(
+                    base64.b64decode(url_val).decode("utf-8", "ignore"))
+                if url_dec.startswith("http"):
                     res = {
                         "parse": 0, "playUrl": "",
-                        "url": url_val,
+                        "url": url_dec,
                         "header": {"User-Agent": UA, "Referer": self.site_url + "/"},
                     }
                     self._play_cache[play_page] = (now, res)
                     return res
-
-                if encrypt == 1:
-                    url_dec = urllib.parse.unquote(url_val)
-                    if url_dec.startswith("http"):
-                        res = {
-                            "parse": 0, "playUrl": "",
-                            "url": url_dec,
-                            "header": {"User-Agent": UA, "Referer": self.site_url + "/"},
-                        }
-                        self._play_cache[play_page] = (now, res)
-                        return res
-
-                if encrypt == 2:
-                    try:
-                        url_dec = urllib.parse.unquote(
-                            base64.b64decode(url_val).decode("utf-8", "ignore"))
-                        if url_dec.startswith("http"):
-                            res = {
-                                "parse": 0, "playUrl": "",
-                                "url": url_dec,
-                                "header": {"User-Agent": UA, "Referer": self.site_url + "/"},
-                            }
-                            self._play_cache[play_page] = (now, res)
-                            return res
-                    except Exception as e:
-                        self.log("  base64 解码失败: %s" % e)
-
-                # ========== encrypt == 3: AES 解密 ==========
-                if encrypt == 3:
-                    try:
-                        from Crypto.Cipher import AES
-                        from Crypto.Util.Padding import unpad
-                    except ImportError:
-                        self.log("  ⚠️ 缺少 pycryptodome 库，回退嗅探模式")
-                    else:
-                        try:
-                            # 1. 构造 Artplayer iframe URL
-                            art_url = "%s/static/player/artplayer/?url=%s" % (
-                                self.site_url, url_val)
-                            self.log("  Artplayer URL: %s" % art_url[:120])
-
-                            # 2. 请求 Artplayer 页面
-                            art_html = self._fetch(art_url)
-                            if not art_html:
-                                raise Exception("Artplayer 页面为空")
-
-                            # 3. 提取 timestamp 和 qualities
-                            m_ts = _RE_ART_TS.search(art_html)
-                            m_q = _RE_ART_QUALITIES.search(art_html)
-                            if not m_ts or not m_q:
-                                raise Exception("未找到 timestamp 或 qualities")
-
-                            timestamp = m_ts.group(1)
-                            qualities = json.loads(m_q.group(1))
-                            if not qualities or 'url' not in qualities[0]:
-                                raise Exception("qualities 数组为空")
-
-                            encrypted_b64 = qualities[0]['url']
-
-                            # 4. AES 解密
-                            key_str = hashlib.md5(timestamp.encode()).hexdigest()
-                            key = key_str[:16].encode('utf-8')
-                            iv = key_str[16:].encode('utf-8')
-                            encrypted_data = base64.b64decode(encrypted_b64)
-                            cipher = AES.new(key, AES.MODE_CBC, iv)
-                            decrypted = unpad(cipher.decrypt(encrypted_data), AES.block_size)
-                            real_url = decrypted.decode('utf-8')
-
-                            if real_url.startswith("http"):
-                                self.log("  ✅ AES 解密成功: %s" % real_url[:100])
-                                res = {
-                                    "parse": 0, "playUrl": "",
-                                    "url": real_url,
-                                    "header": {
-                                        "User-Agent": UA,
-                                        "Referer": self.site_url + "/"
-                                    }
-                                }
-                                self._play_cache[play_page] = (now, res)
-                                return res
-                            else:
-                                raise Exception("解密结果不是有效 URL: %s" % real_url[:80])
-                        except Exception as e:
-                            self.log("  ❌ AES 解密失败: %s" % e)
-
-                self.log("  encrypt=3, 交给 TVBox 嗅探")
             except Exception as e:
-                self.log("  解析 player_aaaa 失败: %s" % e)
+                self.log("  base64 解码失败: %s" % e)
 
-        # 兜底：交给 TVBox 嗅探
+        # ---------- encrypt == 3：直接嗅探 Artplayer iframe ----------
+        # 省去解密烦恼，直接返回 Artplayer 页面给 TVBox 嗅探器
+        if encrypt == 3 and url_val:
+            art_url = "%s/static/player/artplayer/?url=%s" % (
+                self.site_url, url_val)
+            self.log("  => 嗅探目标: Artplayer iframe")
+            res = {
+                "parse": 1, "playUrl": "",
+                "url": art_url,
+                "header": {
+                    "User-Agent": UA,
+                    "Referer": play_page,
+                },
+            }
+            self._play_cache[play_page] = (now, res)
+            return res
+
+        # ---------- 兜底：嗅探原始播放页 ----------
+        self.log("  => 回退嗅探播放页")
         res = {
             "parse": 1, "playUrl": "",
             "url": play_page,
