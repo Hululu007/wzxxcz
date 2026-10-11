@@ -1,16 +1,18 @@
 # coding=utf-8
 """
-嘀嗒影视 didahd.xyz | TVBox Python 爬虫 (V1.0)
+嘀嗒影视 didahd.xyz | TVBox Python 爬虫 (V1.1 简介修复版)
 特点:
   - 适配 MyUI + MacCMS 模板
   - 支持分类筛选（地区/剧情/年份/排序）
   - 播放页 player_aaaa encrypt=3 采用 parse:1 让 TVBox 嗅探
   - 简介添加指定前缀
+  - 修复详情页简介、导演、主演提取不完整的问题
 """
 import re
 import sys
 import json
 import time
+import hashlib
 import urllib.parse
 
 sys.path.append('..')
@@ -164,12 +166,13 @@ _RE_PLAYER_AA = re.compile(r'var\s+player_aaaa\s*=\s*(\{.*?\});', re.S)
 # 详情页元信息
 _RE_H1 = re.compile(r'<h1[^>]*>([\s\S]*?)</h1>', re.I)
 _RE_TITLE = re.compile(r'<title>(.*?)</title>', re.S | re.I)
-_RE_INTRO = re.compile(
-    r'<span\s+class="text-muted">简介：</span>&nbsp;([\s\S]*?)</p>', re.S | re.I)
-_RE_DIRECTOR = re.compile(
-    r'<span\s+class="text-muted">导演：</span>([^<]*)</p>', re.S | re.I)
-_RE_ACTOR = re.compile(
-    r'<span\s+class="text-muted">主演：</span>([\s\S]*?)</p>', re.S | re.I)
+
+# 详情页简介、导演、主演修复正则
+_RE_CONTENT_DIV = re.compile(r'<div class="col-pd text-collapse content">([\s\S]*?)</div>', re.I)
+_RE_INTRO_DATA = re.compile(r'<span\s+class="data"\s+style="display:\s*none;">([\s\S]*?)</span>\s*<a', re.I)
+_RE_INTRO_SKETCH = re.compile(r'<span\s+class="sketch\s+content">([\s\S]*?)</span>', re.I)
+_RE_DIRECTOR = re.compile(r'<span\s+class="text-muted">导演：</span>([\s\S]*?)</p>', re.S | re.I)
+_RE_ACTOR = re.compile(r'<span\s+class="text-muted">主演：</span>([\s\S]*?)</p>', re.S | re.I)
 _RE_SCORE = re.compile(r'pic-tag-right[^>]*>([\d.]+)分<', re.I)
 _RE_AREA = re.compile(r'<span\s+class="text-muted\s+hidden-xs">地区：</span>([^<]*)<', re.I)
 _RE_YEAR = re.compile(r'<span\s+class="text-muted\s+hidden-xs">年份：</span>([^<]*)<', re.I)
@@ -419,18 +422,38 @@ class Spider(Spider):
         if m:
             pic = self._fix_url(m.group(1))
 
-        # 简介
+        # ===== 修复：简介提取（提取完整版，包含导演、主演、剧情）=====
         content = ""
-        m = _RE_INTRO.search(html)
-        if m:
-            content = self._clean(m.group(1))
+        # 1. 提取整个简介容器，并移除截断的折叠内容，只保留完整版
+        m_div = _RE_CONTENT_DIV.search(html)
+        if m_div:
+            content_raw = m_div.group(1)
+            # 移除截断的 sketch 部分
+            content_raw = re.sub(r'<span class="sketch content">[\s\S]*?</span>', '', content_raw, flags=re.I)
+            content = self._clean(content_raw)
+        
+        # 2. 如果上面的方法失败，尝试直接从 data span 提取
         if not content:
-            m = re.search(r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', html, re.I)
-            if m:
-                content = self._clean(m.group(1))
+            m_data = _RE_INTRO_DATA.search(html)
+            if m_data:
+                content = self._clean(m_data.group(1))
+                
+        # 3. 还是失败则使用折叠内容兜底
+        if not content:
+            m_sketch = _RE_INTRO_SKETCH.search(html)
+            if m_sketch:
+                content = self._clean(m_sketch.group(1))
+
+        # 4. 最终兜底 meta 标签
+        if not content:
+            m_meta = re.search(r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', html, re.I)
+            if m_meta:
+                content = self._clean(m_meta.group(1))
+
+        # 添加前缀
         content = INTRO_PREFIX + "\n" + content if content else INTRO_PREFIX
 
-        # 元信息
+        # ===== 修复：导演和主演提取 =====
         director = ""
         m = _RE_DIRECTOR.search(html)
         if m:
