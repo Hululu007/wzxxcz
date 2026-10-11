@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# ============ 饭搭子影视 源 (fdzys.com) 筛选完全补全版 ============
+# ============ 饭搭子影视 源 (fdzys.com) 筛选完美修复版 ============
 import sys, re, json
 from urllib.parse import quote
 
@@ -19,7 +19,6 @@ HOST = 'https://fdzys.com'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 VIDEO_EXTS = 'm3u8|mp4|flv|mkv|avi|ts'
 
-# ★ 1. 分类：死死锁定这 6 个
 CATEGORIES = [
     {'type_id': 'movie',   'type_name': '电影'},
     {'type_id': 'tv',      'type_name': '电视剧'},
@@ -29,7 +28,6 @@ CATEGORIES = [
     {'type_id': 'duanju',  'type_name': '短剧'},
 ]
 
-# ★ 2. 筛选选项：完全按照你截图里的网站真实选项进行补全
 FILTER_OPTIONS = {
     'movie': {
         'class': [('all','全部'),('dongzuo','动作'),('xiju','喜剧'),('aiqing','爱情'),('kehuan','科幻'),('kongbupian','恐怖片'),('juqing','剧情'),('zhanzheng','战争'),('fanzui','犯罪'),('donghua','动画'),('xuanyi','悬疑'),('jilu','纪录'),('guzhuang','古装')],
@@ -65,7 +63,6 @@ FILTER_OPTIONS = {
     },
 }
 
-# ★ 3. 排序选项：完全对齐网站（最新、热门、高分）
 SORT_OPTIONS = [{'n': '最新', 'v': 'new'}, {'n': '热门', 'v': 'hot'}, {'n': '高分', 'v': 'score'}]
 FILTER_TYPES = ('movie', 'tv', 'dongman', 'zongyi')
 
@@ -88,7 +85,6 @@ class Spider(Spider):
             filters = []
             for key, name in [('class','剧情'), ('area','地区'), ('lang','语言'), ('year','年份')]:
                 if opts.get(key):
-                    # 这里把“全部”直接映射为 all，这样用户选择“全部”+“2026”时，URL 会变成 /movie/all-2026，完全符合网站逻辑
                     filters.append({'key': key, 'name': name, 'value': [{'n': n, 'v': v} for v, n in opts[key]]})
             filters.append({'key': 'sort', 'name': '排序', 'value': SORT_OPTIONS})
             fs[tid] = filters
@@ -159,6 +155,7 @@ class Spider(Spider):
     def homeVideoContent(self):
         return {'list': self._items(self._get(self.base))}
 
+    # ========== ★ 核心修复：确保“全部”拼接为 all，解决只选年份没数据的问题 ==========
     def categoryContent(self, tid, pg=1, filter=False, extend=''):
         try: pn = max(int(str(pg)), 1)
         except: pn = 1
@@ -166,19 +163,16 @@ class Spider(Spider):
         
         main_cat = str(tid).split('/')[0]
         
-        segments = []
-        # 如果选了某个筛选项，就加入拼接列表
-        if ex.get('class'): segments.append(ex['class'])
+        # 强制将 class 默认值设为 all，防止只选年份时 URL 变成 /movie/2026 导致空数据
+        class_val = ex.get('class') or 'all'
+        segments = [class_val]
         if ex.get('area'): segments.append(ex['area'])
         if ex.get('lang'): segments.append(ex['lang'])
         if ex.get('year') and main_cat in FILTER_TYPES: segments.append(ex['year'])
         
-        if not segments:
-            url = '%s/%s' % (self.base, main_cat)
-        else:
-            filter_path = '-'.join(segments)
-            sort_suffix = '/' + ex['sort'] if ex.get('sort') else ''
-            url = '%s/%s/%s%s' % (self.base, main_cat, filter_path, sort_suffix)
+        filter_path = '-'.join(segments)
+        sort_suffix = '/' + ex['sort'] if ex.get('sort') else ''
+        url = '%s/%s/%s%s' % (self.base, main_cat, filter_path, sort_suffix)
             
         if pn > 1: url += '?page=%d' % pn
 
@@ -187,7 +181,7 @@ class Spider(Spider):
         items = self._items(h)
         return {'page': pn, 'pagecount': self._pagecount(h, pn), 'limit': 24, 'total': len(items), 'list': items}
 
-    # ========== ★ 绝对精准的简介提取（精准命中 wrapper_more_text，不抓 SEO 文本） ==========
+    # ========== ★ 绝对精准的简介提取 ==========
     def detailContent(self, ids, quick='1'):
         vid = str(ids[0] if isinstance(ids, list) else ids or '')
         h = self._get(self._abs(vid))
