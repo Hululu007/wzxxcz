@@ -260,6 +260,10 @@ class Spider(Spider):
             seen_sid.add(sid)
             seg = blocks[i + 1].split('<div id="playlist')[0]
             eps = re.findall(r'<a href="([^"]+)"[^>]*>([^<]+)</a>', seg)
+            
+            # ★★★ 唯一的修改：过滤掉底部的“关于我们”、“登录”等无关链接 ★★★
+            eps = [(u, ep) for u, ep in eps if not any(k in u.lower() or k in ep for k in ['javascript', 'about', 'login', '关于我们', '登录'])]
+            
             if eps: groups.append((sid, eps))
             
         if groups:
