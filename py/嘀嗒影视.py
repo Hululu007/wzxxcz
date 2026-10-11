@@ -1,11 +1,11 @@
 # coding=utf-8
 """
-嘀嗒影视 didahd.xyz | TVBox Python 爬虫 (V1.3 简介完整修复版)
+嘀嗒影视 didahd.xyz | TVBox Python 爬虫 (V1.4 最终完美版)
 特点:
   - 适配 MyUI + MacCMS 模板
   - 支持分类筛选（地区/剧情/年份/排序）
   - 播放页 player_aaaa encrypt=3 采用 parse:1 让 TVBox 嗅探
-  - 简介完美提取：优先提取隐藏的完整剧情（data span），精准去除标签
+  - 简介完美提取：精准提取隐藏的完整剧情（data span），解决嵌套标签截断问题
 """
 import re
 import sys
@@ -165,8 +165,8 @@ _RE_PLAYER_AA = re.compile(r'var\s+player_aaaa\s*=\s*(\{.*?\});', re.S)
 _RE_H1 = re.compile(r'<h1[^>]*>([\s\S]*?)</h1>', re.I)
 _RE_TITLE = re.compile(r'<title>(.*?)</title>', re.S | re.I)
 
-# 简介提取正则（核心修复）
-_RE_INTRO_DATA = re.compile(r'<span\s+class="data"\s+style="display:\s*none;">([\s\S]*?)</span>', re.I)
+# 简介提取正则（核心修复：匹配到 a.details 标签，避免嵌套截断）
+_RE_INTRO_DATA = re.compile(r'<span\s+class="data"\s+style="display:\s*none;">([\s\S]*?)</span>\s*<a', re.I)
 _RE_INTRO_SKETCH = re.compile(r'<span\s+class="sketch\s+content">([\s\S]*?)</span>', re.I)
 _RE_META_DESC = re.compile(r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', re.I)
 
@@ -417,7 +417,7 @@ class Spider(Spider):
         if m:
             pic = self._fix_url(m.group(1))
 
-        # ===== 简介提取（完美版：优先 data 完整版，再 sketch 截断版，最后 meta）=====
+        # ===== 简介提取（完美版：精准提取隐藏的完整剧情）=====
         content = ""
         
         # 1. 优先提取隐藏的完整 data span（你截图要求的完整剧情）
