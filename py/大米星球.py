@@ -302,6 +302,7 @@ class Spider(Spider):
         html = self._fetch(url)
         if not html: return {"list": []}
 
+        # ==================== 基础信息 ====================
         name = ""
         m = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.S | re.I)
         if m: name = self._clean(m.group(1))
@@ -320,10 +321,61 @@ class Spider(Spider):
             re.search(r'<meta name="description" content="([^"]*)"', html, re.I)
         if m: content = self._clean(m.group(1))
 
-        # ★ 修复：按 HTML 出现顺序提取线路名称
-        tabs = re.findall(r'<div class="module-tab-item tab-item[^"]*"[^>]*data-dropdown-value="([^"]+)"', html, re.I)
+        # ==================== 标签：年份 / 地区 / 类型 ====================
+        vod_year = ""
+        vod_area = ""
+        vod_class = ""
+        tag_block = re.search(r'<div class="module-info-tag">([\s\S]*?)</div>\s*</div>', html, re.S | re.I)
+        if not tag_block:
+            tag_block = re.search(r'<div class="module-info-tag">([\s\S]*?)<div class="module-mobile-play"', html, re.S | re.I)
+        if tag_block:
+            tag_html = tag_block.group(1)
+            # 每段 tag-link 里的所有 <a> 文本
+            tag_links = re.findall(r'<div class="module-info-tag-link">([\s\S]*?)</div>', tag_html, re.S | re.I)
+            for i, seg in enumerate(tag_links):
+                texts = [self._clean(t) for t in re.findall(r'<a[^>]*>([^<]*)</a>', seg, re.I)]
+                texts = [t for t in texts if t]
+                if not texts: continue
+                if i == 0:
+                    vod_year = texts[0]
+                elif i == 1:
+                    vod_area = texts[0]
+                else:
+                    vod_class = "/".join(texts)
 
-        # ★ 修复：按 HTML 出现顺序切分每个线路的剧集区块，与 tabs 严格 1:1 对应
+        # ==================== 导演 / 编剧 / 主演 ====================
+        def _extract_field(title):
+            pat = r'<span class="module-info-item-title">' + title + r'[：:]\s*</span>\s*<div class="module-info-item-content">([\s\S]*?)</div>'
+            mm = re.search(pat, html, re.S | re.I)
+            if not mm:
+                return ""
+            # 收集所有 <a> 的文本，过滤空
+            names = [self._clean(t) for t in re.findall(r'<a[^>]*>([^<]*)</a>', mm.group(1), re.I)]
+            names = [n for n in names if n]
+            if not names:
+                # 兜底：直接清空 HTML
+                return self._clean(mm.group(1))
+            return " / ".join(names)
+
+        vod_director = _extract_field("导演")
+        vod_writer = _extract_field("编剧")
+        vod_actor = _extract_field("主演")
+
+        # ==================== 更新日期 / 备注 / 豆瓣 ====================
+        vod_update = ""
+        m = re.search(r'<span class="module-info-item-title">更新：</span>\s*<div class="module-info-item-content">([\s\S]*?)</div>', html, re.S | re.I)
+        if m: vod_update = self._clean(m.group(1))
+
+        vod_remarks = ""
+        m = re.search(r'<span class="module-info-item-title">备注：</span>\s*<div class="module-info-item-content">([\s\S]*?)</div>', html, re.S | re.I)
+        if m: vod_remarks = self._clean(m.group(1))
+
+        vod_score = ""
+        m = re.search(r'<span class="module-info-item-title">豆瓣：</span>[\s\S]*?<font[^>]*>([\d.]+)分?</font>', html, re.S | re.I)
+        if m: vod_score = m.group(1)
+
+        # ==================== 播放列表 ====================
+        tabs = re.findall(r'<div class="module-tab-item tab-item[^"]*"[^>]*data-dropdown-value="([^"]+)"', html, re.I)
         panels = html.split('<div class="module-list sort-list tab-list his-tab-list" id="panel1">')[1:]
 
         play_from, play_url = [], []
@@ -331,7 +383,6 @@ class Spider(Spider):
             eps = []
             for m in re.finditer(r'href="(/vodplay/(\d+)-(\d+)-(\d+)\.html)"[^>]*?>\s*<span>([^<]+)</span>', panel, re.I):
                 href, vid, sid, nid, ep = m.groups()
-                # 按 nid 数字排序，保证 "第1集 / 第2集 / ... / 第19集" 顺序正确
                 eps.append((int(nid), self._clean(ep), self._fix_url(href)))
             if not eps:
                 continue
@@ -343,10 +394,26 @@ class Spider(Spider):
         if not play_from:
             return {"list": []}
 
+        # 剧集集数统计
+        total_eps = sum(len(p.split("#")) for p in play_url)
+        remarks_final = vod_remarks or f"{total_eps}集"
+        if vod_update:
+            remarks_final = f"{remarks_final} | 更新：{vod_update}"
+
         return {"list": [{
-            "vod_id": vod_id, "vod_name": name, "vod_pic": pic or DEFAULT_PIC,
-            "vod_content": content, "vod_play_from": "$$$".join(play_from),
-            "vod_play_url": "$$$".join(play_url), "vod_remarks": f"{len(play_from)}条线路"
+            "vod_id": vod_id,
+            "vod_name": name,
+            "vod_pic": pic or DEFAULT_PIC,
+            "vod_content": content,
+            "vod_year": vod_year,
+            "vod_area": vod_area,
+            "vod_class": vod_class,
+            "vod_director": vod_director,
+            "vod_actor": vod_actor,
+            "vod_remarks": remarks_final,
+            "vod_score": vod_score,
+            "vod_play_from": "$$$".join(play_from),
+            "vod_play_url": "$$$".join(play_url),
         }]}
 
     def playerContent(self, flag, id, vipFlags):
