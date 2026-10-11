@@ -1,6 +1,6 @@
 # coding=utf-8
 """
-大米星球 TVBox Python 爬虫 (完美适配 dmxq40.com 实际结构)
+大米星球 TVBox Python 爬虫 (基于 dmxq40.com 实际结构修正版)
 """
 
 import sys
@@ -49,7 +49,8 @@ except ImportError:
     Spider = _BaseSpider
 
 
-HOST = "https://dmxq40.com"  # 根据你截图地址栏确认的当前域名
+# 默认域名，可在 TVBox 配置中通过 {"site":"https://xxx"} 覆盖
+HOST = "https://dmxq40.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
@@ -61,7 +62,6 @@ CLASSES = [
     {"type_id": "23", "type_name": "综艺"},
 ]
 
-# 筛选器配置 (与网站实际筛选器对应)
 _YEARS = [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]
 _SORTS = [
     {"n": "时间", "v": "time"},
@@ -146,7 +146,7 @@ class Spider(Spider):
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
 
-    # ===================== 列表提取 (核心修复点) =====================
+    # ===================== 列表提取（兼容多种卡片结构） =====================
 
     def _extract_list(self, html):
         items = []
@@ -154,30 +154,27 @@ class Spider(Spider):
         if not html:
             return items
 
-        # 采用“周围块提取法”，完美兼容分类页、首页和搜索页的复杂结构
+        # 策略：先找所有详情页链接，再在其周围提取信息
         for m in re.finditer(r'href="(/voddetail/[^"]+?\.html)"', html):
             href = m.group(1)
             if href in seen:
                 continue
             seen.add(href)
 
-            # 截取链接周围的 HTML 块进行分析
-            start = max(0, m.start() - 500)
-            end = min(len(html), m.end() + 800)
+            # 截取链接前后的 HTML 块，用于提取标题、图片等
+            start = max(0, m.start() - 600)
+            end = min(len(html), m.end() + 900)
             block = html[start:end]
 
-            # 1. 提取标题 (按优先级依次尝试)
+            # 1. 标题：分类页/首页标题在 module-poster-item-title，搜索页在 strong/em 或 title 属性
             title = ""
-            # 分类页/首页的标题
             title_match = re.search(r'<div class="module-poster-item-title"[^>]*>([\s\S]*?)</div>', block, re.I)
             if title_match:
                 title = self._clean(title_match.group(1))
-            # 搜索页的标题 (在 a 标签外部)
             if not title:
                 title_match = re.search(r'<strong><em>(.*?)</em></strong>', block, re.S | re.I)
                 if title_match:
                     title = self._clean(title_match.group(1))
-            # 属性中的标题
             if not title:
                 title_match = re.search(r'title="([^"]*)"', block, re.I)
                 if title_match:
@@ -185,13 +182,13 @@ class Spider(Spider):
             if not title:
                 title = href
 
-            # 2. 提取封面
+            # 2. 封面：优先 data-original，其次 src
             pic = ""
             pic_match = re.search(r'<img[^>]*?(?:data-original|src)="([^"]+)"', block, re.I)
             if pic_match:
                 pic = self._fix_url(pic_match.group(1))
 
-            # 3. 提取备注 (如 "更新至第05集"、"全24集")
+            # 3. 备注：如 "HD"、"全24集"
             remark = ""
             remark_match = re.search(r'<div class="module-item-note">([^<]*)</div>', block, re.I)
             if remark_match:
@@ -209,7 +206,6 @@ class Spider(Spider):
     def _page_count(self, html):
         if not html:
             return 1
-        # 尾页链接: /vodshow/20--------51---2026.html
         m = re.search(r'title="尾页"[^>]*href="([^"]+?)"', html, re.I)
         if not m:
             m = re.search(r'href="([^"]+?)"[^>]*title="尾页"', html, re.I)
@@ -228,11 +224,11 @@ class Spider(Spider):
         return {"class": CLASSES, "filters": FILTERS}
 
     def homeVideoContent(self):
-        """解析首页 /index/home.html 的推荐内容"""
         html = self._fetch(self.site_url + "/index/home.html")
         return {"list": self._extract_list(html)}
 
     def categoryContent(self, tid, pg, filter, extend):
+        # 处理 extend 参数：可能是字符串或字典，并过滤掉空值和"全部"
         if isinstance(extend, str):
             try:
                 extend = json.loads(extend)
@@ -241,40 +237,46 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        page = int(pg) if pg else 1
-        area = urllib.parse.quote(extend.get('area', ''))
-        cls = urllib.parse.quote(extend.get('class', ''))
-        sort = extend.get('sort', '')
-        year = extend.get('year', '')
+        # 清理筛选值：空字符串、"全部"都视为不筛选
+        def clean_val(v):
+            return "" if v in ("", "全部", None) else v
 
-        # 构建中间部分
+        area = clean_val(extend.get('area', ''))
+        cls = clean_val(extend.get('class', ''))
+        sort = clean_val(extend.get('sort', ''))
+        year = clean_val(extend.get('year', ''))
+
+        page = int(pg) if pg else 1
+
+        # 构建 URL 的中间筛选部分
         mid_parts = []
-        if area: mid_parts.append(area)
-        if cls: mid_parts.append(cls)
+        if area: mid_parts.append(urllib.parse.quote(area))
+        if cls: mid_parts.append(urllib.parse.quote(cls))
         if sort and sort != 'time': mid_parts.append(sort)
-        
+
         mid = "-".join(mid_parts)
-        
-        # ★ 完全根据你提供的 HTML 推导出的 URL 拼接规律 ★
-        # 情况 A: 第 1 页 -> /vodshow/20-----------.html (11个连字符)
-        # 情况 B: 第 2 页 -> /vodshow/20--------2---.html (8个连字符+页码+3个连字符)
+
+        # 根据实际 HTML 观察到的 URL 规律拼接
+        # 无筛选：/vodshow/20-----------.html 或 /vodshow/20-----------2026.html
+        # 有筛选：/vodshow/20-大陆----------2026.html
+        # 第2页：/vodshow/20--------2---2026.html
         if mid:
             base = f"{tid}-{mid}"
-            sep1 = "-" * 10
-            sep2 = "-" * 7
+            if page == 1:
+                url = f"{self.site_url}/vodshow/{base}{'-'*10}{year}.html"
+            else:
+                url = f"{self.site_url}/vodshow/{base}{'-'*7}{page}---{year}.html"
         else:
-            base = f"{tid}"
-            sep1 = "-" * 11
-            sep2 = "-" * 8
+            if page == 1:
+                url = f"{self.site_url}/vodshow/{tid}{'-'*11}{year}.html"
+            else:
+                url = f"{self.site_url}/vodshow/{tid}{'-'*8}{page}---{year}.html"
 
-        if page == 1:
-            url = f"{self.site_url}/vodshow/{base}{sep1}{year}.html"
-        else:
-            url = f"{self.site_url}/vodshow/{base}{sep2}{page}---{year}.html"
-
-        self.log("category:", url)
+        self.log("category URL:", url)
         html = self._fetch(url)
+        self.log("  HTML 长度:", len(html))
         videos = self._extract_list(html)
+        self.log("  提取到视频数:", len(videos))
         pagecount = self._page_count(html)
 
         return {
@@ -289,13 +291,12 @@ class Spider(Spider):
         page = int(pg) if pg else 1
         kw = urllib.parse.quote(key, safe="")
         
-        # ★ 完全根据你提供的搜索 HTML 推导出的 URL 拼接规律 ★
         if page == 1:
             url = f"{self.site_url}/vodsearch/{kw}-------------.html"
         else:
             url = f"{self.site_url}/vodsearch/{kw}----------{page}---.html"
 
-        self.log("search:", url)
+        self.log("search URL:", url)
         html = self._fetch(url)
         videos = self._extract_list(html)
 
@@ -411,7 +412,6 @@ class Spider(Spider):
         html = self._fetch(play_page)
         url = ""
 
-        # 解析 player_aaaa
         m = re.search(r'player_aaaa\s*=\s*({.*?})\s*</script>', html, re.S)
         if not m:
             m = re.search(r'player_aaaa\s*=\s*({.*?})\s*;', html, re.S)
@@ -445,7 +445,6 @@ class Spider(Spider):
             self.log("player url:", url[:200])
             return res
 
-        # 兜底：交给 TVBox 嗅探
         res = {
             "parse": 1,
             "playUrl": "",
