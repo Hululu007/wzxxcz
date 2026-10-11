@@ -155,7 +155,7 @@ class Spider(Spider):
     def homeVideoContent(self):
         return {'list': self._items(self._get(self.base))}
 
-    # ========== ★ 唯一修改：电影分类无筛选时，直接请求基础路径 ==========
+    # ========== ★ 终极修复：彻底解决“全部”过滤问题 ==========
     def categoryContent(self, tid, pg=1, filter=False, extend=''):
         try: pn = max(int(str(pg)), 1)
         except: pn = 1
@@ -163,40 +163,41 @@ class Spider(Spider):
         
         main_cat = str(tid).split('/')[0]
         
+        # 提取用户的选择，并进行彻底清洗
         raw_class = ex.get('class', 'all')
         raw_area = ex.get('area', 'all')
         raw_lang = ex.get('lang', 'all')
         raw_year = ex.get('year', 'all')
         
+        # 过滤掉“全部”、空字符串、中文“全部”等所有非有效值
         c_val = raw_class if raw_class and raw_class not in ('全部', 'all', '') else 'all'
         a_val = raw_area if raw_area and raw_area not in ('全部', 'all', '') else 'all'
         l_val = raw_lang if raw_lang and raw_lang not in ('全部', 'all', '') else 'all'
         y_val = raw_year if raw_year and raw_year not in ('全部', 'all', '') else 'all'
         
+        # 构造拼接数组：class 永远存在，其他有值才拼
+        segments = [c_val]
+        if a_val != 'all': segments.append(a_val)
+        if l_val != 'all': segments.append(l_val)
+        if y_val != 'all' and main_cat in FILTER_TYPES: segments.append(y_val)
+        
+        filter_path = '-'.join(segments)
+        
+        # 排序后缀：只在有排序值时添加
         sort_val = ex.get('sort', '')
         sort_suffix = '/' + sort_val if sort_val and sort_val not in ('默认', '') else ''
         
-        # ★ 核心修复：如果电影分类没有任何筛选条件，直接请求 /movie，避免 /movie/all 导致数据不全
-        if main_cat == 'movie' and c_val == 'all' and a_val == 'all' and l_val == 'all' and y_val == 'all' and not sort_suffix:
-            url = '%s/%s' % (self.base, main_cat)
-        else:
-            # 构造拼接数组：class 永远存在，其他有值才拼
-            segments = [c_val]
-            if a_val != 'all': segments.append(a_val)
-            if l_val != 'all': segments.append(l_val)
-            if y_val != 'all' and main_cat in FILTER_TYPES: segments.append(y_val)
-            
-            filter_path = '-'.join(segments)
-            url = '%s/%s/%s%s' % (self.base, main_cat, filter_path, sort_suffix)
-            
+        url = '%s/%s/%s%s' % (self.base, main_cat, filter_path, sort_suffix)
         if pn > 1: url += '?page=%d' % pn
+        
+        self.log("Request URL: %s" % url)  # 关键调试日志，务必查看
 
         h = self._get(url)
         if not h: return {'page': pn, 'pagecount': pn, 'limit': 24, 'total': 0, 'list': []}
         items = self._items(h)
         return {'page': pn, 'pagecount': self._pagecount(h, pn), 'limit': 24, 'total': len(items), 'list': items}
 
-    # ========== ★ 详情页（原封不动，绝对不碰你认可的简介和元数据） ==========
+    # ========== ★ 绝对精准的简介提取 ==========
     def detailContent(self, ids, quick='1'):
         vid = str(ids[0] if isinstance(ids, list) else ids or '')
         h = self._get(self._abs(vid))
