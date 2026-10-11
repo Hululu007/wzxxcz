@@ -1,11 +1,10 @@
 # coding=utf-8
 """
-晴天影视 gsjsylgs.com | TVBox Python 爬虫 (修复版)
+晴天影视 gsjsylgs.com | TVBox Python 爬虫 (精确修复版)
 CMS: 苹果CMS V10 (ewave 模板)
 - 伪静态前缀 (xphjTV7 / FLxxbdA / oLKx9cg) 从首页动态解析
-- 修复分类列表出现“更新”按钮的问题
-- 修复详情页简介提取不完整（精准提取剧情简介，剔除SEO废话）
-- 播放地址从 player_aaaa.url 提取, 走站点 /m3u8/?url= 代理
+- 彻底过滤导航栏的“更新”、“排行榜”、“留言”链接和卡片
+- 精准提取“剧情简介”正文，保留《片名》由...开头的完整描述，只清理HTML标签和多余空白
 """
 import re
 import sys
@@ -59,7 +58,6 @@ HOST = "https://www.gsjsylgs.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
-# 只保留纯视频分类，绝对不要加“更新”、“排行榜”、“留言”等
 _CLASSES_TID = [
     ("1",  "电影"),
     ("2",  "电视剧"),
@@ -123,9 +121,9 @@ _RE_PIC = re.compile(
 _RE_META_DESC = re.compile(
     r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', re.I)
 
-# 精准匹配“剧情简介”模块 (适配你发来的 HTML)
+# 【核心修复】精准匹配“剧情简介”下的第一个 <p> 标签，抓取全部内容
 _RE_INTRO_BLOCK = re.compile(
-    r'<h2[^>]*>\s*剧情简介\s*</h2>\s*<div[^>]*>\s*<p[^>]*>([\s\S]*?)</p>', re.I)
+    r'<h2[^>]*>\s*剧情简介\s*</h2>[\s\S]*?<p[^>]*?>([\s\S]*?)</p>', re.I)
 
 _RE_TAB = re.compile(
     r'<li[^>]*class="[^"]*ewave-tab[^"]*"[^>]*?data-target="#(ewave-playlist-\d+)"'
@@ -195,6 +193,7 @@ class Spider(Spider):
         s = (s.replace("&nbsp;", " ").replace("\xa0", " ")
               .replace("&amp;", "&").replace("&quot;", '"')
               .replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">"))
+        # 清理多余空白和换行，保证盒子显示整洁
         s = re.sub(r"[ \t\r\f\v]+", " ", s)
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
@@ -233,7 +232,7 @@ class Spider(Spider):
                 continue
             href = link_m.group(1).replace("&amp;", "&")
             
-            # 【关键】忽略导航栏的“更新”、“排行榜”、“留言”等链接
+            # 1. 彻底屏蔽导航栏的“更新”、“排行榜”、“留言”等链接
             if any(x in href for x in ["/label/", "/gbook", "/artsearch/"]):
                 continue
                 
@@ -260,7 +259,7 @@ class Spider(Spider):
                 if nm:
                     name = nm.group(1).strip()
                     
-            # 【关键】过滤掉名叫“更新”、“排行榜”的卡片
+            # 2. 彻底屏蔽名叫“更新”、“排行榜”的卡片
             if name in ("更新", "排行榜", "留言", "首页"):
                 continue
 
@@ -376,21 +375,14 @@ class Spider(Spider):
         if m:
             pic = self._fix_url(m.group(1))
 
-        # 3. 简介 (精准提取剧情简介，去除SEO废话)
+        # 3. 简介 (【核心修复】直接提取“剧情简介”下的完整文字，不去除任何内容)
         content = ""
-        
-        # 优先匹配用户发来的 <h2>剧情简介</h2> 区块
         intro_m = _RE_INTRO_BLOCK.search(html)
         if intro_m:
-            raw_intro = self._clean(intro_m.group(1))
-            # 去除“《XXX》由XXX导演...上线开播...剧中对白用语是XXX。”这段SEO文字
-            # 正则逻辑：匹配以《开头，包含“上线开播”的句子，直到“。”结尾
-            clean_intro = re.sub(r'^《.*?》.*?上线开播.*?。', '', raw_intro, flags=re.S)
-            # 如果替换后长度依然大于20字，说明抓取成功
-            if len(clean_intro.strip()) > 20:
-                content = clean_intro.strip()
-            else:
-                content = raw_intro # 如果没有SEO废话，直接保留原文本
+            # 直接清洗HTML标签，保留《XXX》由XXX导演...的全部内容
+            content = self._clean(intro_m.group(1))
+            # 强制把多余的空白替换成单空格，保证排版好看
+            content = re.sub(r'\s+', ' ', content).strip()
                 
         # 如果抓不到，兜底使用 meta
         if not content:
