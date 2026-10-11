@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# ============ 饭搭子影视 源 (fdzys.com) 简介彻底修复版 ============
+# ============ 饭搭子影视 源 (fdzys.com) 筛选完全补全版 ============
 import sys, re, json
 from urllib.parse import quote
 
@@ -19,6 +19,7 @@ HOST = 'https://fdzys.com'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 VIDEO_EXTS = 'm3u8|mp4|flv|mkv|avi|ts'
 
+# ★ 1. 分类：死死锁定这 6 个
 CATEGORIES = [
     {'type_id': 'movie',   'type_name': '电影'},
     {'type_id': 'tv',      'type_name': '电视剧'},
@@ -28,41 +29,44 @@ CATEGORIES = [
     {'type_id': 'duanju',  'type_name': '短剧'},
 ]
 
+# ★ 2. 筛选选项：完全按照你截图里的网站真实选项进行补全
 FILTER_OPTIONS = {
     'movie': {
-        'class': [('dongzuo','动作'),('xiju','喜剧'),('aiqing','爱情'),('kehuan','科幻'),('kongbu','恐怖'),('juqing','剧情'),('zhanzheng','战争'),('fanzui','犯罪'),('donghua','动画'),('xuanyi','悬疑'),('jilu','纪录'),('guzhuang','古装')],
-        'area':  [('dalu','大陆'),('xianggang','香港'),('taiwan','台湾'),('meiguo','美国'),('riben','日本'),('hanguo','韩国'),('yingguo','英国'),('faguo','法国')],
-        'lang':  [('guoyu','国语'),('yingyu','英语'),('riyu','日语'),('hanyu','韩语'),('yueyu','粤语')],
-        'year':  [(str(y), str(y)) for y in range(2026, 2017, -1)],
+        'class': [('all','全部'),('dongzuo','动作'),('xiju','喜剧'),('aiqing','爱情'),('kehuan','科幻'),('kongbupian','恐怖片'),('juqing','剧情'),('zhanzheng','战争'),('fanzui','犯罪'),('donghua','动画'),('xuanyi','悬疑'),('jilu','纪录'),('guzhuang','古装')],
+        'area':  [('all','全部'),('dalu','大陆'),('xianggang','香港'),('taiwan','台湾'),('meiguo','美国'),('faguo','法国'),('yingguo','英国'),('riben','日本'),('hanguo','韩国'),('deguo','德国'),('taiguo','泰国'),('yindu','印度'),('yidali','意大利'),('xibanya','西班牙'),('jianada','加拿大'),('qita','其他')],
+        'lang':  [('all','全部'),('guoyu','国语'),('yingyu','英语'),('yueyu','粤语'),('minnanyu','闽南语'),('hanyu','韩语'),('riyu','日语'),('fayu','法语'),('deyu','德语'),('qita','其它')],
+        'year':  [('all','全部')] + [(str(y), str(y)) for y in range(2026, 2017, -1)],
     },
     'tv': {
-        'class': [('guochan','国产'),('oumei','欧美'),('riben','日本'),('hanguo','韩国'),('juqing','剧情'),('aiqing','爱情'),('xuanyi','悬疑'),('guzhuang','古装')],
-        'area':  [('dalu','大陆'),('xianggang','香港'),('taiwan','台湾'),('meiguo','美国'),('riben','日本'),('hanguo','韩国')],
-        'lang':  [('guoyu','国语'),('yingyu','英语'),('riyu','日语'),('hanyu','韩语'),('yueyu','粤语')],
-        'year':  [(str(y), str(y)) for y in range(2026, 2017, -1)],
+        'class': [('all','全部'),('guochan','国产'),('oumei','欧美'),('riben','日本'),('hanguo','韩国'),('juqing','剧情'),('aiqing','爱情'),('xuanyi','悬疑'),('guzhuang','古装')],
+        'area':  [('all','全部'),('dalu','大陆'),('xianggang','香港'),('taiwan','台湾'),('meiguo','美国'),('riben','日本'),('hanguo','韩国')],
+        'lang':  [('all','全部'),('guoyu','国语'),('yingyu','英语'),('riyu','日语'),('hanyu','韩语'),('yueyu','粤语')],
+        'year':  [('all','全部')] + [(str(y), str(y)) for y in range(2026, 2017, -1)],
     },
     'dongman': {
-        'class': [('guochan','国漫'),('rihan','日韩'),('oumei','欧美'),('donghua','动画'),('juqing','剧情'),('kehuan','科幻')],
-        'area':  [('dalu','大陆'),('riben','日本'),('meiguo','美国')],
-        'lang':  [('guoyu','国语'),('riyu','日语')],
-        'year':  [(str(y), str(y)) for y in range(2026, 2017, -1)],
+        'class': [('all','全部'),('guochan','国漫'),('rihan','日韩'),('oumei','欧美'),('donghua','动画'),('juqing','剧情'),('kehuan','科幻')],
+        'area':  [('all','全部'),('dalu','大陆'),('riben','日本'),('meiguo','美国')],
+        'lang':  [('all','全部'),('guoyu','国语'),('riyu','日语')],
+        'year':  [('all','全部')] + [(str(y), str(y)) for y in range(2026, 2017, -1)],
     },
     'zongyi': {
-        'class': [('dalu','大陆'),('gangtai','港台'),('rihan','日韩'),('oumei','欧美'),('zongyi','综艺'),('yinyue','音乐')],
-        'area':  [('dalu','大陆'),('xianggang','香港'),('taiwan','台湾')],
-        'lang':  [('guoyu','国语'),('yueyu','粤语')],
-        'year':  [(str(y), str(y)) for y in range(2026, 2017, -1)],
+        'class': [('all','全部'),('dalu','大陆'),('gangtai','港台'),('rihan','日韩'),('oumei','欧美'),('zongyi','综艺'),('yinyue','音乐')],
+        'area':  [('all','全部'),('dalu','大陆'),('xianggang','香港'),('taiwan','台湾')],
+        'lang':  [('all','全部'),('guoyu','国语'),('yueyu','粤语')],
+        'year':  [('all','全部')] + [(str(y), str(y)) for y in range(2026, 2017, -1)],
     },
     'tiyu': {
-        'class': [('zuqiu','足球'),('lanqiu','篮球'),('wangqiu','网球'),('taiqiu','斯诺克')],
-        'area': [], 'lang': [], 'year': [],
+        'class': [('all','全部'),('zuqiu','足球'),('lanqiu','篮球'),('wangqiu','网球'),('taiqiu','斯诺克')],
+        'area': [('all','全部')], 'lang': [('all','全部')], 'year': [('all','全部')],
     },
     'duanju': {
         'class': [('all','全部'),('aiqing','爱情'),('juqing','剧情'),('xuanhuan','玄幻')],
-        'area': [], 'lang': [], 'year': [],
+        'area': [('all','全部')], 'lang': [('all','全部')], 'year': [('all','全部')],
     },
 }
-SORT_OPTIONS = [{'n': '默认', 'v': ''}, {'n': '最热', 'v': 'hot'}, {'n': '最新', 'v': 'new'}]
+
+# ★ 3. 排序选项：完全对齐网站（最新、热门、高分）
+SORT_OPTIONS = [{'n': '最新', 'v': 'new'}, {'n': '热门', 'v': 'hot'}, {'n': '高分', 'v': 'score'}]
 FILTER_TYPES = ('movie', 'tv', 'dongman', 'zongyi')
 
 
@@ -84,7 +88,8 @@ class Spider(Spider):
             filters = []
             for key, name in [('class','剧情'), ('area','地区'), ('lang','语言'), ('year','年份')]:
                 if opts.get(key):
-                    filters.append({'key': key, 'name': name, 'value': [{'n': '全部', 'v': ''}] + [{'n': n, 'v': v} for v, n in opts[key]]})
+                    # 这里把“全部”直接映射为 all，这样用户选择“全部”+“2026”时，URL 会变成 /movie/all-2026，完全符合网站逻辑
+                    filters.append({'key': key, 'name': name, 'value': [{'n': n, 'v': v} for v, n in opts[key]]})
             filters.append({'key': 'sort', 'name': '排序', 'value': SORT_OPTIONS})
             fs[tid] = filters
         return fs
@@ -162,7 +167,8 @@ class Spider(Spider):
         main_cat = str(tid).split('/')[0]
         
         segments = []
-        if ex.get('class') and ex['class'] != 'all': segments.append(ex['class'])
+        # 如果选了某个筛选项，就加入拼接列表
+        if ex.get('class'): segments.append(ex['class'])
         if ex.get('area'): segments.append(ex['area'])
         if ex.get('lang'): segments.append(ex['lang'])
         if ex.get('year') and main_cat in FILTER_TYPES: segments.append(ex['year'])
@@ -181,7 +187,7 @@ class Spider(Spider):
         items = self._items(h)
         return {'page': pn, 'pagecount': self._pagecount(h, pn), 'limit': 24, 'total': len(items), 'list': items}
 
-    # ========== ★ 绝对精准的简介提取（按你发的真实 HTML 重写） ==========
+    # ========== ★ 绝对精准的简介提取（精准命中 wrapper_more_text，不抓 SEO 文本） ==========
     def detailContent(self, ids, quick='1'):
         vid = str(ids[0] if isinstance(ids, list) else ids or '')
         h = self._get(self._abs(vid))
@@ -189,37 +195,28 @@ class Spider(Spider):
         
         d = {'vod_id': vid, 'vod_name': '', 'vod_pic': '', 'vod_actor': '', 'vod_director': '', 'vod_content': '', 'vod_remarks': '', 'vod_play_from': '', 'vod_play_url': ''}
         
-        # 标题
         m = re.search(r'<h1[^>]*>([\s\S]*?)</h1>', h)
         if m: d['vod_name'] = re.sub(r'<[^>]+>', '', m.group(1)).strip()
         
-        # 封面
         m = re.search(r'<meta[^>]+property="og:image"[^>]+content="([^"]+)"', h, re.I)
         if m: d['vod_pic'] = self._abs(m.group(1).strip())
         if not d['vod_pic']:
             m = re.search(r'<img[^>]*?data-src="([^"]+)"', h)
             if m: d['vod_pic'] = self._abs(m.group(1))
         
-        # ★★★ 简介：精准提取 wrapper_more_text，绝对不抓 SEO meta ★★★
         content = ""
         m = re.search(r'<div[^>]*class="[^"]*wrapper_more_text[^"]*"[^>]*>([\s\S]*?)</div>\s*</div>', h, re.S)
         if m:
             block = m.group(1)
-            # 移除 input 和 label 标签
             block = re.sub(r'<(input|label)[^>]*>[\s\S]*?</\1>', '', block, flags=re.I)
             block = re.sub(r'<(input|label)[^>]*>', '', block, flags=re.I)
-            # 换行处理
             block = re.sub(r'<br\s*/?>', '\n', block, flags=re.I)
-            # 剥离所有 HTML 标签
             block = re.sub(r'<[^>]+>', '', block)
-            # 清理 "简介:" 和全角空格
             block = block.replace('简介:', '').replace('简介：', '').strip()
             block = block.replace('　　', '').replace('\u3000\u3000', '')
-            # 清理多余空行
             block = re.sub(r'\n+', '\n', block)
             content = block.strip()
         else:
-            # 兜底方案：只抓取 intro 区域的文本，坚决不用 meta description 兜底
             m = re.search(r'<div[^>]*class="[^"]*intro[^"]*"[^>]*>([\s\S]*?)</div>\s*</div>\s*</div>', h, re.S)
             if m:
                 block = re.sub(r'<[^>]+>', '', m.group(1)).strip()
@@ -229,19 +226,15 @@ class Spider(Spider):
 
         d['vod_content'] = content
         
-        # 导演
         m = re.search(r'导演[:：]?\s*</div>\s*([^<]+)', h)
         if m: d['vod_director'] = m.group(1).strip()
         
-        # 演员
         m = re.search(r'主演[:：]?\s*</div>\s*([^<]+)', h)
         if m: d['vod_actor'] = m.group(1).strip()
         
-        # 状态
         m = re.search(r'<div class="tag[^>]*>([^<]+)</div>', h)
         if m: d['vod_remarks'] = m.group(1).strip()
 
-        # 线路与选集
         routes = {}
         for sid, seg in re.findall(r'<li class="swiper-slide player_name[^"]*" data-sid="(\d+)">([\s\S]*?)</li>', h):
             name_match = re.search(r'<a[^>]*>([^<]+)<span', seg)
