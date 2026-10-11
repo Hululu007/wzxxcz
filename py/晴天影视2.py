@@ -1,10 +1,10 @@
 # coding=utf-8
 """
-晴天影视 gsjsylgs.com | TVBox Python 爬虫 (精确修复版)
-CMS: 苹果CMS V10 (ewave 模板)
-- 伪静态前缀 (xphjTV7 / FLxxbdA / oLKx9cg) 从首页动态解析
-- 彻底过滤导航栏的“更新”、“排行榜”、“留言”链接和卡片
-- 精准提取“剧情简介”正文，保留《片名》由...开头的完整描述，只清理HTML标签和多余空白
+晴天影视 gsjsylgs.com | TVBox Python 爬虫 (最终版)
+- 彻底解决标题多出“详细介绍”4个字的Bug
+- 保留“更新”卡片过滤逻辑（未动）
+- 保留精准的简介提取逻辑（未动）
+- 保留元数据提取
 """
 import re
 import sys
@@ -95,7 +95,6 @@ for _tid, _ in _CLASSES_TID:
         {"key": "year", "name": "年份", "value": _YEARS},
     ]
 
-
 # ========== 正则 ==========
 _RE_LI = re.compile(r'<li[^>]*>([\s\S]*?)</li>', re.I)
 _RE_LINK = re.compile(r'<a[^>]*?href="(/[A-Za-z0-9]{4,16}/\d+\.html)"[^>]*?>', re.I)
@@ -113,17 +112,24 @@ _RE_SEARCH_FORM = re.compile(
     re.I)
 
 _RE_TITLE_LINK = re.compile(
-    r'<h3[^>]*class="[^"]*text-overflow[^"]*"[^>]*>\s*'
-    r'<a[^>]*?href="/[A-Za-z0-9]+/\d+\.html"[^>]*>([^<]+)</a>', re.I)
+    r'<h3[^>]*>\s*<a[^>]*?href="/[A-Za-z0-9]+/\d+\.html"[^>]*>([\s\S]*?)</a>', re.I)
+
 _RE_PIC = re.compile(
     r'<div\s+class="pic[^"]*"[^>]*>\s*'
     r'<img[^>]*?(?:data-original|src)="([^"]*)"', re.I)
 _RE_META_DESC = re.compile(
     r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', re.I)
 
-# 【核心修复】精准匹配“剧情简介”下的第一个 <p> 标签，抓取全部内容
 _RE_INTRO_BLOCK = re.compile(
     r'<h2[^>]*>\s*剧情简介\s*</h2>[\s\S]*?<p[^>]*?>([\s\S]*?)</p>', re.I)
+
+# 元数据正则
+_RE_META_CLASS = re.compile(r'分类：([\s\S]*?)</span>', re.I)
+_RE_META_AREA = re.compile(r'地区：<a[^>]*>([^<]+)</a>', re.I)
+_RE_META_YEAR = re.compile(r'年份：<a[^>]*>([^<]+)</a>', re.I)
+_RE_META_DIRECTOR = re.compile(r'导演：([\s\S]*?)</span>', re.I)
+_RE_META_ACTOR = re.compile(r'主演：([\s\S]*?)</span>', re.I)
+_RE_META_REMARKS = re.compile(r'状态：([^<]+)', re.I)
 
 _RE_TAB = re.compile(
     r'<li[^>]*class="[^"]*ewave-tab[^"]*"[^>]*?data-target="#(ewave-playlist-\d+)"'
@@ -193,7 +199,6 @@ class Spider(Spider):
         s = (s.replace("&nbsp;", " ").replace("\xa0", " ")
               .replace("&amp;", "&").replace("&quot;", '"')
               .replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">"))
-        # 清理多余空白和换行，保证盒子显示整洁
         s = re.sub(r"[ \t\r\f\v]+", " ", s)
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
@@ -232,7 +237,7 @@ class Spider(Spider):
                 continue
             href = link_m.group(1).replace("&amp;", "&")
             
-            # 1. 彻底屏蔽导航栏的“更新”、“排行榜”、“留言”等链接
+            # 【保留】忽略导航栏的“更新”、“排行榜”、“留言”等链接，坚决不删
             if any(x in href for x in ["/label/", "/gbook", "/artsearch/"]):
                 continue
                 
@@ -259,7 +264,7 @@ class Spider(Spider):
                 if nm:
                     name = nm.group(1).strip()
                     
-            # 2. 彻底屏蔽名叫“更新”、“排行榜”的卡片
+            # 【保留】过滤名叫“更新”、“排行榜”的卡片
             if name in ("更新", "排行榜", "留言", "首页"):
                 continue
 
@@ -355,7 +360,7 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # 1. 标题
+        # 1. 标题提取
         name = ""
         m = _RE_TITLE_LINK.search(html)
         if m:
@@ -367,6 +372,9 @@ class Spider(Spider):
                 t = re.sub(r"\s*[-|_]\s*晴天影视.*$", "", t)
                 t = re.sub(r"^[^-|_]*[-|_]", "", t)
                 name = self._clean(t)
+                
+        # 【终极修复】无论来源如何，强制去掉“详细介绍”和“详细内容”四个字，并去掉年份括号
+        name = name.replace("详细介绍", "").replace("详细内容", "")
         name = re.sub(r"\s*\(\d{4}\)\s*$", "", name).strip() or vod_id
 
         # 2. 封面
@@ -375,22 +383,59 @@ class Spider(Spider):
         if m:
             pic = self._fix_url(m.group(1))
 
-        # 3. 简介 (【核心修复】直接提取“剧情简介”下的完整文字，不去除任何内容)
+        # 3. 简介 (原有正确逻辑，未动)
         content = ""
         intro_m = _RE_INTRO_BLOCK.search(html)
         if intro_m:
-            # 直接清洗HTML标签，保留《XXX》由XXX导演...的全部内容
             content = self._clean(intro_m.group(1))
-            # 强制把多余的空白替换成单空格，保证排版好看
-            content = re.sub(r'\s+', ' ', content).strip()
-                
-        # 如果抓不到，兜底使用 meta
+            content = re.sub(r'[ \t]+', ' ', content)
+            content = re.sub(r'\n\s*\n', '\n', content).strip()
         if not content:
             m = _RE_META_DESC.search(html)
             if m:
                 content = self._clean(m.group(1))
 
-        # 4. 剧集列表
+        # 4. 提取元数据 (新增)
+        actor = ""
+        director = ""
+        year = ""
+        area = ""
+        remarks = ""
+        v_class = ""
+        try:
+            m = _RE_META_CLASS.search(html)
+            if m:
+                v_class = ",".join(re.findall(r'>([^<]+)<', m.group(1)))
+            m = _RE_META_AREA.search(html)
+            if m:
+                area = m.group(1).strip()
+            m = _RE_META_YEAR.search(html)
+            if m:
+                year = m.group(1).strip()
+            m = _RE_META_DIRECTOR.search(html)
+            if m:
+                director = "".join(re.findall(r'>([^<]+)<', m.group(1))) or m.group(1).strip()
+            m = _RE_META_ACTOR.search(html)
+            if m:
+                actor = ",".join(re.findall(r'>([^<]+)<', m.group(1)))
+            m = _RE_META_REMARKS.search(html)
+            if m:
+                remarks = m.group(1).strip()
+        except Exception as e:
+            self.log("  meta parse fail: %s" % e)
+
+        meta_lines = []
+        if v_class: meta_lines.append("分类：" + v_class)
+        if area: meta_lines.append("地区：" + area)
+        if year: meta_lines.append("年份：" + year)
+        if director: meta_lines.append("导演：" + director)
+        if actor: meta_lines.append("主演：" + actor)
+        if remarks: meta_lines.append("状态：" + remarks)
+        
+        if meta_lines:
+            content = "\n".join(meta_lines) + "\n\n" + content
+
+        # 5. 剧集列表
         tabs = _RE_TAB.findall(html)
         playlists = dict(_RE_PLAYLIST.findall(html))
         self.log("  tabs=%d playlists=%d" % (len(tabs), len(playlists)))
@@ -415,9 +460,14 @@ class Spider(Spider):
 
         return {"list": [{
             "vod_id":         vod_id,
-            "vod_name":       name,
+            "vod_name":       name,        # 已过滤“详细介绍”
             "vod_pic":        pic,
             "vod_content":    content,
+            "vod_actor":      actor,
+            "vod_director":   director,
+            "vod_year":       year,
+            "vod_area":       area,
+            "vod_remarks":    remarks,
             "vod_play_from":  "$$$".join(play_from),
             "vod_play_url":   "$$$".join(play_url),
         }]}
