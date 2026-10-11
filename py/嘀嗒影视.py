@@ -1,17 +1,19 @@
 # coding=utf-8
 """
-嘀嗒影视 didahd.xyz | TVBox Python 爬虫 (V1.4 最终完美版)
+嘀嗒影视 didahd.xyz | TVBox Python 爬虫 (V1.5 AES解密版)
 特点:
   - 适配 MyUI + MacCMS 模板
   - 支持分类筛选（地区/剧情/年份/排序）
-  - 播放页 player_aaaa encrypt=3 采用 parse:1 让 TVBox 嗅探
-  - 简介完美提取：精准提取隐藏的完整剧情（data span），解决嵌套标签截断问题
+  - 播放页 encrypt=3 采用 AES 解密，直接返回真实 m3u8（parse:0）
+  - 解密失败时自动回退 TVBox 嗅探（parse:1）
+  - 简介完美提取：精准提取隐藏的完整剧情
 """
 import re
 import sys
 import json
 import time
 import hashlib
+import base64
 import urllib.parse
 
 sys.path.append('..')
@@ -165,7 +167,7 @@ _RE_PLAYER_AA = re.compile(r'var\s+player_aaaa\s*=\s*(\{.*?\});', re.S)
 _RE_H1 = re.compile(r'<h1[^>]*>([\s\S]*?)</h1>', re.I)
 _RE_TITLE = re.compile(r'<title>(.*?)</title>', re.S | re.I)
 
-# 简介提取正则（核心修复：匹配到 a.details 标签，避免嵌套截断）
+# 简介提取正则
 _RE_INTRO_DATA = re.compile(r'<span\s+class="data"\s+style="display:\s*none;">([\s\S]*?)</span>\s*<a', re.I)
 _RE_INTRO_SKETCH = re.compile(r'<span\s+class="sketch\s+content">([\s\S]*?)</span>', re.I)
 _RE_META_DESC = re.compile(r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', re.I)
@@ -179,6 +181,10 @@ _RE_YEAR = re.compile(r'<span\s+class="text-muted\s+hidden-xs">年份：</span>(
 # PoW 挑战
 _RE_POW_HASH = re.compile(r"var\s+hash\s*=\s*['\"]([a-f0-9]{40})['\"]")
 _RE_POW_TARGET = re.compile(r"var\s+target\s*=\s*['\"]([a-f0-9]{40})['\"]")
+
+# Artplayer 页面提取
+_RE_ART_TS = re.compile(r'const\s+timestamp\s*=\s*"(\d+)"', re.I)
+_RE_ART_QUALITIES = re.compile(r'const\s+qualities\s*=\s*(\[.*?\]);', re.S | re.I)
 
 
 class Spider(Spider):
@@ -417,30 +423,23 @@ class Spider(Spider):
         if m:
             pic = self._fix_url(m.group(1))
 
-        # ===== 简介提取（完美版：精准提取隐藏的完整剧情）=====
+        # ===== 简介提取 =====
         content = ""
-        
-        # 1. 优先提取隐藏的完整 data span（你截图要求的完整剧情）
         m_data = _RE_INTRO_DATA.search(html)
         if m_data:
             content = self._clean(m_data.group(1))
-            
-        # 2. 如果失败，尝试提取截断的 sketch span
         if not content:
             m_sketch = _RE_INTRO_SKETCH.search(html)
             if m_sketch:
                 content = self._clean(m_sketch.group(1))
-                
-        # 3. 最终兜底：提取 meta description
         if not content:
             m_meta = _RE_META_DESC.search(html)
             if m_meta:
                 content = self._clean(m_meta.group(1))
 
-        # 添加前缀
         content = INTRO_PREFIX + "\n" + content if content else INTRO_PREFIX
 
-        # ===== 导演和主演提取 =====
+        # ===== 导演和主演 =====
         director = ""
         m = _RE_DIRECTOR.search(html)
         if m:
@@ -566,7 +565,6 @@ class Spider(Spider):
 
                 if encrypt == 2:
                     try:
-                        import base64
                         url_dec = urllib.parse.unquote(
                             base64.b64decode(url_val).decode("utf-8", "ignore"))
                         if url_dec.startswith("http"):
@@ -580,10 +578,69 @@ class Spider(Spider):
                     except Exception as e:
                         self.log("  base64 解码失败: %s" % e)
 
+                # ========== encrypt == 3: AES 解密 ==========
+                if encrypt == 3:
+                    try:
+                        from Crypto.Cipher import AES
+                        from Crypto.Util.Padding import unpad
+                    except ImportError:
+                        self.log("  ⚠️ 缺少 pycryptodome 库，回退嗅探模式")
+                    else:
+                        try:
+                            # 1. 构造 Artplayer iframe URL
+                            art_url = "%s/static/player/artplayer/?url=%s" % (
+                                self.site_url, url_val)
+                            self.log("  Artplayer URL: %s" % art_url[:120])
+
+                            # 2. 请求 Artplayer 页面
+                            art_html = self._fetch(art_url)
+                            if not art_html:
+                                raise Exception("Artplayer 页面为空")
+
+                            # 3. 提取 timestamp 和 qualities
+                            m_ts = _RE_ART_TS.search(art_html)
+                            m_q = _RE_ART_QUALITIES.search(art_html)
+                            if not m_ts or not m_q:
+                                raise Exception("未找到 timestamp 或 qualities")
+
+                            timestamp = m_ts.group(1)
+                            qualities = json.loads(m_q.group(1))
+                            if not qualities or 'url' not in qualities[0]:
+                                raise Exception("qualities 数组为空")
+
+                            encrypted_b64 = qualities[0]['url']
+
+                            # 4. AES 解密
+                            key_str = hashlib.md5(timestamp.encode()).hexdigest()
+                            key = key_str[:16].encode('utf-8')
+                            iv = key_str[16:].encode('utf-8')
+                            encrypted_data = base64.b64decode(encrypted_b64)
+                            cipher = AES.new(key, AES.MODE_CBC, iv)
+                            decrypted = unpad(cipher.decrypt(encrypted_data), AES.block_size)
+                            real_url = decrypted.decode('utf-8')
+
+                            if real_url.startswith("http"):
+                                self.log("  ✅ AES 解密成功: %s" % real_url[:100])
+                                res = {
+                                    "parse": 0, "playUrl": "",
+                                    "url": real_url,
+                                    "header": {
+                                        "User-Agent": UA,
+                                        "Referer": self.site_url + "/"
+                                    }
+                                }
+                                self._play_cache[play_page] = (now, res)
+                                return res
+                            else:
+                                raise Exception("解密结果不是有效 URL: %s" % real_url[:80])
+                        except Exception as e:
+                            self.log("  ❌ AES 解密失败: %s" % e)
+
                 self.log("  encrypt=3, 交给 TVBox 嗅探")
             except Exception as e:
                 self.log("  解析 player_aaaa 失败: %s" % e)
 
+        # 兜底：交给 TVBox 嗅探
         res = {
             "parse": 1, "playUrl": "",
             "url": play_page,
