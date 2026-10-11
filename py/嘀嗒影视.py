@@ -1,11 +1,10 @@
 # coding=utf-8
 """
-嘀嗒影视 didahd.xyz | TVBox Python 爬虫 (V2.0 直链嗅探版)
+嘀嗒影视 didahd.xyz | TVBox Python 爬虫 (V2.1 稳定嗅探版)
 特点:
   - 适配 MyUI + MacCMS 模板
   - 支持分类筛选（地区/剧情/年份/排序）
-  - encrypt=3 时直接返回 Artplayer iframe URL 交给 TVBox 嗅探（少一层加载，更稳）
-  - 不再依赖 pycryptodome，开箱即用
+  - 播放嗅探：直接嗅探播放页（兼容性最好）
   - 简介完美提取：精准提取隐藏的完整剧情
 """
 import re
@@ -502,7 +501,7 @@ class Spider(Spider):
             "vod_play_url": "$$$".join(play_url),
         }]}
 
-    # ---------- 播放解析（直链嗅探版）----------
+    # ---------- 播放解析（回退到稳定的播放页嗅探）----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -518,7 +517,7 @@ class Spider(Spider):
             return {"parse": 1, "playUrl": "", "url": play_page,
                     "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
 
-        # 解析 player_aaaa
+        # 解析 player_aaaa（用于判断加密类型 + 记录日志）
         encrypt = 0
         url_val = ""
         m = _RE_PLAYER_AA.search(html)
@@ -571,29 +570,15 @@ class Spider(Spider):
             except Exception as e:
                 self.log("  base64 解码失败: %s" % e)
 
-        # ---------- encrypt == 3：直接嗅探 Artplayer iframe ----------
-        # 省去解密烦恼，直接返回 Artplayer 页面给 TVBox 嗅探器
-        if encrypt == 3 and url_val:
-            art_url = "%s/static/player/artplayer/?url=%s" % (
-                self.site_url, url_val)
-            self.log("  => 嗅探目标: Artplayer iframe")
-            res = {
-                "parse": 1, "playUrl": "",
-                "url": art_url,
-                "header": {
-                    "User-Agent": UA,
-                    "Referer": play_page,
-                },
-            }
-            self._play_cache[play_page] = (now, res)
-            return res
-
-        # ---------- 兜底：嗅探原始播放页 ----------
-        self.log("  => 回退嗅探播放页")
+        # ---------- encrypt==3 或兜底：嗅探播放页（保持 V1.4 行为）----------
+        self.log("  => 嗅探播放页")
         res = {
             "parse": 1, "playUrl": "",
             "url": play_page,
-            "header": {"User-Agent": UA, "Referer": self.site_url + "/"},
+            "header": {
+                "User-Agent": UA,
+                "Referer": self.site_url + "/",
+            },
         }
         self._play_cache[play_page] = (now, res)
         return res
