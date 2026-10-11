@@ -1,10 +1,11 @@
 # coding=utf-8
 """
-嘀嗒影视 didahd.xyz | TVBox Python 爬虫 (V2.1 稳定嗅探版)
+嘀嗒影视 didahd.xyz | TVBox Python 爬虫 (V2.2 AES+嗅探双保险)
 特点:
   - 适配 MyUI + MacCMS 模板
   - 支持分类筛选（地区/剧情/年份/排序）
-  - 播放嗅探：直接嗅探播放页（兼容性最好）
+  - encrypt=3 优先 AES 解密（seed + MD5），成功则 parse:0 秒播
+  - 解密失败自动回退播放页嗅探（parse:1），稳定兼容
   - 简介完美提取：精准提取隐藏的完整剧情
 """
 import re
@@ -63,6 +64,9 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 DEFAULT_PIC = HOST + "/template/mytheme/statics/img/load.png"
 
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
+
+# AES 解密用的固定种子
+_AES_SEED_SUFFIX = "RY7e48naFXPsLJC"
 
 CLASSES = [
     {"type_id": "1", "type_name": "电影"},
@@ -181,6 +185,10 @@ _RE_YEAR = re.compile(r'<span\s+class="text-muted\s+hidden-xs">年份：</span>(
 _RE_POW_HASH = re.compile(r"var\s+hash\s*=\s*['\"]([a-f0-9]{40})['\"]")
 _RE_POW_TARGET = re.compile(r"var\s+target\s*=\s*['\"]([a-f0-9]{40})['\"]")
 
+# Artplayer 页面提取
+_RE_ART_TS = re.compile(r'const\s+timestamp\s*=\s*["\']([^"\']+)', re.I)
+_RE_ART_QUALITIES = re.compile(r'const\s+qualities\s*=\s*(\[[\s\S]*?\]);', re.I)
+
 
 class Spider(Spider):
 
@@ -202,6 +210,19 @@ class Spider(Spider):
         }
         self.default_pic = DEFAULT_PIC
         self._play_cache = {}
+
+        # 检查 AES 可用性
+        try:
+            from Crypto.Cipher import AES as _AES
+            from Crypto.Util.Padding import unpad as _unpad
+            self._AES = _AES
+            self._unpad = _unpad
+            self.log("init: AES 可用")
+        except Exception:
+            self._AES = None
+            self._unpad = None
+            self.log("init: AES 不可用（缺少 pycryptodome），将只走嗅探")
+
         self.log("init: site=%s" % self.site_url)
 
     # ---------- 网络请求 ----------
@@ -275,6 +296,66 @@ class Spider(Spider):
         s = re.sub(r"[ \t\r\f\v]+", " ", s)
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
+
+    # ---------- AES 解密（新增）----------
+    def _decode_art_url(self, cipher_text, timestamp):
+        """用正确的种子和 key/iv 顺序解密 Artplayer URL"""
+        if not self._AES or not cipher_text or not timestamp:
+            return ""
+        try:
+            seed = str(timestamp) + _AES_SEED_SUFFIX
+            md5 = hashlib.md5(seed.encode("utf-8")).hexdigest()
+            key = md5[16:32].encode("utf-8")
+            iv = md5[0:16].encode("utf-8")
+
+            raw = cipher_text.replace("\\/", "/")
+            dec = self._AES.new(key, self._AES.MODE_CBC, iv).decrypt(
+                base64.b64decode(raw))
+            result = self._unpad(dec, 16).decode("utf-8", "ignore")
+            return result.replace("\\/", "/")
+        except Exception as e:
+            self.log("AES 解密失败: %s" % e)
+            return ""
+
+    def _try_artplayer_decrypt(self, raw_url, referer):
+        """请求 Artplayer 页面并尝试 AES 解密真实 m3u8"""
+        if not self._AES or not raw_url:
+            return ""
+        if not re.match(r'^[0-9a-fA-F]+$', raw_url):
+            return ""
+
+        try:
+            art = self.site_url + "/static/player/artplayer/?url=" + \
+                  urllib.parse.quote(raw_url, safe='')
+            txt = self._fetch(art, headers={"Referer": referer})
+            if not txt:
+                return ""
+
+            ts = _RE_ART_TS.search(txt)
+            if not ts:
+                self.log("  未找到 timestamp")
+                return ""
+            timestamp = ts.group(1)
+
+            qm = _RE_ART_QUALITIES.search(txt)
+            if not qm:
+                self.log("  未找到 qualities")
+                return ""
+
+            try:
+                arr = json.loads(qm.group(1))
+            except Exception:
+                return ""
+
+            for it in arr:
+                u = self._decode_art_url(it.get("url", ""), timestamp)
+                if u and u.startswith("http"):
+                    self.log("  ✅ AES 解密成功")
+                    return self._fix_url(u)
+            return ""
+        except Exception as e:
+            self.log("  Artplayer 解密异常: %s" % e)
+            return ""
 
     # ---------- 列表提取 ----------
     def _extract_videos(self, html):
@@ -501,7 +582,7 @@ class Spider(Spider):
             "vod_play_url": "$$$".join(play_url),
         }]}
 
-    # ---------- 播放解析（回退到稳定的播放页嗅探）----------
+    # ---------- 播放解析（AES 优先 + 嗅探兜底）----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -517,7 +598,7 @@ class Spider(Spider):
             return {"parse": 1, "playUrl": "", "url": play_page,
                     "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
 
-        # 解析 player_aaaa（用于判断加密类型 + 记录日志）
+        # 解析 player_aaaa
         encrypt = 0
         url_val = ""
         m = _RE_PLAYER_AA.search(html)
@@ -570,7 +651,21 @@ class Spider(Spider):
             except Exception as e:
                 self.log("  base64 解码失败: %s" % e)
 
-        # ---------- encrypt==3 或兜底：嗅探播放页（保持 V1.4 行为）----------
+        # ---------- encrypt==3：优先 AES 解密 ----------
+        if encrypt == 3 and url_val:
+            self.log("  => 尝试 AES 解密")
+            real_url = self._try_artplayer_decrypt(url_val, play_page)
+            if real_url:
+                res = {
+                    "parse": 0, "playUrl": "",
+                    "url": real_url,
+                    "header": {"User-Agent": UA, "Referer": self.site_url + "/"},
+                }
+                self._play_cache[play_page] = (now, res)
+                return res
+            self.log("  AES 解密未成功，回退嗅探")
+
+        # ---------- 兜底：嗅探播放页 ----------
         self.log("  => 嗅探播放页")
         res = {
             "parse": 1, "playUrl": "",
