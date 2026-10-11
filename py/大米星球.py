@@ -213,31 +213,41 @@ class Spider(Spider):
                 except Exception: pass
         return 9999
 
-    # ===================== 分类 URL 自动抓取 =====================
+    # ===================== 分类 URL 自动抓取（★ 修复核心） =====================
     def _get_show_url(self, tid, pg, extend):
-        """请求 /vodtype/{tid}.html，从 HTML 里自动提取正确的 /vodshow/ 链接"""
+        """请求 /vodtype/{tid}.html，从 HTML 里自动提取正确的 /vodshow/ 链接。
+        关键修复: TVBox 会把 "全部"、"时间" 等默认值传给爬虫，
+        这里统一把默认值当成空字符串处理，避免拼出 404 页面。"""
         type_url = f"{self.site_url}/vodtype/{tid}.html"
         html = self._fetch(type_url)
         if not html:
             return f"{self.site_url}/vodshow/{tid}-----------.html"
 
-        # 如果第 1 页且无筛选，直接用默认链接
-        if int(pg) == 1 and not any(extend.get(k) for k in ("area", "class", "year", "sort")):
+        # ★ 关键修复: 清理所有"空"/"全部"/"时间"等默认值
+        def _clean_val(v):
+            if v in ("", None, "全部", "时间", "time", "按时间排序", "按时间"):
+                return ""
+            return v
+
+        area = _clean_val(extend.get("area", ""))
+        cls  = _clean_val(extend.get("class", ""))
+        year = _clean_val(extend.get("year", ""))
+        sort = _clean_val(extend.get("sort", ""))
+
+        # 完全无筛选：直接用 /vodtype/ 页面里的"全部"链接（最稳）
+        if int(pg) == 1 and not (area or cls or year or sort):
+            # 优先从 HTML 里直接抓取 active 的"全部"链接
             m = re.search(r'href="(/vodshow/[^"]+?)"[^>]*class="[^"]*active[^"]*"[^>]*>全部</a>', html)
-            if m: return self._fix_url(m.group(1))
-            # 兜底：直接用 /vodshow/{tid}-----------.html
+            if not m:
+                m = re.search(r'href="(/vodshow/[^"]+?)"[^>]*>全部</a>', html)
+            if m:
+                return self._fix_url(m.group(1))
+            # 兜底：直接用固定格式
             return f"{self.site_url}/vodshow/{tid}-----------.html"
 
-        # 有筛选时，从页面筛选器链接中匹配（这里简化处理，直接按最可能的格式拼接）
-        # 因为分类页的筛选器链接本身是完整的 /vodshow/ 路径
-        # 实际项目中可遍历筛选器链接，按当前选中的值匹配，但这里为了稳定性，采用直接拼装
-        area = urllib.parse.quote(extend.get("area", ""))
-        cls = urllib.parse.quote(extend.get("class", ""))
-        sort = extend.get("sort", "")
-        year = extend.get("year", "")
-
-        parts = [area, cls, sort] if (area or cls or sort) else []
-        mid = "-".join(parts) if parts else ""
+        # 有筛选：按大米星球 URL 规则拼装
+        parts = [urllib.parse.quote(p) for p in (area, cls, sort) if p]
+        mid = "-".join(parts)
 
         if not mid:
             if int(pg) == 1:
@@ -274,6 +284,14 @@ class Spider(Spider):
         self.log("  HTML length:", len(html))
         videos = self._extract_videos(html)
         self.log("  提取到:", len(videos))
+
+        # ★ 兜底：如果主 URL 返回内容异常，回退到无筛选第 1 页
+        if not videos and page == 1:
+            self.log("  主 URL 无结果，回退无筛选第1页")
+            fallback = f"{self.site_url}/vodshow/{tid}-----------.html"
+            html = self._fetch(fallback)
+            videos = self._extract_videos(html)
+            self.log("  回退后提取到:", len(videos))
 
         return {
             "list": videos, "page": page,
@@ -330,7 +348,6 @@ class Spider(Spider):
             tag_block = re.search(r'<div class="module-info-tag">([\s\S]*?)<div class="module-mobile-play"', html, re.S | re.I)
         if tag_block:
             tag_html = tag_block.group(1)
-            # 每段 tag-link 里的所有 <a> 文本
             tag_links = re.findall(r'<div class="module-info-tag-link">([\s\S]*?)</div>', tag_html, re.S | re.I)
             for i, seg in enumerate(tag_links):
                 texts = [self._clean(t) for t in re.findall(r'<a[^>]*>([^<]*)</a>', seg, re.I)]
@@ -349,11 +366,9 @@ class Spider(Spider):
             mm = re.search(pat, html, re.S | re.I)
             if not mm:
                 return ""
-            # 收集所有 <a> 的文本，过滤空
             names = [self._clean(t) for t in re.findall(r'<a[^>]*>([^<]*)</a>', mm.group(1), re.I)]
             names = [n for n in names if n]
             if not names:
-                # 兜底：直接清空 HTML
                 return self._clean(mm.group(1))
             return " / ".join(names)
 
@@ -394,7 +409,6 @@ class Spider(Spider):
         if not play_from:
             return {"list": []}
 
-        # 剧集集数统计
         total_eps = sum(len(p.split("#")) for p in play_url)
         remarks_final = vod_remarks or f"{total_eps}集"
         if vod_update:
