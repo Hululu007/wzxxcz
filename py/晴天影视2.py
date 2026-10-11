@@ -1,10 +1,11 @@
 # coding=utf-8
 """
-晴天影视 gsjsylgs.com | TVBox Python 爬虫 (最终版)
-- 彻底解决标题多出“详细介绍”4个字的Bug
-- 保留“更新”卡片过滤逻辑（未动）
-- 保留精准的简介提取逻辑（未动）
-- 保留元数据提取
+晴天影视 gsjsylgs.com | TVBox Python 爬虫 (纯净简介版)
+- 删除了简介里拼接的元数据（分类、地区等），只保留剧情正文
+- 简介开头加上指定的“小橙子”前缀
+- 保留：更新卡片过滤逻辑 (未动)
+- 保留：标题过滤“详细介绍” (未动)
+- 保留：正确的简介提取逻辑 (未动)
 """
 import re
 import sys
@@ -53,10 +54,11 @@ except ImportError:
 
     Spider = _BaseSpider
 
-
 HOST = "https://www.gsjsylgs.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
 _CLASSES_TID = [
     ("1",  "电影"),
@@ -123,7 +125,7 @@ _RE_META_DESC = re.compile(
 _RE_INTRO_BLOCK = re.compile(
     r'<h2[^>]*>\s*剧情简介\s*</h2>[\s\S]*?<p[^>]*?>([\s\S]*?)</p>', re.I)
 
-# 元数据正则
+# 元数据正则（保留正则，但不塞进简介里了）
 _RE_META_CLASS = re.compile(r'分类：([\s\S]*?)</span>', re.I)
 _RE_META_AREA = re.compile(r'地区：<a[^>]*>([^<]+)</a>', re.I)
 _RE_META_YEAR = re.compile(r'年份：<a[^>]*>([^<]+)</a>', re.I)
@@ -373,7 +375,7 @@ class Spider(Spider):
                 t = re.sub(r"^[^-|_]*[-|_]", "", t)
                 name = self._clean(t)
                 
-        # 【终极修复】无论来源如何，强制去掉“详细介绍”和“详细内容”四个字，并去掉年份括号
+        # 【保留】强制去掉“详细介绍”和“详细内容”四个字
         name = name.replace("详细介绍", "").replace("详细内容", "")
         name = re.sub(r"\s*\(\d{4}\)\s*$", "", name).strip() or vod_id
 
@@ -395,45 +397,31 @@ class Spider(Spider):
             if m:
                 content = self._clean(m.group(1))
 
-        # 4. 提取元数据 (新增)
+        # 【核心修改】直接在简介前面加上指定的前缀
+        if content:
+            content = INTRO_PREFIX + "\n" + content
+        else:
+            content = INTRO_PREFIX
+
+        # 4. 提取元数据 (保留字段给TVBox，但绝对不拼进简介里)
         actor = ""
         director = ""
         year = ""
         area = ""
         remarks = ""
-        v_class = ""
         try:
-            m = _RE_META_CLASS.search(html)
-            if m:
-                v_class = ",".join(re.findall(r'>([^<]+)<', m.group(1)))
             m = _RE_META_AREA.search(html)
-            if m:
-                area = m.group(1).strip()
+            if m: area = m.group(1).strip()
             m = _RE_META_YEAR.search(html)
-            if m:
-                year = m.group(1).strip()
+            if m: year = m.group(1).strip()
             m = _RE_META_DIRECTOR.search(html)
-            if m:
-                director = "".join(re.findall(r'>([^<]+)<', m.group(1))) or m.group(1).strip()
+            if m: director = "".join(re.findall(r'>([^<]+)<', m.group(1))) or m.group(1).strip()
             m = _RE_META_ACTOR.search(html)
-            if m:
-                actor = ",".join(re.findall(r'>([^<]+)<', m.group(1)))
+            if m: actor = ",".join(re.findall(r'>([^<]+)<', m.group(1)))
             m = _RE_META_REMARKS.search(html)
-            if m:
-                remarks = m.group(1).strip()
+            if m: remarks = m.group(1).strip()
         except Exception as e:
             self.log("  meta parse fail: %s" % e)
-
-        meta_lines = []
-        if v_class: meta_lines.append("分类：" + v_class)
-        if area: meta_lines.append("地区：" + area)
-        if year: meta_lines.append("年份：" + year)
-        if director: meta_lines.append("导演：" + director)
-        if actor: meta_lines.append("主演：" + actor)
-        if remarks: meta_lines.append("状态：" + remarks)
-        
-        if meta_lines:
-            content = "\n".join(meta_lines) + "\n\n" + content
 
         # 5. 剧集列表
         tabs = _RE_TAB.findall(html)
@@ -460,10 +448,10 @@ class Spider(Spider):
 
         return {"list": [{
             "vod_id":         vod_id,
-            "vod_name":       name,        # 已过滤“详细介绍”
+            "vod_name":       name,
             "vod_pic":        pic,
-            "vod_content":    content,
-            "vod_actor":      actor,
+            "vod_content":    content,     # 只有前缀 + 纯净简介
+            "vod_actor":      actor,       # TVBox 标准字段（若TVBox UI自带展示则展示，爬虫不拼进去）
             "vod_director":   director,
             "vod_year":       year,
             "vod_area":       area,
