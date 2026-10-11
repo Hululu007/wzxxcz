@@ -320,23 +320,33 @@ class Spider(Spider):
             re.search(r'<meta name="description" content="([^"]*)"', html, re.I)
         if m: content = self._clean(m.group(1))
 
+        # ★ 修复：按 HTML 出现顺序提取线路名称
         tabs = re.findall(r'<div class="module-tab-item tab-item[^"]*"[^>]*data-dropdown-value="([^"]+)"', html, re.I)
-        groups = {}
-        for m in re.finditer(r'href="(/vodplay/(\d+)-(\d+)-(\d+)\.html)"[^>]*?><span>([^<]+)</span>', html, re.I):
-            href, vid, sid, nid, ep = m.groups()
-            groups.setdefault(int(sid), []).append((self._clean(ep), self._fix_url(href)))
 
-        if not groups: return {"list": []}
+        # ★ 修复：按 HTML 出现顺序切分每个线路的剧集区块，与 tabs 严格 1:1 对应
+        panels = html.split('<div class="module-list sort-list tab-list his-tab-list" id="panel1">')[1:]
 
         play_from, play_url = [], []
-        for i, sid in enumerate(sorted(groups.keys())):
-            play_from.append(tabs[i] if i < len(tabs) else f"线路{sid}")
-            play_url.append("#".join(f"{n}${u}" for n, u in groups[sid]))
+        for i, panel in enumerate(panels):
+            eps = []
+            for m in re.finditer(r'href="(/vodplay/(\d+)-(\d+)-(\d+)\.html)"[^>]*?>\s*<span>([^<]+)</span>', panel, re.I):
+                href, vid, sid, nid, ep = m.groups()
+                # 按 nid 数字排序，保证 "第1集 / 第2集 / ... / 第19集" 顺序正确
+                eps.append((int(nid), self._clean(ep), self._fix_url(href)))
+            if not eps:
+                continue
+            eps.sort(key=lambda x: x[0])
+            alias = tabs[i] if i < len(tabs) else f"线路{i+1}"
+            play_from.append(alias)
+            play_url.append("#".join(f"{n}${u}" for _, n, u in eps))
+
+        if not play_from:
+            return {"list": []}
 
         return {"list": [{
             "vod_id": vod_id, "vod_name": name, "vod_pic": pic or DEFAULT_PIC,
             "vod_content": content, "vod_play_from": "$$$".join(play_from),
-            "vod_play_url": "$$$".join(play_url), "vod_remarks": f"{len(groups)}条线路"
+            "vod_play_url": "$$$".join(play_url), "vod_remarks": f"{len(play_from)}条线路"
         }]}
 
     def playerContent(self, flag, id, vipFlags):
