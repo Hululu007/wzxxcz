@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# ============ 饭搭子影视 源 (fdzys.com) 精准完美版 ============
+# ============ 饭搭子影视 源 (fdzys.com) 简介彻底修复版 ============
 import sys, re, json
 from urllib.parse import quote
 
@@ -200,20 +200,32 @@ class Spider(Spider):
             m = re.search(r'<img[^>]*?data-src="([^"]+)"', h)
             if m: d['vod_pic'] = self._abs(m.group(1))
         
-        # ★★★ 简介：直接锁定 wrapper_more_text 里的真实 div，彻底抛弃 SEO meta
+        # ★★★ 简介：精准提取 wrapper_more_text，绝对不抓 SEO meta ★★★
         content = ""
-        m = re.search(r'<div[^>]*class="[^"]*wrapper_more_text[^"]*"[^>]*>[\s\S]*?<div>([\s\S]*?)</div>', h, re.S)
+        m = re.search(r'<div[^>]*class="[^"]*wrapper_more_text[^"]*"[^>]*>([\s\S]*?)</div>\s*</div>', h, re.S)
         if m:
-            content = m.group(1)
-            content = re.sub(r'<br\s*/?>', '\n', content, flags=re.I)
-            content = re.sub(r'<[^>]+>', '', content)
-            content = content.replace('&nbsp;', ' ').replace('\u3000\u3000', '').replace('简介:', '').replace('简介：', '').strip()
-            content = re.sub(r'\n+', '\n', content)  # 清理多余空行
+            block = m.group(1)
+            # 移除 input 和 label 标签
+            block = re.sub(r'<(input|label)[^>]*>[\s\S]*?</\1>', '', block, flags=re.I)
+            block = re.sub(r'<(input|label)[^>]*>', '', block, flags=re.I)
+            # 换行处理
+            block = re.sub(r'<br\s*/?>', '\n', block, flags=re.I)
+            # 剥离所有 HTML 标签
+            block = re.sub(r'<[^>]+>', '', block)
+            # 清理 "简介:" 和全角空格
+            block = block.replace('简介:', '').replace('简介：', '').strip()
+            block = block.replace('　　', '').replace('\u3000\u3000', '')
+            # 清理多余空行
+            block = re.sub(r'\n+', '\n', block)
+            content = block.strip()
         else:
-            # 兜底方案：直接抓 intro 区域
-            m = re.search(r'<div[^>]*class="[^"]*intro[^"]*"[^>]*>([\s\S]*?)</div>\s*</div>', h, re.S)
+            # 兜底方案：只抓取 intro 区域的文本，坚决不用 meta description 兜底
+            m = re.search(r'<div[^>]*class="[^"]*intro[^"]*"[^>]*>([\s\S]*?)</div>\s*</div>\s*</div>', h, re.S)
             if m:
-                content = re.sub(r'<[^>]+>', '', m.group(1)).strip()
+                block = re.sub(r'<[^>]+>', '', m.group(1)).strip()
+                block = block.replace('简介:', '').replace('简介：', '').strip()
+                block = block.replace('　　', '').replace('\u3000\u3000', '')
+                content = block.strip()
 
         d['vod_content'] = content
         
