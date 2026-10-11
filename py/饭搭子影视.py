@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# ============ 饭搭子影视 源 (fdzys.com) 精准修复版 ============
+# ============ 饭搭子影视 源 (fdzys.com) 精准完美版 ============
 import sys, re, json
 from urllib.parse import quote
 
@@ -30,7 +30,7 @@ CATEGORIES = [
     {'type_id': 'duanju',  'type_name': '短剧'},
 ]
 
-# ★ 2. 筛选选项：彻底补全！保证用户有足够的选择
+# ★ 2. 筛选选项：最全补全
 FILTER_OPTIONS = {
     'movie': {
         'class': [('dongzuo','动作'),('xiju','喜剧'),('aiqing','爱情'),('kehuan','科幻'),('kongbu','恐怖'),('juqing','剧情'),('zhanzheng','战争'),('fanzui','犯罪'),('donghua','动画'),('xuanyi','悬疑'),('jilu','纪录'),('guzhuang','古装')],
@@ -157,6 +157,7 @@ class Spider(Spider):
     def homeVideoContent(self):
         return {'list': self._items(self._get(self.base))}
 
+    # ========== ★ 彻底修复分类拼接（解决筛选没补全/不生效） ==========
     def categoryContent(self, tid, pg=1, filter=False, extend=''):
         try: pn = max(int(str(pg)), 1)
         except: pn = 1
@@ -164,15 +165,20 @@ class Spider(Spider):
         
         main_cat = str(tid).split('/')[0]
         
-        # ★ 动态拼接规则完全对齐真实 URL：/movie/dongzuo-dalu-guoyu-2026/hot
-        segments = [ex.get('class') or 'all']
+        # 动态拼接 URL
+        segments = []
+        if ex.get('class') and ex['class'] != 'all': segments.append(ex['class'])
         if ex.get('area'): segments.append(ex['area'])
         if ex.get('lang'): segments.append(ex['lang'])
         if ex.get('year') and main_cat in FILTER_TYPES: segments.append(ex['year'])
         
-        filter_path = '-'.join(segments)
-        sort_suffix = '/' + ex['sort'] if ex.get('sort') else ''
-        url = '%s/%s/%s%s' % (self.base, main_cat, filter_path, sort_suffix)
+        if not segments:
+            url = '%s/%s' % (self.base, main_cat)
+        else:
+            filter_path = '-'.join(segments)
+            sort_suffix = '/' + ex['sort'] if ex.get('sort') else ''
+            url = '%s/%s/%s%s' % (self.base, main_cat, filter_path, sort_suffix)
+            
         if pn > 1: url += '?page=%d' % pn
 
         h = self._get(url)
@@ -180,50 +186,56 @@ class Spider(Spider):
         items = self._items(h)
         return {'page': pn, 'pagecount': self._pagecount(h, pn), 'limit': 24, 'total': len(items), 'list': items}
 
-    # ========== ★ 彻底修复简介 ==========
+    # ========== ★ 彻底修复简介（根据真实HTML结构） ==========
     def detailContent(self, ids, quick='1'):
         vid = str(ids[0] if isinstance(ids, list) else ids or '')
         h = self._get(self._abs(vid))
         if not h: return {'list': []}
         
-        d = {'vod_id': vid, 'vod_name': '', 'vod_pic': '', 'vod_actor': '', 'vod_content': '', 'vod_remarks': '', 'vod_play_from': '', 'vod_play_url': ''}
+        d = {'vod_id': vid, 'vod_name': '', 'vod_pic': '', 'vod_actor': '', 'vod_director': '', 'vod_content': '', 'vod_remarks': '', 'vod_play_from': '', 'vod_play_url': ''}
         
+        # 标题
         m = re.search(r'<h1[^>]*>([\s\S]*?)</h1>', h)
         if m: d['vod_name'] = re.sub(r'<[^>]+>', '', m.group(1)).strip()
         
+        # 封面
         m = re.search(r'<meta[^>]+property="og:image"[^>]+content="([^"]+)"', h, re.I)
         if m: d['vod_pic'] = self._abs(m.group(1).strip())
         if not d['vod_pic']:
             m = re.search(r'<img[^>]*?data-src="([^"]+)"', h)
             if m: d['vod_pic'] = self._abs(m.group(1))
         
-        # ★ 简介修复：严格只抓取 info-intro，彻底抛弃 meta description（SEO 文本）
-        content = ""
-        m = re.search(r'<div[^>]*class="[^"]*info-intro[^"]*"[^>]*>([\s\S]*?)</div>', h)
+        # ★★★ 简介修复：根据图3的源码结构，直接抓取整个 vod-content 区块 ★★★
+        m = re.search(r'<div[^>]*class="[^"]*vod-content[^"]*"[^>]*>([\s\S]*?)<div[^>]*class="[^"]*other-box', h, re.S)
         if m:
-            raw_intro = m.group(1)
-            # 移除“简介：”字样
-            raw_intro = re.sub(r'简介[:：]?', '', raw_intro)
-            # 保留换行，移除所有 HTML 标签
-            raw_intro = re.sub(r'<br\s*/?>', '\n', raw_intro, flags=re.I)
-            raw_intro = re.sub(r'</p>', '\n', raw_intro, flags=re.I)
-            raw_intro = re.sub(r'<[^>]+>', '', raw_intro)
-            content = raw_intro.strip()
-            
-        if not content:
-            # 实在抓不到才用 meta description 兜底
+            block = m.group(1)
+            # 把 <br> 替换成换行
+            block = re.sub(r'<br\s*/?>', '\n', block, flags=re.I)
+            # 剔除所有 HTML 标签
+            block = re.sub(r'<[^>]+>', '', block)
+            # 清理掉前面的 "简介:" 字样和多余空格/全角空格
+            block = block.replace('简介:', '').replace('简介：', '').strip()
+            block = re.sub(r'^[\s　]+', '', block)
+            block = re.sub(r'\n+', '\n', block)  # 清理多余空行
+            d['vod_content'] = block.strip()
+        else:
+            # 兜底方案：实在找不到，尝试抓取 meta description 作为备用
             m = re.search(r'<meta[^>]+name="description"[^>]+content="([^"]*)"', h)
-            if m: content = m.group(1).strip()
-            
-        d['vod_content'] = content
+            if m: d['vod_content'] = m.group(1).strip()
         
-        m = re.search(r'<div class="info-roles">主演：([^<]+)</div>', h)
+        # 导演（根据图1的源码精准提取）
+        m = re.search(r'导演[:：]?\s*</div>\s*([^<]+)', h)
+        if m: d['vod_director'] = m.group(1).strip()
+        
+        # 演员（根据图1的源码精准提取）
+        m = re.search(r'主演[:：]?\s*</div>\s*([^<]+)', h)
         if m: d['vod_actor'] = m.group(1).strip()
         
+        # 状态
         m = re.search(r'<div class="tag[^>]*>([^<]+)</div>', h)
         if m: d['vod_remarks'] = m.group(1).strip()
 
-        # 线路与选集
+        # 线路与选集（保留你原版逻辑）
         routes = {}
         for sid, seg in re.findall(r'<li class="swiper-slide player_name[^"]*" data-sid="(\d+)">([\s\S]*?)</li>', h):
             name_match = re.search(r'<a[^>]*>([^<]+)<span', seg)
