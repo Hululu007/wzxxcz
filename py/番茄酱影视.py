@@ -154,29 +154,33 @@ for c in CLASSES:
 
 
 # ===================== 正则（按真实 HTML 写） =====================
-# 真实卡片结构（从搜索页截图确认）：
-# <div class="public-list-box ...">
-#   <div class="public-list-exp ...">
-#     <img data-src="封面URL" alt="剧名封面图">
-#   </div>
-#   <div class="thumb-content">
-#     <a href="/index.php/vod/detail/id/XXXX.html">剧名</a>
-#   </div>
+# 真实卡片 HTML（从你发的 View Source 抄）：
+#
+# <a target="_self" class="public-list-exp" href="/index.php/vod/detail/id/63352.html" title="蒸蒸日上">
+#   <img class="lazy lazy1 gen-movie-img mask-1" ... alt="蒸蒸日上封面图"
+#        data-src="https://vod.xiguazyimg.com/upload/vod/20261010-1/64a643647d9bc9855342d5612f2c485d.jpg" />
+#   ...
+# </a>
+# <div class="public-list-button">
+#   <a target="_self" class="time-title hide ft4" href="..." title="蒸蒸日上">蒸蒸日上</a>
+#   ...
 # </div>
+#
+# 关键：
+#   1. 锚点是 <a class="public-list-exp" href="detail/..." title="剧名">
+#   2. title 属性直接是剧名
+#   3. <a> 内部 <img data-src="海报URL"> 是封面
 _RE_CARD = re.compile(
-    r'<div[^>]+class="[^"]*public-list-box[^"]*"[^>]*>'          # 卡片外层 div
-    r'[\s\S]{0,1000}?'
-    r'<img[^>]+data-src="([^"]+)"[^>]*>'                          # ① 封面
+    r'<a[^>]+class="[^"]*public-list-exp[^"]*"'               # 锚点 a
+    r'[^>]*?href="(/index\.php/vod/detail/id/\d+\.html)"'    # 详情链接
+    r'[^>]*?title="([^"]*)"'                                 # 剧名（title属性）
+    r'[^>]*>'                                                # a 标签结束
     r'[\s\S]{0,600}?'
-    r'<a[^>]+href="(/index\.php/vod/detail/id/\d+\.html)"[^>]*>'  # ② 详情链接
-    r'([\s\S]*?)'                                                 # ③ 剧名
-    r'</a>',
+    r'<img[^>]+data-src="([^"]+)"',                          # 海报图
     re.S | re.I)
 
-# 兜底：只找 detail 链接
-_RE_DETAIL_HREF = re.compile(
-    r'href="(/index\.php/vod/detail/id/\d+\.html)"', re.I)
 
+# 详情页正则（不变）
 _RE_TITLE_H1 = re.compile(
     r'<h1[^>]*class="[^"]*slide-info-title[^"]*"[^>]*>([\s\S]*?)</h1>', re.I)
 _RE_TITLE_TAG = re.compile(r'<title>([\s\S]*?)</title>', re.I)
@@ -308,22 +312,23 @@ class Spider(Spider):
         matches = _RE_CARD.findall(html)
         self.log("  卡片匹配: %d 条" % len(matches))
 
-        for pic, href, name_html in matches:
+        # 真实正则返回顺序: href, name(title), pic
+        for href, name, pic in matches:
             if href in seen:
                 continue
             seen.add(href)
-            name = self._clean(name_html)[:100] or href
             videos.append({
                 "vod_id":      href,
-                "vod_name":    name,
+                "vod_name":    self._clean(name)[:100] or href,
                 "vod_pic":     self._fix_url(pic) or DEFAULT_PIC,
                 "vod_remarks": "",
             })
 
-        # 兜底：只抓 detail 链接（但这样名字会是 id，只在主正则失败时用）
+        # 兜底：只抓 detail 链接（名字会变成 id，仅应急）
         if not videos:
-            self.log("  ⚠️ 主正则失败, 走兜底(名字会变成 id)")
-            hrefs = _RE_DETAIL_HREF.findall(html)
+            self.log("  ⚠️ 主正则失败, 走兜底")
+            hrefs = re.findall(
+                r'href="(/index\.php/vod/detail/id/\d+\.html)"', html, re.I)
             for href in hrefs:
                 if href in seen:
                     continue
@@ -334,7 +339,6 @@ class Spider(Spider):
                     "vod_pic":     DEFAULT_PIC,
                     "vod_remarks": "",
                 })
-
         return videos
 
     def _page_count(self, html):
@@ -378,7 +382,6 @@ class Spider(Spider):
         area = extend.get("area") or ""
         year = extend.get("year") or ""
 
-        # /index.php/vod/show/[area/地区/]id/分类/[page/页码/][year/年份/].html
         parts = ["/index.php/vod/show"]
         if area:
             parts.append("/area/%s" % urllib.parse.quote(area, safe=""))
