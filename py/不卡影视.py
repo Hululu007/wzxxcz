@@ -467,6 +467,12 @@ class Spider(Spider):
             elif k == "备注":
                 remarks = val
 
+        # 语言合并到地区，保证 TVBox 显示
+        if lang and area:
+            area = "%s · %s" % (area, lang)
+        elif lang and not area:
+            area = lang
+
         # 简介（加前缀）
         content = ""
         m = _RE_SHORT_DESC.search(html)
