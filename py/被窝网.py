@@ -5,14 +5,16 @@ MacCMS V10 + 如意播放器 (ruyi)
 关键:
   - 列表卡片 div.grid-carditem, 图片取 img.lazyload[data-original]
   - 详情页只拿元数据, 集数列表需在播放页 /wa/{id}-{line}-{n}/ 抓
-  - 播放: player_aaaa.url -> cdn.ryplay11.com/share/xxx -> var main = "/xxx.m3u8?sign=xxx"
-  - 播放 header 的 Referer 必须是 share 页地址 (同源, ts 分片也用它)
+  - 播放: player_aaaa.url -> {如意CDN}/share/xxx -> var main = "/xxx.m3u8?sign=xxx"
+  - 如意 CDN 域名不固定 (cdn.ryplay11.com / svip.ryiplay18.com 等), 从 share_url 动态取
+  - 播放 header 的 Referer 必须是完整 share 页地址
 """
 import re
 import sys
 import json
 import time
 import urllib.parse
+from urllib.parse import urlparse
 
 sys.path.append('..')
 
@@ -60,7 +62,6 @@ HOST = "https://www.beiwowang.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 DEFAULT_PIC = HOST + "/template/default/images/logo.png"
-RY_HOST = "https://cdn.ryplay11.com"
 
 # ===== 分类 =====
 CLASSES = [
@@ -514,8 +515,8 @@ class Spider(Spider):
 
         real = self._resolve_m3u8(share_url)
         if real:
-            # 关键: m3u8 与 ts 都同源于 cdn.ryplay11.com,
-            # 浏览器请求时 Referer 是 share 页地址, 必须带上否则 403
+            # 关键: m3u8 与 ts 都同源于如意 CDN 域名,
+            # 浏览器请求时 Referer 是完整 share 页地址, 必须带上否则 403
             res = {
                 "parse": 0,
                 "playUrl": "",
@@ -556,13 +557,16 @@ class Spider(Spider):
 
     def _resolve_m3u8(self, share_url):
         """
-        请求 cdn.ryplay11.com/share/xxx
-        抓 var main = "/xxx/index.m3u8?sign=xxx"
-        拼成 https://cdn.ryplay11.com + main
+        动态处理如意多 CDN 域名 (cdn.ryplay11.com / svip.ryiplay18.com 等)
+        请求 share 页, 抓 var main = "/xxx/index.m3u8?sign=xxx"
+        从 share_url 自动提取域名拼接
         """
+        pu = urlparse(share_url)
+        base_ry = "%s://%s" % (pu.scheme, pu.netloc)
+
         html = self._fetch(share_url, headers={
             "User-Agent": UA,
-            "Referer": RY_HOST + "/",
+            "Referer": base_ry + "/",
             "Accept": "text/html,application/xhtml+xml,*/*",
         })
         if not html:
@@ -576,8 +580,8 @@ class Spider(Spider):
         if main_path.startswith("http"):
             return main_path
         if main_path.startswith("/"):
-            return RY_HOST + main_path
-        return RY_HOST + "/" + main_path
+            return base_ry + main_path
+        return base_ry + "/" + main_path
 
     # ---------- 其他 ----------
     def localProxy(self, param):
