@@ -3,7 +3,7 @@
 不卡影视 bukayingshi.com | TVBox Python 爬虫（修正版）
 网站结构：
   - 分类 /buka/{1-5}.html，翻页 /buka/{type}-{page}.html
-  - 筛选 /vodshow/{type}-{area}-{lang}-{class}-{year}-{sort}-{page}.html
+  - 筛选 /vodshow/{type}-{area}-{sort}-{class}-{lang}-{page}-{year}.html
   - 搜索 /vodsearch/{kw}----------{page}---.html
   - 详情 /ying/{id}.html，剧集按 data-source 分块 -> /shi/{id}-{sid}-{nid}.html
   - 播放 player_aaaa.url 是 share 页；请求 share 页提取 var main 的 m3u8，
@@ -61,6 +61,7 @@ HOST = "https://www.bukayingshi.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 DEFAULT_PIC = HOST + "/static/images/logo.jpg"
+INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
 CLASSES = [
     {"type_id": "1", "type_name": "电影"},
@@ -344,23 +345,26 @@ class Spider(Spider):
         lang = _v("lang")
         cls = _v("class")
         year = _v("year")
-        sort = _v("sort") or "time"
+        sort = _v("sort") or ""
 
-        if area or lang or cls or year or (extend.get("sort") not in ("", None)):
+        # 真实 vodshow 结构（从页面筛选链接反推）：
+        # /vodshow/{type}-{area}-{sort}-{class}-{lang}-{page}-{year}.html
+        has_filter = bool(area or lang or cls or year or sort)
+
+        if has_filter:
             seg = [
                 tid,
                 urllib.parse.quote(area) if area else "",
-                urllib.parse.quote(lang) if lang else "",
+                sort or "",
                 urllib.parse.quote(cls) if cls else "",
+                urllib.parse.quote(lang) if lang else "",
+                str(page) if page > 1 else "",
                 year or "",
-                sort or "time",
             ]
             path = "-".join(seg)
-            if page > 1:
-                url = "%s/vodshow/%s-%d.html" % (self.site_url, path, page)
-            else:
-                url = "%s/vodshow/%s.html" % (self.site_url, path)
+            url = "%s/vodshow/%s.html" % (self.site_url, path)
         else:
+            # 无筛选走 buka 列表
             if page > 1:
                 url = "%s/buka/%s-%d.html" % (self.site_url, tid, page)
             else:
@@ -458,7 +462,7 @@ class Spider(Spider):
             elif k == "备注":
                 remarks = val
 
-        # 简介
+        # 简介（加前缀）
         content = ""
         m = _RE_SHORT_DESC.search(html)
         if m:
@@ -467,6 +471,7 @@ class Spider(Spider):
             m = re.search(r'name="description"\s+content="([^"]*)"', html)
             if m:
                 content = self._clean(m.group(1))
+        content = (INTRO_PREFIX + "\n" + content) if content else INTRO_PREFIX
 
         # 线路名：source -> name
         line_names = {}
