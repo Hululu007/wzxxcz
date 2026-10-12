@@ -167,8 +167,7 @@ _RE_ATTR_HREF = re.compile(r'href="(/index\.php/vod/detail/id/\d+\.html)"', re.I
 _RE_ATTR_TITLE = re.compile(r'title="([^"]*)"', re.I)
 _RE_BOX_PIC = re.compile(r'<img\b[^>]*?data-src="([^"]+)"', re.S | re.I)
 
-# ⚠️ 新增：抓卡片右下角的"更新至第06集"副标题
-# 真实: <span class="public-list-prb hide ft2">更新至第06集</span>
+# 卡片右下角的"更新至第06集"副标题
 _RE_BOX_PRB = re.compile(
     r'<span\b[^>]*class="[^"]*\bpublic-list-prb\b[^"]*"[^>]*>([\s\S]*?)</span>',
     re.S | re.I)
@@ -190,8 +189,6 @@ _RE_REMARKS = re.compile(
     r'<strong[^>]*class="r6"[^>]*>备注\s*[:：]\s*</strong>([^<]*)',
     re.S | re.I)
 
-# ⚠️ 新增：抓"更新 :"时间
-# 真实: <div class="slide-info hide"><strong class="r6">更新 :</strong>2026-10-11 05:00:57</div>
 _RE_UPDATE = re.compile(
     r'<strong[^>]*class="r6"[^>]*>更新\s*[:：]\s*</strong>([^<]*)',
     re.S | re.I)
@@ -340,7 +337,7 @@ class Spider(Spider):
             pic_m = _RE_BOX_PIC.search(box)
             pic = self._fix_url(pic_m.group(1)) if pic_m else DEFAULT_PIC
 
-            # ⚠️ 新增：抓卡片右下角的"更新至第06集"副标题
+            # 卡片右下角的"更新至第06集"副标题
             remarks = ""
             prb_m = _RE_BOX_PRB.search(box)
             if prb_m:
@@ -482,7 +479,7 @@ class Spider(Spider):
         if m:
             pic = self._fix_url(m.group(1))
 
-        # 简介
+        # 简介（只放简介，不放更新时间）
         content = ""
         m = _RE_INTRO.search(html)
         if m:
@@ -495,11 +492,19 @@ class Spider(Spider):
         if m:
             remarks = self._clean(m.group(1))
 
-        # ⚠️ 新增：更新时间
+        # 更新时间
         update_time = ""
         m = _RE_UPDATE.search(html)
         if m:
             update_time = self._clean(m.group(1))
+
+        # ⚠️ 修复：更新时间拼到 vod_remarks（和网站一致：备注 + 更新）
+        # 例如："已完结 · 更新：2026-10-11 05:00:57"
+        if update_time:
+            if remarks:
+                remarks = "%s · 更新：%s" % (remarks, update_time)
+            else:
+                remarks = "更新：%s" % update_time
 
         # 导演（过滤空项）
         director = ""
@@ -564,11 +569,6 @@ class Spider(Spider):
 
         if not play_from:
             return {"list": []}
-
-        # ⚠️ 新增：把"更新时间"拼到 content 末尾（TVBox 副标题只有一行，
-        #    vod_remarks 给"备注"用更合适）
-        if update_time:
-            content = content + "\n\n更新：" + update_time
 
         return {"list": [{
             "vod_id":       vod_id,
