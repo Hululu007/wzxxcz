@@ -167,6 +167,12 @@ _RE_ATTR_HREF = re.compile(r'href="(/index\.php/vod/detail/id/\d+\.html)"', re.I
 _RE_ATTR_TITLE = re.compile(r'title="([^"]*)"', re.I)
 _RE_BOX_PIC = re.compile(r'<img\b[^>]*?data-src="([^"]+)"', re.S | re.I)
 
+# ⚠️ 新增：抓卡片右下角的"更新至第06集"副标题
+# 真实: <span class="public-list-prb hide ft2">更新至第06集</span>
+_RE_BOX_PRB = re.compile(
+    r'<span\b[^>]*class="[^"]*\bpublic-list-prb\b[^"]*"[^>]*>([\s\S]*?)</span>',
+    re.S | re.I)
+
 
 # ===================== 详情页正则 =====================
 _RE_TITLE_H1 = re.compile(
@@ -182,6 +188,12 @@ _RE_INTRO = re.compile(
 _RE_REMARKS = re.compile(
     r'<div[^>]*class="slide-info hide"[^>]*>\s*'
     r'<strong[^>]*class="r6"[^>]*>备注\s*[:：]\s*</strong>([^<]*)',
+    re.S | re.I)
+
+# ⚠️ 新增：抓"更新 :"时间
+# 真实: <div class="slide-info hide"><strong class="r6">更新 :</strong>2026-10-11 05:00:57</div>
+_RE_UPDATE = re.compile(
+    r'<strong[^>]*class="r6"[^>]*>更新\s*[:：]\s*</strong>([^<]*)',
     re.S | re.I)
 
 _RE_DIRECTOR = re.compile(
@@ -205,7 +217,6 @@ _RE_EP_A = re.compile(
 
 _RE_PAGECOUNT = re.compile(r'当前\s*\d+\s*/\s*(\d+)\s*页')
 
-# 删掉 badge 标签及其内容（线路名后面的数字角标）
 _RE_BADGE = re.compile(
     r'<span\b[^>]*class="[^"]*\bbadge\b[^"]*"[^>]*>[\s\S]*?</span>',
     re.S | re.I)
@@ -329,11 +340,17 @@ class Spider(Spider):
             pic_m = _RE_BOX_PIC.search(box)
             pic = self._fix_url(pic_m.group(1)) if pic_m else DEFAULT_PIC
 
+            # ⚠️ 新增：抓卡片右下角的"更新至第06集"副标题
+            remarks = ""
+            prb_m = _RE_BOX_PRB.search(box)
+            if prb_m:
+                remarks = self._clean(prb_m.group(1))
+
             videos.append({
                 "vod_id":      href,
                 "vod_name":    name[:100] or href,
                 "vod_pic":     pic or DEFAULT_PIC,
-                "vod_remarks": "",
+                "vod_remarks": remarks,
             })
 
         if not videos:
@@ -478,6 +495,12 @@ class Spider(Spider):
         if m:
             remarks = self._clean(m.group(1))
 
+        # ⚠️ 新增：更新时间
+        update_time = ""
+        m = _RE_UPDATE.search(html)
+        if m:
+            update_time = self._clean(m.group(1))
+
         # 导演（过滤空项）
         director = ""
         m = _RE_DIRECTOR.search(html)
@@ -508,9 +531,6 @@ class Spider(Spider):
                 if not eps:
                     continue
 
-                # ⚠️ 修复：先删掉 <span class="badge">18</span>，再清理
-                # 真实: <a data-form="xiguam3u8" ...>&nbsp;超清2<span class="badge">18</span></a>
-                # 删 badge 后: ...&nbsp;超清2  → _clean → "超清2" ✅
                 btn_no_badge = _RE_BADGE.sub('', btn_html)
                 line_name = self._clean(btn_no_badge).strip()
                 if not line_name:
@@ -544,6 +564,11 @@ class Spider(Spider):
 
         if not play_from:
             return {"list": []}
+
+        # ⚠️ 新增：把"更新时间"拼到 content 末尾（TVBox 副标题只有一行，
+        #    vod_remarks 给"备注"用更合适）
+        if update_time:
+            content = content + "\n\n更新：" + update_time
 
         return {"list": [{
             "vod_id":       vod_id,
