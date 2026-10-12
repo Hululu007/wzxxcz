@@ -62,13 +62,13 @@ DEFAULT_PIC = HOST + "/static/ds3/img/cover-empty.webp"
 
 INTRO_PREFIX = "🍅番茄酱影视提醒您：请勿相信视频中的广告，谨防上当受骗！"
 
-# ⚠️ type_id 用数字（TVBox 标准）
+# ⚠️ 关键：type_id 用字符串，和 FILTERS 的 key 保持一致
 CLASSES = [
-    {"type_id": 1,  "type_name": "电影"},
-    {"type_id": 2,  "type_name": "电视剧"},
-    {"type_id": 3,  "type_name": "综艺"},
-    {"type_id": 4,  "type_name": "动漫"},
-    {"type_id": 46, "type_name": "体育"},
+    {"type_id": "1",  "type_name": "电影"},
+    {"type_id": "2",  "type_name": "电视剧"},
+    {"type_id": "3",  "type_name": "综艺"},
+    {"type_id": "4",  "type_name": "动漫"},
+    {"type_id": "46", "type_name": "体育"},
 ]
 
 _SUB_CLASS = {
@@ -117,7 +117,6 @@ _SUB_CLASS = {
     ],
 }
 
-# 地区筛选
 _AREAS = [
     {"n": "全部",   "v": ""},
     {"n": "大陆",   "v": "大陆"},
@@ -138,17 +137,16 @@ _AREAS = [
     {"n": "其它",   "v": "其它"},
 ]
 
-# 年份（"XX年前" 直接给编码后的值，避免二次编码）
 _YEARS = [{"n": "全部", "v": ""}] + \
          [{"n": str(y), "v": str(y)} for y in range(2026, 2019, -1)] + \
          [{"n": "2020年前", "v": "2020%E5%B9%B4%E5%89%8D"},
           {"n": "2010年前", "v": "2010%E5%B9%B4%E5%89%8D"},
           {"n": "2000年前", "v": "2000%E5%B9%B4%E5%89%8D"}]
 
-# ⚠️ FILTERS 的 key 必须是字符串
+# ⚠️ FILTERS 的 key 和 CLASSES.type_id 类型完全一致（都是字符串）
 FILTERS = {}
 for c in CLASSES:
-    tid = str(c["type_id"])
+    tid = c["type_id"]
     FILTERS[tid] = [
         {"key": "class", "name": "分类",
          "value": _SUB_CLASS.get(tid, [{"n": "全部", "v": ""}])},
@@ -278,7 +276,6 @@ class Spider(Spider):
         return s.strip()
 
     def _extract_json_var(self, html, var_name):
-        """从 html 里提取 `var xxx = {...}` 的 JSON 对象（用 raw_decode 处理嵌套）"""
         idx = html.find(var_name)
         if idx < 0:
             return None
@@ -357,7 +354,6 @@ class Spider(Spider):
         area = extend.get("area") or ""
         year = extend.get("year") or ""
 
-        # /index.php/vod/show/[area/XXX/]id/YYY/[page/N/][year/YYYY/].html
         parts = ["/index.php/vod/show"]
         if area:
             parts.append("/area/%s" % urllib.parse.quote(area, safe=""))
@@ -365,7 +361,6 @@ class Spider(Spider):
         if page > 1:
             parts.append("/page/%d" % page)
         if year:
-            # year 可能是已编码的（XX年前），也可能是纯数字
             parts.append("/year/%s" % year)
         url = self.site_url + "".join(parts) + ".html"
 
@@ -453,7 +448,6 @@ class Spider(Spider):
         if m:
             remarks = self._clean(m.group(1))
 
-        # ===== 线路 & 剧集 =====
         line_btns = _RE_LINE_BTN.findall(html)
         ep_uls = _RE_EP_UL.findall(html)
         self.log("  线路按钮: %d, 剧集ul: %d" % (len(line_btns), len(ep_uls)))
@@ -501,7 +495,6 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # ---------------- 播放 (A+B 方案) ----------------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -519,7 +512,6 @@ class Spider(Spider):
             self._play_cache[play_page] = (now, res)
             return res
 
-        # ---- A: player_aaaa ----
         pa = self._extract_json_var(html, "var player_aaaa")
         if pa:
             url = (pa.get("url") or "").strip()
@@ -556,7 +548,6 @@ class Spider(Spider):
 
             self.log("  player_aaaa 非直链, 继续找 fqPreheat")
 
-        # ---- A: fqPreheat ----
         ph = self._extract_json_var(html, "var fqPreheat")
         if ph:
             for ln in ph.get("lines", []):
@@ -575,7 +566,6 @@ class Spider(Spider):
                     return res
             self.log("  fqPreheat 里也无直链")
 
-        # ---- B: 兜底交给 TVBox 嗅探 ----
         self.log("  => 无直链, 交给 TVBox 嗅探 (parse=1)")
         res = {
             "parse": 1, "playUrl": "", "url": play_page,
@@ -588,7 +578,7 @@ class Spider(Spider):
         return res
 
     def localProxy(self, param):
-        return [200, "image/jpeg", b"", ""]
+        return [200, "image/jpeg", b"", b""]
 
     def isVideoFormat(self, url):
         return ".m3u8" in url or ".mp4" in url
