@@ -3,7 +3,7 @@
 不卡影视 bukayingshi.com | TVBox Python 爬虫（修正版）
 网站结构：
   - 分类 /buka/{1-5}.html，翻页 /buka/{type}-{page}.html
-  - 筛选 /vodshow/{type}-{area}-{sort}-{class}-{lang}-{page}-{year}.html
+  - 筛选 /vodshow/{type}-{area}-{sort}-{class}-{lang}---{page}---{year}.html
   - 搜索 /vodsearch/{kw}----------{page}---.html
   - 详情 /ying/{id}.html，剧集按 data-source 分块 -> /shi/{id}-{sid}-{nid}.html
   - 播放 player_aaaa.url 是 share 页；请求 share 页提取 var main 的 m3u8，
@@ -347,18 +347,23 @@ class Spider(Spider):
         year = _v("year")
         sort = _v("sort") or ""
 
-        # 真实 vodshow 结构（从页面筛选链接反推）：
-        # /vodshow/{type}-{area}-{sort}-{class}-{lang}-{page}-{year}.html
         has_filter = bool(area or lang or cls or year or sort)
 
         if has_filter:
+            # 真实 12 段顺序：
+            # type - area - sort - class - lang - 空 - 空 - 空 - page - 空 - 空 - year
             seg = [
                 tid,
                 urllib.parse.quote(area) if area else "",
                 sort or "",
                 urllib.parse.quote(cls) if cls else "",
                 urllib.parse.quote(lang) if lang else "",
+                "",
+                "",
+                "",
                 str(page) if page > 1 else "",
+                "",
+                "",
                 year or "",
             ]
             path = "-".join(seg)
