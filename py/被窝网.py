@@ -1,16 +1,12 @@
 # coding=utf-8
 """
-被窝网 beiwowang.com | TVBox Python 爬虫
+被窝网 beiwowang.com | TVBox Python 爬虫 (localProxy 版)
 MacCMS V10 + 如意播放器 (ruyi)
-关键:
-  - 列表卡片 div.grid-carditem, 图片取 img.lazyload[data-original]
-  - 详情页只拿元数据, 集数列表需在播放页 /wa/{id}-{line}-{n}/ 抓
-  - 播放: player_aaaa.url -> {如意CDN}/share/xxx -> var main = "/xxx.m3u8?sign=xxx"
-  - 如意 CDN 域名不固定 (cdn.ryplay11.com / svip.ryiplay18.com 等), 从 share_url 动态取
-  - var main 里的 \/ 必须还原成 /, 否则 CDN 会 403
-  - master m3u8 内是 #EXT-X-STREAM-INF + 子 m3u8 相对路径,
-    在 Python 侧拼好子 m3u8 绝对 URL (含 ?sign=) 再返回
-  - 播放 header 的 Referer 用如意 CDN 的域名根 (参照豆花可用写法)
+
+核心思路:
+  - 用 webhtv/FongMi 的本地代理 /proxy?do=py 中转 m3u8 和 ts 请求
+  - 爬虫侧强制给所有 CDN 请求加 Referer, 绕开播放器 header 传递问题
+  - m3u8 内容里的 ts 路径会在 localProxy 里被改写成再走一次代理
 """
 import re
 import sys
@@ -146,7 +142,7 @@ _RE_DETAIL_AREA = re.compile(
 _RE_DETAIL_REMARK = re.compile(
     r'<span[^>]*class="[^"]*(?:remarks|note|state)[^"]*"[^>]*>([\s\S]*?)</span>', re.I)
 
-# 播放页: player_aaaa 结尾可能是 ";" 或 "</script>", 都要兼容
+# 播放页
 _RE_PLAYER_AAAA = re.compile(
     r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*(?:;|</script>|$)', re.I)
 _RE_EP_A = re.compile(
@@ -155,6 +151,31 @@ _RE_EP_TITLE = re.compile(r'title="([^"]*)"', re.I)
 
 # 中转页
 _RE_MAIN = re.compile(r'var\s+main\s*=\s*"([^"]+)"', re.I)
+
+
+# ============================================================
+# 本地代理工具
+# ============================================================
+
+def _proxy_base_url():
+    """拿 webhtv 的本地代理基地址 (http://127.0.0.1:<port>/proxy)"""
+    try:
+        from com.github.catvod import Proxy
+        return Proxy.getUrl(True)
+    except Exception:
+        # 兜底: 端口 9978
+        return "http://127.0.0.1:9978/proxy"
+
+
+def _build_proxy_url(real_url, referer):
+    """把真实 URL 包装成本地代理 URL"""
+    base = _proxy_base_url()
+    qs = urllib.parse.urlencode({
+        "do": "py",
+        "url": real_url,
+        "referer": referer,
+    })
+    return base + "?" + qs
 
 
 class Spider(Spider):
@@ -177,6 +198,7 @@ class Spider(Spider):
         }
         self.default_pic = DEFAULT_PIC
         self._play_cache = {}
+        self._referer_cache = {}   # 记录 url -> referer, 供 localProxy 使用
         self.log("init: site=%s" % self.site_url)
 
     # ---------- 基础 ----------
@@ -195,6 +217,23 @@ class Spider(Spider):
         except Exception as e:
             self.log("fetch FAIL %s -> %s" % (url, e))
             return ""
+
+    def _fetch_raw(self, url, timeout=20, headers=None):
+        """返回 (status_code, content_type, content_bytes)"""
+        try:
+            h = dict(self.headers)
+            if headers:
+                h.update(headers)
+            rsp = self.fetch(url, headers=h, timeout=timeout)
+            content = rsp.content if hasattr(rsp, "content") else b""
+            ctype = "application/octet-stream"
+            if hasattr(rsp, "headers"):
+                ctype = rsp.headers.get("Content-Type", ctype) or ctype
+            status = getattr(rsp, "status_code", 200)
+            return status, ctype, content
+        except Exception as e:
+            self.log("fetch_raw FAIL %s -> %s" % (url, e))
+            return 500, "text/plain", ("error: %s" % e).encode("utf-8")
 
     def _fix_url(self, url):
         if not url:
@@ -513,21 +552,22 @@ class Spider(Spider):
 
         real = self._resolve_m3u8(share_url)
         if real:
-            # 参照豆花可用写法: Referer 用如意 CDN 的域名根, 不用完整 share 页
-            pu = urlparse(share_url)
-            ry_root = "%s://%s/" % (pu.scheme, pu.netloc)
+            # 关键: 走本地代理, Referer 在爬虫侧强制加
+            proxy_url = _build_proxy_url(real, share_url)
+            self._referer_cache[real] = share_url
             res = {
                 "parse": 0,
                 "playUrl": "",
-                "url": real,
+                "url": proxy_url,
                 "header": {
                     "User-Agent": UA,
-                    "Referer": ry_root,
+                    # 给本地代理请求本身带一个 UA, Referer 不重要
+                    "Referer": self.site_url + "/",
                 },
             }
             self._play_cache[play_page] = (now, res)
-            self.log("  => m3u8: %s" % real[:160])
-            self.log("  => Referer: %s" % ry_root)
+            self.log("  => proxy_url: %s" % proxy_url[:200])
+            self.log("  => 真实 m3u8: %s" % real[:160])
             return res
 
         res = {"parse": 1, "playUrl": "", "url": play_page,
@@ -612,32 +652,93 @@ class Spider(Spider):
         self.log("  master 里无 #EXT-X-STREAM-INF, 返回 master")
         return master_url
 
-    # ---------- 其他 ----------
+    # ---------- localProxy: m3u8 和 ts 都从这里走 ----------
     def localProxy(self, param):
+        """
+        webhtv 会把 /proxy?do=py&url=xxx&referer=yyy 的 query 变成 dict 传进来.
+        返回值格式: [status, ctype, content, headers]
+        """
         try:
-            url = ""
-            if isinstance(param, dict):
-                url = param.get("url", "")
-            else:
-                for pair in str(param).split("&"):
-                    if "=" in pair:
-                        k, v = pair.split("=", 1)
-                        if k == "url":
-                            url = v
-            if not url:
-                return [200, "image/jpeg", b"", ""]
-            url = urllib.parse.unquote(url) if "%" in url else url
-            url = self._fix_url(url)
-            rsp = self.fetch(url, headers={
-                "User-Agent": UA, "Referer": self.site_url + "/"}, timeout=15)
-            content = rsp.content
-            ctype = rsp.headers.get("Content-Type", "image/jpeg")
-            if not ctype.startswith("image/"):
-                ctype = "image/jpeg"
-            return [200, ctype, content, ""]
-        except Exception:
-            return [200, "image/jpeg", b"", ""]
+            if isinstance(param, str):
+                try:
+                    param = json.loads(param)
+                except Exception:
+                    param = {}
+            if not isinstance(param, dict):
+                return [400, "text/plain", b"bad param", None]
 
+            url = param.get("url", "") or ""
+            referer = param.get("referer", "") or ""
+
+            if not url:
+                return [400, "text/plain", b"no url", None]
+
+            # 关键: 带 Referer 请求真实地址
+            h = {
+                "User-Agent": UA,
+                "Accept": "*/*",
+            }
+            if referer:
+                h["Referer"] = referer
+
+            status, ctype, content = self._fetch_raw(url, timeout=20, headers=h)
+
+            # 如果是 m3u8 (text 或 mpegurl), 改写里面的 ts 路径
+            ctype_l = (ctype or "").lower()
+            is_m3u8 = (
+                url.lower().endswith(".m3u8")
+                or "mpegurl" in ctype_l
+                or content[:7] == b"#EXTM3U"
+            )
+
+            if is_m3u8 and content:
+                try:
+                    text = content.decode("utf-8", "ignore")
+                    new_text = self._rewrite_m3u8(text, url, referer)
+                    content = new_text.encode("utf-8")
+                    ctype = "application/vnd.apple.mpegurl"
+                except Exception as e:
+                    self.log("rewrite m3u8 fail: %s" % e)
+
+            return [status, ctype, content, None]
+        except Exception as e:
+            self.log("localProxy error: %s" % e)
+            return [500, "text/plain", ("error: %s" % e).encode("utf-8"), None]
+
+    def _rewrite_m3u8(self, text, base_url, referer):
+        """
+        把 m3u8 里的 ts 分片路径改写成再走一次本地代理.
+        - 分片行: 不以 # 开头, 且是 ts / 路径
+        - 不改写子 m3u8 的 #EXT-X-STREAM-INF 下一行 (让播放器自己请求; 也可以改写)
+        这里把分片全部改写到本地代理.
+        """
+        lines = text.split("\n")
+        out = []
+        for ln in lines:
+            s = ln.strip()
+            if not s:
+                out.append(ln)
+                continue
+            # 注释行不改
+            if s.startswith("#"):
+                out.append(ln)
+                continue
+            # 分片行: 可能是 .ts 或 .m4s 或 .mp4 或子 m3u8
+            if (".ts" in s or ".m4s" in s or ".mp4" in s
+                    or s.endswith(".m3u8") or s.startswith("http")):
+                # 拼出绝对地址
+                if s.startswith("http"):
+                    full = s
+                else:
+                    full = urllib.parse.urljoin(base_url, s)
+                # 改写成再走代理
+                new_url = _build_proxy_url(full, referer)
+                out.append(new_url)
+            else:
+                out.append(ln)
+        return "\n".join(out)
+
+    # ---------- 其他 ----------
     def isVideoFormat(self, url):
         return ".m3u8" in url or ".mp4" in url or url.startswith("http")
 
