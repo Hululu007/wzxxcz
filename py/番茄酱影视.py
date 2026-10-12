@@ -58,16 +58,17 @@ except ImportError:
 HOST = "https://fanqe.cc"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-DEFAULT_PIC = HOST + "/static/ds3/img/navlogo.png?v=1"
+DEFAULT_PIC = HOST + "/static/ds3/img/cover-empty.webp"
 
-INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
+INTRO_PREFIX = "🍅番茄酱影视提醒您：请勿相信视频中的广告，谨防上当受骗！"
 
+# ⚠️ type_id 用数字（TVBox 标准）
 CLASSES = [
-    {"type_id": "1",  "type_name": "电影"},
-    {"type_id": "2",  "type_name": "电视剧"},
-    {"type_id": "3",  "type_name": "综艺"},
-    {"type_id": "4",  "type_name": "动漫"},
-    {"type_id": "46", "type_name": "体育"},
+    {"type_id": 1,  "type_name": "电影"},
+    {"type_id": 2,  "type_name": "电视剧"},
+    {"type_id": 3,  "type_name": "综艺"},
+    {"type_id": 4,  "type_name": "动漫"},
+    {"type_id": 46, "type_name": "体育"},
 ]
 
 _SUB_CLASS = {
@@ -111,9 +112,10 @@ _SUB_CLASS = {
 _YEARS = [{"n": "全部", "v": ""}] + \
          [{"n": str(y), "v": str(y)} for y in range(2026, 2009, -1)]
 
+# ⚠️ FILTERS 的 key 用字符串
 FILTERS = {}
 for c in CLASSES:
-    tid = c["type_id"]
+    tid = str(c["type_id"])
     FILTERS[tid] = [
         {"key": "class", "name": "分类",
          "value": _SUB_CLASS.get(tid, [{"n": "全部", "v": ""}])},
@@ -169,14 +171,9 @@ _RE_EP_A = re.compile(
     r'<a[^>]+href="(/index\.php/vod/play/id/\d+/sid/\d+/nid/\d+\.html)"[^>]*>'
     r'([\s\S]*?)</a>', re.S | re.I)
 
-_RE_PLAYER = re.compile(
-    r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>', re.S)
-_RE_PREHEAT = re.compile(
-    r'var\s+fqPreheat\s*=\s*(\{[\s\S]*?\})\s*;', re.S)
-
 _RE_PAGECOUNT = re.compile(r'当前(\d+)/(\d+)页')
 
-# 判断是不是直链 m3u8
+
 def _is_direct_m3u8(u):
     if not u or not isinstance(u, str):
         return False
@@ -246,6 +243,21 @@ class Spider(Spider):
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
 
+    # ⚠️ 用 raw_decode 提取嵌套 JSON
+    def _extract_json_var(self, html, var_name):
+        idx = html.find(var_name)
+        if idx < 0:
+            return None
+        start = html.find("{", idx)
+        if start < 0:
+            return None
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(html[start:])
+            return obj
+        except Exception as e:
+            self.log("  %s JSON 解析失败: %s" % (var_name, e))
+            return None
+
     def _extract_videos(self, html):
         videos = []
         seen = set()
@@ -287,7 +299,10 @@ class Spider(Spider):
                 pass
         return 1
 
+    # ⚠️ 加日志
     def homeContent(self, filter=False):
+        self.log("homeContent called, classes=%d, filters=%d"
+                 % (len(CLASSES), len(FILTERS)))
         return {"class": CLASSES, "filters": FILTERS}
 
     def homeVideoContent(self):
@@ -315,7 +330,9 @@ class Spider(Spider):
             parts.append("/year/%s" % year)
         url = self.site_url + "".join(parts) + ".html"
 
-        self.log("category: %s" % url)
+        self.log("category: tid=%s real_tid=%s page=%d year=%s"
+                 % (tid, real_tid, page, year))
+        self.log("  url: %s" % url)
         html = self._fetch(url)
         self.log("  HTML 长度: %d" % len(html))
 
@@ -330,8 +347,10 @@ class Spider(Spider):
 
     def searchContent(self, key, quick, pg="1"):
         page = int(pg) if pg else 1
-        url = "%s/index.php/vod/search.html?wd=%s&page=%d" % (
-            self.site_url, urllib.parse.quote(key), page)
+        url = "%s/index.php/vod/search.html?wd=%s" % (
+            self.site_url, urllib.parse.quote(key))
+        if page > 1:
+            url += "&page=%d" % page
         self.log("search: %s" % url)
         html = self._fetch(url)
         videos = self._extract_videos(html)
@@ -395,7 +414,6 @@ class Spider(Spider):
         if m:
             remarks = self._clean(m.group(1))
 
-        # ===== 线路 & 剧集 =====
         line_btns = _RE_LINE_BTN.findall(html)
         ep_uls = _RE_EP_UL.findall(html)
         self.log("  线路按钮: %d, 剧集ul: %d" % (len(line_btns), len(ep_uls)))
@@ -443,7 +461,6 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # ---------------- 播放 (A+B 方案) ----------------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -461,37 +478,52 @@ class Spider(Spider):
             self._play_cache[play_page] = (now, res)
             return res
 
-        # ---- A: player_aaaa ----
-        m = _RE_PLAYER.search(html)
-        if m:
-            try:
-                pa = json.loads(m.group(1))
-                url = (pa.get("url") or "").strip()
-                from_ = pa.get("from", "")
-                encrypt = pa.get("encrypt", 0)
-                self.log("  player_aaaa: from=%s encrypt=%s url=%s"
-                         % (from_, encrypt, url[:120]))
+        # ---- A: player_aaaa（用 raw_decode 解析嵌套 JSON）----
+        pa = self._extract_json_var(html, "var player_aaaa")
+        if pa:
+            url = (pa.get("url") or "").strip()
+            from_ = pa.get("from", "")
+            encrypt = pa.get("encrypt", 0)
+            self.log("  player_aaaa: from=%s encrypt=%s url=%s"
+                     % (from_, encrypt, url[:120]))
 
-                # encrypt=2 → 先 base64 解
-                if encrypt == 2:
-                    try:
-                        import base64
-                        url = base64.b64decode(url).decode("utf-8", "ignore")
-                        url = urllib.parse.unquote(url)
-                        self.log("    base64 解后: %s" % url[:120])
-                    except Exception as e:
-                        self.log("    base64 解失败: %s" % e)
-
-                # encrypt=1 → unescape
-                if encrypt == 1:
+            if encrypt == 2:
+                try:
+                    import base64
+                    url = base64.b64decode(url).decode("utf-8", "ignore")
                     url = urllib.parse.unquote(url)
-                    self.log("    unescape 后: %s" % url[:120])
+                    self.log("    base64 解后: %s" % url[:120])
+                except Exception as e:
+                    self.log("    base64 解失败: %s" % e)
 
-                # 判断直链 m3u8
-                if _is_direct_m3u8(url):
-                    self.log("  => 直链 m3u8 (parse=0)")
+            if encrypt == 1:
+                url = urllib.parse.unquote(url)
+                self.log("    unescape 后: %s" % url[:120])
+
+            if _is_direct_m3u8(url):
+                self.log("  => 直链 m3u8 (parse=0)")
+                res = {
+                    "parse": 0, "playUrl": "", "url": url,
+                    "header": {
+                        "User-Agent": UA,
+                        "Referer": self.site_url + "/",
+                        "Origin":  self.site_url,
+                    },
+                }
+                self._play_cache[play_page] = (now, res)
+                return res
+
+            self.log("  player_aaaa 非直链, 继续找 fqPreheat")
+
+        # ---- A: fqPreheat（用 raw_decode 解析嵌套 JSON）----
+        ph = self._extract_json_var(html, "var fqPreheat")
+        if ph:
+            for ln in ph.get("lines", []):
+                u = (ln.get("url") or "").strip()
+                if _is_direct_m3u8(u):
+                    self.log("  fqPreheat 直链: %s" % u[:120])
                     res = {
-                        "parse": 0, "playUrl": "", "url": url,
+                        "parse": 0, "playUrl": "", "url": u,
                         "header": {
                             "User-Agent": UA,
                             "Referer": self.site_url + "/",
@@ -500,34 +532,7 @@ class Spider(Spider):
                     }
                     self._play_cache[play_page] = (now, res)
                     return res
-
-                # 非直链 → 记录, 继续往下看 fqPreheat
-                self.log("  player_aaaa 非直链, 继续找 fqPreheat")
-            except Exception as e:
-                self.log("  player_aaaa 解析失败: %s" % e)
-
-        # ---- A: fqPreheat.lines 找直链 ----
-        m = _RE_PREHEAT.search(html)
-        if m:
-            try:
-                ph = json.loads(m.group(1))
-                for ln in ph.get("lines", []):
-                    u = (ln.get("url") or "").strip()
-                    if _is_direct_m3u8(u):
-                        self.log("  fqPreheat 直链: %s" % u[:120])
-                        res = {
-                            "parse": 0, "playUrl": "", "url": u,
-                            "header": {
-                                "User-Agent": UA,
-                                "Referer": self.site_url + "/",
-                                "Origin":  self.site_url,
-                            },
-                        }
-                        self._play_cache[play_page] = (now, res)
-                        return res
-                self.log("  fqPreheat 里也无直链")
-            except Exception as e:
-                self.log("  fqPreheat 解析失败: %s" % e)
+            self.log("  fqPreheat 里也无直链")
 
         # ---- B: 兜底交给 TVBox 嗅探 ----
         self.log("  => 无直链, 交给 TVBox 嗅探 (parse=1)")
