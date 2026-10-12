@@ -5,7 +5,7 @@
   - 分类 /buka/{1-5}.html，翻页 /buka/{type}-{page}.html
   - 筛选 /vodshow/{type}-{area}-{lang}-{class}-{year}-{sort}-{page}.html
   - 搜索 /vodsearch/{kw}----------{page}---.html
-  - 详情 /ying/{id}.html，剧集 a.episode-item -> /shi/{id}-{sid}-{nid}.html
+  - 详情 /ying/{id}.html，剧集按 data-source 分块 -> /shi/{id}-{sid}-{nid}.html
   - 播放 player_aaaa.url 是 share 页；请求 share 页提取 var main 的 m3u8，
     拼上 share 页 origin，直出
 """
@@ -118,6 +118,7 @@ for c in CLASSES:
 
 
 # ============ 正则（按真实源码修正） ============
+
 # 卡片：a 标签 href=/ying/xx.html，class 里含 video-item，img 有 src + alt
 _RE_VIDEO_ITEM = re.compile(
     r'<a\s+href="(/ying/\d+\.html)"[^>]*class="[^"]*video-item[^"]*"[^>]*>'
@@ -145,9 +146,11 @@ _RE_H1 = re.compile(
 _RE_DETAIL_PIC = re.compile(r'<img\s+alt="[^"]*"\s+src="([^"]+)"', re.I)
 _RE_A_TAG = re.compile(r'<a[^>]*>([^<]*)</a>', re.I)
 
-# 元信息：每个 video_appraise_row 是一块
-_RE_ROW_BLOCK = re.compile(
-    r'<div class="video_appraise_row"[^>]*>([\s\S]*?)</div>\s*</div>\s*</div>',
+# 元信息：逐个 video_appraise_row 块（用下一个 row 或分界符作为终点）
+_RE_ROW_ONE = re.compile(
+    r'<div class="video_appraise_row"[^>]*>'
+    r'([\s\S]*?)'
+    r'(?=<div class="video_appraise_row"|<div class="el-divider|</div>\s*</div>\s*<div class="mx-10)',
     re.S | re.I)
 _RE_ROW_TITLE = re.compile(
     r'video_appraise_title font-bold"[^>]*>([^<]*)</span>', re.I)
@@ -156,21 +159,28 @@ _RE_ROW_TITLE = re.compile(
 _RE_SHORT_DESC = re.compile(
     r'<span class="video-description-short">([\s\S]*?)</span>', re.I)
 
-# 剧集：class 可能含多个 class，data-episode-name 在 a 标签上
-_RE_EPISODE = re.compile(
-    r'<a[^>]*href="(/shi/\d+-\d+-\d+\.html)"[^>]*class="[^"]*episode-item[^"]*"([^>]*)>',
-    re.S | re.I)
-_RE_EP_NAME_ATTR = re.compile(r'data-episode-name="([^"]*)"', re.I)
-# 播放页的剧集列表（不带 class episode-item，用 detail_list_item）
-_RE_EPISODE_PLAY = re.compile(
-    r'<a[^>]*href="(/shi/\d+-\d+-\d+\.html)"[^>]*class="[^"]*episode-item[^"]*"[^>]*>'
-    r'[\s\S]*?<div[^>]*class="[^"]*detail_list_item[^"]*"[^>]*>([^<]*)</div>',
+# 线路名：detail_line_ite 块，data-source -> 名字
+_RE_LINE_BLOCK = re.compile(
+    r'<div[^>]*class="[^"]*detail_line_ite[^"]*"[^>]*data-source="(\d+)"[^>]*>'
+    r'[\s\S]*?<div[^>]*class="[^"]*bg-\[#(?:a3d5dc|e3e8e8)\][^"]*"[^>]*>([^<]*)</div>',
     re.S | re.I)
 
-# 线路
-_RE_LINE_ITEM = re.compile(
-    r'<div[^>]*class="[^"]*detail_line_ite[^"]*"[^>]*data-source="(\d+)"'
-    r'[^>]*>[\s\S]*?<div[^>]*>([^<]*)</div>',
+# 剧集块：每个线路一个 video_play_channel_list
+_RE_CHANNEL_BLOCK = re.compile(
+    r'<div[^>]*class="[^"]*video_play_channel_list[^"]*"[^>]*data-source="(\d+)"[^>]*>'
+    r'([\s\S]*?)</div>\s*(?=<div[^>]*class="[^"]*video_play_channel_list|</div>\s*<div class="recommend_video)',
+    re.S | re.I)
+
+# 剧集：某块内的 episode-item
+_RE_EPISODE_IN_BLOCK = re.compile(
+    r'<a[^>]*href="(/shi/\d+-\d+-\d+\.html)"[^>]*class="[^"]*episode-item[^"]*"'
+    r'([^>]*)>',
+    re.S | re.I)
+_RE_EP_NAME_ATTR = re.compile(r'data-episode-name="([^"]*)"', re.I)
+
+# 兜底：直接全局扫 episode-item（当分块失败时）
+_RE_EPISODE = re.compile(
+    r'<a[^>]*href="(/shi/\d+-\d+-\d+\.html)"[^>]*class="[^"]*episode-item[^"]*"([^>]*)>',
     re.S | re.I)
 
 # player_aaaa：以 </script> 为边界
@@ -420,9 +430,9 @@ class Spider(Spider):
         if m:
             pic = self._fix_url(m.group(1))
 
-        # 元信息：逐个 video_appraise_row 解析
+        # 元信息：逐个 row 解析
         director = actor = area = lang = year = remarks = ""
-        for mm in _RE_ROW_BLOCK.finditer(html):
+        for mm in _RE_ROW_ONE.finditer(html):
             block = mm.group(1)
             mt = _RE_ROW_TITLE.search(block)
             if not mt:
@@ -432,20 +442,20 @@ class Spider(Spider):
             if links:
                 val = ", ".join(self._clean(x) for x in links if self._clean(x))
             else:
-                # 去掉 title 那段后的纯文本
                 rest = block[mt.end():]
                 val = self._clean(rest)
-            if "导演" in key:
+            k = key.replace(":", "").replace("：", "").strip()
+            if k == "导演":
                 director = val
-            elif "演员" in key or "主演" in key:
+            elif k in ("演员", "主演"):
                 actor = val
-            elif "地区" in key:
+            elif k == "地区":
                 area = val
-            elif "语言" in key:
+            elif k == "语言":
                 lang = val
-            elif "年份" in key:
+            elif k == "年份":
                 year = val
-            elif "备注" in key:
+            elif k == "备注":
                 remarks = val
 
         # 简介
@@ -458,38 +468,62 @@ class Spider(Spider):
             if m:
                 content = self._clean(m.group(1))
 
-        # 剧集：详情页
-        eps = []
-        for m in _RE_EPISODE.finditer(html):
-            href = m.group(1)
-            attrs = m.group(2) or ""
-            ep_name = ""
-            mn = _RE_EP_NAME_ATTR.search(attrs)
-            if mn:
-                ep_name = self._clean(mn.group(1))
-            if not ep_name:
-                ep_name = "第%02d集" % (len(eps) + 1)
-            eps.append((ep_name, self._fix_url(href)))
+        # 线路名：source -> name
+        line_names = {}
+        for m in _RE_LINE_BLOCK.finditer(html):
+            src = m.group(1)
+            nm = self._clean(m.group(2))
+            if nm:
+                line_names[src] = nm
 
-        # 如果详情页没解析到，试试播放页的剧集结构
-        if not eps:
-            for m in _RE_EPISODE_PLAY.finditer(html):
-                href = m.group(1)
-                ep_name = self._clean(m.group(2)) or ("第%02d集" % (len(eps) + 1))
+        # 剧集：按线路分块
+        channels = []  # [(source, name, [(ep_name, href), ...])]
+        for m in _RE_CHANNEL_BLOCK.finditer(html):
+            src = m.group(1)
+            block = m.group(2)
+            eps = []
+            for mm in _RE_EPISODE_IN_BLOCK.finditer(block):
+                href = mm.group(1)
+                attrs = mm.group(2) or ""
+                ep_name = ""
+                mn = _RE_EP_NAME_ATTR.search(attrs)
+                if mn:
+                    ep_name = self._clean(mn.group(1))
+                if not ep_name:
+                    ep_name = "第%02d集" % (len(eps) + 1)
                 eps.append((ep_name, self._fix_url(href)))
+            if eps:
+                channels.append((src, line_names.get(src, "线路%s" % src), eps))
 
-        self.log("eps count: %d" % len(eps))
-        if not eps:
+        # 兜底：如果分块失败，用旧的全局正则
+        if not channels:
+            eps = []
+            for m in _RE_EPISODE.finditer(html):
+                href = m.group(1)
+                attrs = m.group(2) or ""
+                ep_name = ""
+                mn = _RE_EP_NAME_ATTR.search(attrs)
+                if mn:
+                    ep_name = self._clean(mn.group(1))
+                if not ep_name:
+                    ep_name = "第%02d集" % (len(eps) + 1)
+                eps.append((ep_name, self._fix_url(href)))
+            if eps:
+                channels.append(("1", "buka", eps))
+
+        self.log("channels: %s" % [(s, n, len(e)) for s, n, e in channels])
+
+        if not channels:
             return {"list": []}
 
-        # 线路名
-        line_name = "buka"
-        ml = _RE_LINE_ITEM.search(html)
-        if ml:
-            line_name = self._clean(ml.group(2)) or "buka"
+        # 排序
+        channels.sort(key=lambda x: int(x[0]) if x[0].isdigit() else 999)
 
-        play_from = line_name
-        play_url = "#".join("%s$%s" % (n, h) for n, h in eps)
+        play_from = "$$$".join(nm for _, nm, _ in channels)
+        play_url = "$$$".join(
+            "#".join("%s$%s" % (n, h) for n, h in eps)
+            for _, _, eps in channels
+        )
 
         return {"list": [{
             "vod_id": vod_id,
