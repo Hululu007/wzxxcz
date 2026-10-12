@@ -62,7 +62,6 @@ DEFAULT_PIC = HOST + "/static/ds3/img/cover-empty.webp"
 
 INTRO_PREFIX = "🍅番茄酱影视提醒您：请勿相信视频中的广告，谨防上当受骗！"
 
-# ⚠️ type_id 用字符串（TVBox 通用，且和 FILTERS 的 key 一致）
 CLASSES = [
     {"type_id": "1",  "type_name": "电影"},
     {"type_id": "2",  "type_name": "电视剧"},
@@ -71,7 +70,6 @@ CLASSES = [
     {"type_id": "46", "type_name": "体育"},
 ]
 
-# 从网站真实 HTML 抄的，一个不多一个不少
 _SUB_CLASS = {
     "1": [
         {"n": "全部",   "v": ""},
@@ -118,7 +116,6 @@ _SUB_CLASS = {
     ],
 }
 
-# 地区：v 是 URL 编码前的原文（拼接时再 quote）
 _AREAS = [
     {"n": "全部",   "v": ""},
     {"n": "大陆",   "v": "大陆"},
@@ -139,14 +136,12 @@ _AREAS = [
     {"n": "其它",   "v": "其它"},
 ]
 
-# 年份：v 是网站 URL 里的真实值（"XX年前" 是编码后的）
 _YEARS = [{"n": "全部", "v": ""}] + \
          [{"n": str(y), "v": str(y)} for y in range(2026, 2019, -1)] + \
          [{"n": "2020年前", "v": "2020%E5%B9%B4%E5%89%8D"},
           {"n": "2010年前", "v": "2010%E5%B9%B4%E5%89%8D"},
           {"n": "2000年前", "v": "2000%E5%B9%B4%E5%89%8D"}]
 
-# FILTERS：key 用 "class"（我内部用），"area"、"year" 都和 URL 参数名一致
 FILTERS = {}
 for c in CLASSES:
     tid = c["type_id"]
@@ -159,57 +154,60 @@ for c in CLASSES:
 
 
 # ===================== 正则（按真实 HTML 写） =====================
-# 列表卡片：<a href="/index.php/vod/detail/id/XXXX.html"> ... <img data-src="..." alt="XXX">
+# 真实卡片结构（从搜索页截图确认）：
+# <div class="public-list-box ...">
+#   <div class="public-list-exp ...">
+#     <img data-src="封面URL" alt="剧名封面图">
+#   </div>
+#   <div class="thumb-content">
+#     <a href="/index.php/vod/detail/id/XXXX.html">剧名</a>
+#   </div>
+# </div>
 _RE_CARD = re.compile(
-    r'<a[^>]+href="(/index\.php/vod/detail/id/\d+\.html)"[^>]*>'
-    r'[\s\S]{0,800}?'
-    r'<img[^>]+data-src="([^"]+)"[^>]*alt="([^"]*)"',
+    r'<div[^>]+class="[^"]*public-list-box[^"]*"[^>]*>'          # 卡片外层 div
+    r'[\s\S]{0,1000}?'
+    r'<img[^>]+data-src="([^"]+)"[^>]*>'                          # ① 封面
+    r'[\s\S]{0,600}?'
+    r'<a[^>]+href="(/index\.php/vod/detail/id/\d+\.html)"[^>]*>'  # ② 详情链接
+    r'([\s\S]*?)'                                                 # ③ 剧名
+    r'</a>',
     re.S | re.I)
 
 # 兜底：只找 detail 链接
 _RE_DETAIL_HREF = re.compile(
     r'href="(/index\.php/vod/detail/id/\d+\.html)"', re.I)
 
-# 详情页标题
 _RE_TITLE_H1 = re.compile(
     r'<h1[^>]*class="[^"]*slide-info-title[^"]*"[^>]*>([\s\S]*?)</h1>', re.I)
 _RE_TITLE_TAG = re.compile(r'<title>([\s\S]*?)</title>', re.I)
 
-# 详情页封面（class 里含 detail-pic 的 img）
 _RE_PIC = re.compile(
     r'<img[^>]+class="[^"]*detail-pic[^"]*"[^>]+data-src="([^"]+)"', re.I)
 
-# 详情页简介：<div id="height_limit" class="text cor3">
 _RE_INTRO = re.compile(
     r'<div[^>]+id="height_limit"[^>]*>([\s\S]*?)</div>', re.S | re.I)
 
-# 详情页导演/主演：<strong class="r6">导演：</strong>
 _RE_DIRECTOR = re.compile(
     r'<strong[^>]*class="r6"[^>]*>导演：</strong>([\s\S]*?)</div>', re.S | re.I)
 _RE_ACTOR = re.compile(
     r'<strong[^>]*class="r6"[^>]*>主演：</strong>([\s\S]*?)</div>', re.S | re.I)
 
-# 详情页备注：<span class="slide-info-remarks">
 _RE_REMARKS = re.compile(
     r'<span[^>]*class="[^"]*slide-info-remarks[^"]*"[^>]*>([\s\S]*?)</span>',
     re.S | re.I)
 
-# 详情页线路按钮：<a data-form="xxx" class="vod-playerUrl ...">
 _RE_LINE_BTN = re.compile(
     r'<a\s+data-form="([^"]+)"[^>]*class="[^"]*vod-playerUrl[^"]*"[^>]*>'
     r'([\s\S]*?)</a>', re.S | re.I)
 
-# 详情页剧集 ul：<ul class="anthology-list-play ...">
 _RE_EP_UL = re.compile(
     r'<ul\s+class="[^"]*anthology-list-play[^"]*"[^>]*>([\s\S]*?)</ul>',
     re.S | re.I)
 
-# 剧集 a：<a class="hide cor4" href="/index.php/vod/play/id/.../sid/.../nid/....html"><span>第01集</span></a>
 _RE_EP_A = re.compile(
     r'<a[^>]+href="(/index\.php/vod/play/id/\d+/sid/\d+/nid/\d+\.html)"[^>]*>'
     r'([\s\S]*?)</a>', re.S | re.I)
 
-# 分页："当前2/15页"
 _RE_PAGECOUNT = re.compile(r'当前\s*\d+\s*/\s*(\d+)\s*页')
 
 
@@ -249,7 +247,6 @@ class Spider(Spider):
             if headers:
                 h.update(headers)
             rsp = self.fetch(url, headers=h, timeout=timeout)
-            # TVBox 的 fetch 返回 Response；也有版本直接返回 str
             if hasattr(rsp, "text"):
                 return rsp.text or ""
             if hasattr(rsp, "content"):
@@ -289,7 +286,6 @@ class Spider(Spider):
         return s.strip()
 
     def _extract_json_var(self, html, var_name):
-        """从 html 里提取 `var xxx = {...}` 的 JSON（用 raw_decode 处理嵌套）"""
         idx = html.find(var_name)
         if idx < 0:
             return None
@@ -312,22 +308,21 @@ class Spider(Spider):
         matches = _RE_CARD.findall(html)
         self.log("  卡片匹配: %d 条" % len(matches))
 
-        for href, pic, alt in matches:
+        for pic, href, name_html in matches:
             if href in seen:
                 continue
             seen.add(href)
-            # alt 形如 "老舅封面图"，去掉末尾"封面图"
-            name = self._clean(alt)
-            name = re.sub(r'(封面图|海报图|剧照图)$', '', name).strip()
+            name = self._clean(name_html)[:100] or href
             videos.append({
                 "vod_id":      href,
-                "vod_name":    name[:100] or href,
+                "vod_name":    name,
                 "vod_pic":     self._fix_url(pic) or DEFAULT_PIC,
                 "vod_remarks": "",
             })
 
-        # 兜底：只抓 detail 链接
+        # 兜底：只抓 detail 链接（但这样名字会是 id，只在主正则失败时用）
         if not videos:
+            self.log("  ⚠️ 主正则失败, 走兜底(名字会变成 id)")
             hrefs = _RE_DETAIL_HREF.findall(html)
             for href in hrefs:
                 if href in seen:
@@ -339,7 +334,6 @@ class Spider(Spider):
                     "vod_pic":     DEFAULT_PIC,
                     "vod_remarks": "",
                 })
-            self.log("  兜底链接: %d 条" % len(videos))
 
         return videos
 
@@ -352,7 +346,6 @@ class Spider(Spider):
                 return int(m.group(1))
             except Exception:
                 pass
-        # 兜底：找最大 page
         pages = re.findall(r'/page/(\d+)\.html', html)
         if pages:
             try:
@@ -361,7 +354,6 @@ class Spider(Spider):
                 pass
         return 1
 
-    # -------- 首页分类 tab --------
     def homeContent(self, filter=False):
         self.log("homeContent called, classes=%d, filters=%d"
                  % (len(CLASSES), len(FILTERS)))
@@ -372,7 +364,6 @@ class Spider(Spider):
         self.log("home HTML 长度: %d" % len(html))
         return {"list": self._extract_videos(html)}
 
-    # -------- 分类页 --------
     def categoryContent(self, tid, pg, filter, extend):
         page = int(pg) if pg else 1
         if isinstance(extend, str):
@@ -383,12 +374,10 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        # extend 里 "class" 是子分类 id，为空则用主分类 tid
         real_id = str(extend.get("class") or tid)
         area = extend.get("area") or ""
         year = extend.get("year") or ""
 
-        # 按网站真实 URL 顺序拼：
         # /index.php/vod/show/[area/地区/]id/分类/[page/页码/][year/年份/].html
         parts = ["/index.php/vod/show"]
         if area:
@@ -415,7 +404,6 @@ class Spider(Spider):
             "limit": 24, "total": pagecount * 24,
         }
 
-    # -------- 搜索 --------
     def searchContent(self, key, quick, pg="1"):
         page = int(pg) if pg else 1
         url = "%s/index.php/vod/search.html?wd=%s" % (
@@ -434,7 +422,6 @@ class Spider(Spider):
     def searchContentPage(self, key, quick, pg="1"):
         return self.searchContent(key, quick, pg)
 
-    # -------- 详情页 --------
     def detailContent(self, ids):
         if not ids:
             return {"list": []}
@@ -447,7 +434,6 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # 标题
         name = ""
         m = _RE_TITLE_H1.search(html)
         if m:
@@ -458,20 +444,17 @@ class Spider(Spider):
                 name = self._clean(m.group(1).split("-")[0].split("_")[0])
         name = name or vod_id
 
-        # 封面
         pic = DEFAULT_PIC
         m = _RE_PIC.search(html)
         if m:
             pic = self._fix_url(m.group(1))
 
-        # 简介
         content = ""
         m = _RE_INTRO.search(html)
         if m:
             content = self._clean(m.group(1))
         content = (INTRO_PREFIX + "\n" + content) if content else INTRO_PREFIX
 
-        # 导演 / 主演
         director = ""
         m = _RE_DIRECTOR.search(html)
         if m:
@@ -481,21 +464,18 @@ class Spider(Spider):
         if m:
             actor = re.sub(r"\s*,\s*", ", ", self._clean(m.group(1)))
 
-        # 备注
         remarks = ""
         m = _RE_REMARKS.search(html)
         if m:
             remarks = self._clean(m.group(1))
 
-        # ===== 线路 & 剧集 =====
-        line_btns = _RE_LINE_BTN.findall(html)      # [(data_form, btn_html), ...]
-        ep_uls = _RE_EP_UL.findall(html)            # [ul_html, ...]
+        line_btns = _RE_LINE_BTN.findall(html)
+        ep_uls = _RE_EP_UL.findall(html)
         self.log("  线路按钮: %d, 剧集ul: %d" % (len(line_btns), len(ep_uls)))
 
         play_from = []
         play_url = []
 
-        # 网站真实：线路按钮顺序 = 剧集 ul 顺序（截图 2 确认）
         if line_btns and ep_uls and len(line_btns) == len(ep_uls):
             for (data_form, btn_html), ul_html in zip(line_btns, ep_uls):
                 eps = _RE_EP_A.findall(ul_html)
@@ -509,7 +489,6 @@ class Spider(Spider):
                                self._fix_url(href))
                     for i, (href, ep_name) in enumerate(eps)))
         else:
-            # 兜底：按 sid 分组
             self.log("  线路/剧集数量不匹配, 按 sid 兜底分组")
             groups = {}
             for href, ep_html in _RE_EP_A.findall(html):
@@ -538,7 +517,6 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # -------- 播放页 --------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -556,7 +534,6 @@ class Spider(Spider):
             self._play_cache[play_page] = (now, res)
             return res
 
-        # ---- player_aaaa ----
         pa = self._extract_json_var(html, "var player_aaaa")
         if pa:
             url = (pa.get("url") or "").strip()
@@ -593,7 +570,6 @@ class Spider(Spider):
 
             self.log("  player_aaaa 非直链, 继续找 fqPreheat")
 
-        # ---- fqPreheat ----
         ph = self._extract_json_var(html, "var fqPreheat")
         if ph:
             for ln in ph.get("lines", []):
@@ -612,7 +588,6 @@ class Spider(Spider):
                     return res
             self.log("  fqPreheat 里也无直链")
 
-        # ---- 兜底：交给 TVBox 嗅探 ----
         self.log("  => 无直链, 交给 TVBox 嗅探 (parse=1)")
         res = {
             "parse": 1, "playUrl": "", "url": play_page,
