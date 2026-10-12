@@ -60,7 +60,7 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 DEFAULT_PIC = HOST + "/static/ds3/img/cover-empty.webp"
 
-INTRO_PREFIX = "🍅番茄酱影视提醒您：请勿相信视频中的广告，谨防上当受骗！"
+INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
 CLASSES = [
     {"type_id": "1",  "type_name": "电影"},
