@@ -154,41 +154,22 @@ for c in CLASSES:
 
 
 # ===================== 列表页正则 =====================
-# 真实结构（你发的完整 HTML）：
-# <div class="public-list-box public-pic-b [swiper]">
-#   <div class="public-list-div public-list-bj">
-#     <img class="fq-cover-glow lazy" ... data-src="背景图URL" />
-#     <a target="_self" class="public-list-exp" href="/index.php/vod/detail/id/65227.html" title="烈焰国度第五季">
-#       <img class="lazy lazy1 gen-movie-img mask-1" ... alt="烈焰国度第五季封面图"
-#            data-src="海报图URL" />
-#       ...
-#     </a>
-#   </div>
-#   <div class="public-list-button">
-#     <a target="_self" class="time-title hide ft4" href="..." title="烈焰国度第五季">烈焰国度第五季</a>
-#   </div>
-# </div>
-#
-# 策略：按 public-list-box 切分卡片，然后在每个卡片里分别抓 href/title/pic
+# 按 public-list-box 切分卡片，在每个卡片里分别抓 href/title/pic
 _RE_BOX = re.compile(
     r'<div\b[^>]*class="[^"]*\bpublic-list-box\b[^"]*"[^>]*>'
     r'([\s\S]*?)'
     r'(?=<div\b[^>]*class="[^"]*\bpublic-list-box\b[^"]*"[^>]*>|</div>\s*</div>\s*</div>|$)',
     re.S | re.I)
 
-# 每个 box 里的 detail 链接
 _RE_BOX_HREF = re.compile(
     r'<a\b[^>]*class="[^"]*\bpublic-list-exp\b[^"]*"[^>]*?>',
     re.S | re.I)
-# 在 <a> 标签字符串里抓 href
 _RE_ATTR_HREF = re.compile(r'href="(/index\.php/vod/detail/id/\d+\.html)"', re.I)
-# 在 <a> 标签字符串里抓 title
 _RE_ATTR_TITLE = re.compile(r'title="([^"]*)"', re.I)
-# 在 box 里抓第一个海报 data-src（背景图和海报图 data-src 相同，取第一个即可）
 _RE_BOX_PIC = re.compile(r'<img\b[^>]*?data-src="([^"]+)"', re.S | re.I)
 
 
-# 详情页正则
+# ===================== 详情页正则 =====================
 _RE_TITLE_H1 = re.compile(
     r'<h1[^>]*class="[^"]*slide-info-title[^"]*"[^>]*>([\s\S]*?)</h1>', re.I)
 _RE_TITLE_TAG = re.compile(r'<title>([\s\S]*?)</title>', re.I)
@@ -199,23 +180,33 @@ _RE_PIC = re.compile(
 _RE_INTRO = re.compile(
     r'<div[^>]+id="height_limit"[^>]*>([\s\S]*?)</div>', re.S | re.I)
 
-_RE_DIRECTOR = re.compile(
-    r'<strong[^>]*class="r6"[^>]*>导演：</strong>([\s\S]*?)</div>', re.S | re.I)
-_RE_ACTOR = re.compile(
-    r'<strong[^>]*class="r6"[^>]*>主演：</strong>([\s\S]*?)</div>', re.S | re.I)
-
+# 备注：<div class="slide-info hide"><strong class="r6">备注 :</strong>已完结</div>
 _RE_REMARKS = re.compile(
-    r'<span[^>]*class="[^"]*slide-info-remarks[^"]*"[^>]*>([\s\S]*?)</span>',
+    r'<div[^>]*class="slide-info hide"[^>]*>\s*'
+    r'<strong[^>]*class="r6"[^>]*>备注\s*[:：]\s*</strong>([^<]*)',
     re.S | re.I)
 
+# 导演：<strong class="r6">导演 :</strong><a>...</a><span>/</span><a>...</a>...
+_RE_DIRECTOR = re.compile(
+    r'<strong[^>]*class="r6"[^>]*>导演\s*[:：]\s*</strong>([\s\S]*?)</div>',
+    re.S | re.I)
+
+# 演员：<strong class="r6">演员 :</strong>...（有的页面写"主演"，两个都兼容）
+_RE_ACTOR = re.compile(
+    r'<strong[^>]*class="r6"[^>]*>(?:演员|主演)\s*[:：]\s*</strong>([\s\S]*?)</div>',
+    re.S | re.I)
+
+# 线路按钮：<a data-form="xxx" class="vod-playerUrl ...">
 _RE_LINE_BTN = re.compile(
     r'<a\s+data-form="([^"]+)"[^>]*class="[^"]*vod-playerUrl[^"]*"[^>]*>'
     r'([\s\S]*?)</a>', re.S | re.I)
 
+# 剧集 ul
 _RE_EP_UL = re.compile(
     r'<ul\s+class="[^"]*anthology-list-play[^"]*"[^>]*>([\s\S]*?)</ul>',
     re.S | re.I)
 
+# 剧集 a
 _RE_EP_A = re.compile(
     r'<a[^>]+href="(/index\.php/vod/play/id/\d+/sid/\d+/nid/\d+\.html)"[^>]*>'
     r'([\s\S]*?)</a>', re.S | re.I)
@@ -312,7 +303,6 @@ class Spider(Spider):
             return None
 
     def _extract_videos(self, html):
-        """按 public-list-box 切卡片，在每个卡片里分别抓 href/title/pic"""
         videos = []
         seen = set()
         if not html:
@@ -322,7 +312,6 @@ class Spider(Spider):
         self.log("  public-list-box 数: %d" % len(boxes))
 
         for box in boxes:
-            # 找 <a class="public-list-exp" ...>
             a_tag_m = _RE_BOX_HREF.search(box)
             if not a_tag_m:
                 continue
@@ -350,7 +339,6 @@ class Spider(Spider):
                 "vod_remarks": "",
             })
 
-        # 兜底：只抓 detail 链接
         if not videos:
             self.log("  ⚠️ 主正则失败, 走兜底")
             hrefs = re.findall(
@@ -463,6 +451,7 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
+        # 标题
         name = ""
         m = _RE_TITLE_H1.search(html)
         if m:
@@ -473,31 +462,42 @@ class Spider(Spider):
                 name = self._clean(m.group(1).split("-")[0].split("_")[0])
         name = name or vod_id
 
+        # 封面
         pic = DEFAULT_PIC
         m = _RE_PIC.search(html)
         if m:
             pic = self._fix_url(m.group(1))
 
+        # 简介
         content = ""
         m = _RE_INTRO.search(html)
         if m:
             content = self._clean(m.group(1))
         content = (INTRO_PREFIX + "\n" + content) if content else INTRO_PREFIX
 
-        director = ""
-        m = _RE_DIRECTOR.search(html)
-        if m:
-            director = self._clean(m.group(1))
-        actor = ""
-        m = _RE_ACTOR.search(html)
-        if m:
-            actor = re.sub(r"\s*,\s*", ", ", self._clean(m.group(1)))
-
+        # 备注
         remarks = ""
         m = _RE_REMARKS.search(html)
         if m:
             remarks = self._clean(m.group(1))
 
+        # 导演（过滤空项）
+        director = ""
+        m = _RE_DIRECTOR.search(html)
+        if m:
+            raw = self._clean(m.group(1))
+            parts = [p.strip() for p in raw.split("/") if p.strip()]
+            director = " / ".join(parts)
+
+        # 演员（过滤空项）
+        actor = ""
+        m = _RE_ACTOR.search(html)
+        if m:
+            raw = self._clean(m.group(1))
+            parts = [p.strip() for p in raw.split("/") if p.strip()]
+            actor = " / ".join(parts)
+
+        # ===== 线路 =====
         line_btns = _RE_LINE_BTN.findall(html)
         ep_uls = _RE_EP_UL.findall(html)
         self.log("  线路按钮: %d, 剧集ul: %d" % (len(line_btns), len(ep_uls)))
@@ -510,8 +510,14 @@ class Spider(Spider):
                 eps = _RE_EP_A.findall(ul_html)
                 if not eps:
                     continue
+
+                # 线路名：取 <a> 里的纯文本，去掉尾部空格+数字
+                # 真实: <a data-form="kkytest" ...><i class="fa ds-dianying"></i>&nbsp;番茄<span class="badge">18</span></a>
                 line_name = self._clean(btn_html)
-                line_name = re.sub(r'\d+$', '', line_name).strip() or data_form
+                line_name = re.sub(r'\s*\d+\s*$', '', line_name).strip()
+                if not line_name:
+                    line_name = data_form
+
                 play_from.append(line_name)
                 play_url.append("#".join(
                     "%s$%s" % (self._clean(ep_name) or ("第%d集" % (i + 1)),
@@ -527,8 +533,15 @@ class Spider(Spider):
                 sid = m2.group(1)
                 ep_name = self._clean(ep_html) or ("第%s集" % m2.group(2))
                 groups.setdefault(sid, []).append((ep_name, self._fix_url(href)))
-            for sid in sorted(groups.keys(), key=lambda x: int(x)):
-                play_from.append("线路%s" % sid)
+
+            for idx, sid in enumerate(sorted(groups.keys(), key=lambda x: int(x))):
+                line_name = "线路%s" % sid
+                if idx < len(line_btns):
+                    cand = self._clean(line_btns[idx][1])
+                    cand = re.sub(r'\s*\d+\s*$', '', cand).strip()
+                    if cand:
+                        line_name = cand
+                play_from.append(line_name)
                 play_url.append("#".join("%s$%s" % (n, h) for n, h in groups[sid]))
 
         if not play_from:
