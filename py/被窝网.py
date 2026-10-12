@@ -7,8 +7,9 @@ MacCMS V10 + 如意播放器 (ruyi)
   - 详情页只拿元数据, 集数列表需在播放页 /wa/{id}-{line}-{n}/ 抓
   - 播放: player_aaaa.url -> {如意CDN}/share/xxx -> var main = "/xxx.m3u8?sign=xxx"
   - 如意 CDN 域名不固定 (cdn.ryplay11.com / svip.ryiplay18.com 等), 从 share_url 动态取
+  - var main 里的 \/ 必须还原成 /, 否则 CDN 会 403
   - master m3u8 内是 #EXT-X-STREAM-INF + 子 m3u8 相对路径,
-    在 Python 侧拼好子 m3u8 绝对 URL (含 ?sign=) 再返回, 绕开 TVBox 丢 query 的 bug
+    在 Python 侧拼好子 m3u8 绝对 URL (含 ?sign=) 再返回
   - 播放 header 的 Referer 必须是完整 share 页地址
 """
 import re
@@ -145,8 +146,9 @@ _RE_DETAIL_AREA = re.compile(
 _RE_DETAIL_REMARK = re.compile(
     r'<span[^>]*class="[^"]*(?:remarks|note|state)[^"]*"[^>]*>([\s\S]*?)</span>', re.I)
 
-# 播放页
-_RE_PLAYER_AAAA = re.compile(r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*;', re.I)
+# 播放页: player_aaaa 结尾可能是 ";" 或 "</script>", 都要兼容
+_RE_PLAYER_AAAA = re.compile(
+    r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*(?:;|</script>|$)', re.I)
 _RE_EP_A = re.compile(
     r'<a\s+href="([^"]+/wa/[^"]+)"([^>]*)>([\s\S]*?)</a>', re.I)
 _RE_EP_TITLE = re.compile(r'title="([^"]*)"', re.I)
@@ -317,7 +319,6 @@ class Spider(Spider):
         year = extend.get("year", "")
         sort = extend.get("sort", "time")
 
-        # MacCMS 标准: /vodshow/{tid}--------{page}---/
         path = "%s--------%d---/" % (tid, page)
         url = "%s/vodshow/%s" % (self.site_url, path)
         params = {}
@@ -419,7 +420,6 @@ class Spider(Spider):
         if m:
             remarks = self._clean(m.group(1))
 
-        # 详情页拿不到集数, 需要在播放页 /wa/{id}-1-1/ 抓
         play_url = ""
         mp = re.search(r'href="([^"]*/wa/[^"]+)"', html, re.I)
         if mp:
@@ -453,10 +453,6 @@ class Spider(Spider):
         }]}
 
     def _extract_episodes_from_play(self, html, base_url):
-        """
-        从播放页提取剧集列表 (单线路)
-        DOM: <li><a href="/wa/laojiu-1-1/" title="第01集">第01集</a></li>
-        """
         if not html:
             return []
         eps = []
@@ -517,8 +513,6 @@ class Spider(Spider):
 
         real = self._resolve_m3u8(share_url)
         if real:
-            # 关键: m3u8 与 ts 都同源于如意 CDN 域名,
-            # 浏览器请求时 Referer 是完整 share 页地址, 必须带上否则 403
             res = {
                 "parse": 0,
                 "playUrl": "",
@@ -560,9 +554,10 @@ class Spider(Spider):
     def _resolve_m3u8(self, share_url):
         """
         1. 请求 share 页, 抓 var main = "/xxx/index.m3u8?sign=xxx"
-        2. 拼成 master m3u8 完整 URL
-        3. 再请求一次 master, 解析 #EXT-X-STREAM-INF 下一行的子 m3u8
-        4. 返回子 m3u8 绝对 URL (含 ?sign=), 绕开 TVBox 拼相对路径丢 query 的 bug
+        2. 把 \/ 还原成 /
+        3. 拼成 master m3u8 完整 URL
+        4. 请求 master, 解析 #EXT-X-STREAM-INF 下一行的子 m3u8
+        5. 返回子 m3u8 绝对 URL (含 ?sign=)
         """
         pu = urlparse(share_url)
         base_ry = "%s://%s" % (pu.scheme, pu.netloc)
@@ -582,7 +577,9 @@ class Spider(Spider):
             self.log("  share 页未找到 var main")
             return ""
 
-        main_path = m.group(1)
+        # ===== 关键修复: 把 \/ 还原成 / =====
+        main_path = m.group(1).replace("\\/", "/")
+
         if main_path.startswith("http"):
             master_url = main_path
         elif main_path.startswith("/"):
@@ -612,8 +609,6 @@ class Spider(Spider):
                     elif sub.startswith("/"):
                         sub_full = base_ry + sub
                     else:
-                        # 相对路径: urljoin 会把 master_url 最后一段替换成 sub
-                        # 注意 urljoin 会丢 query, 手动补回 sign
                         sub_full = urllib.parse.urljoin(master_url, sub)
                         if "?sign=" in master_url and "?sign=" not in sub_full:
                             q = master_url.split("?", 1)[1]
