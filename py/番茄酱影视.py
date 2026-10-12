@@ -153,34 +153,42 @@ for c in CLASSES:
     ]
 
 
-# ===================== 正则（按真实 HTML 写） =====================
-# 真实卡片 HTML（从你发的 View Source 抄）：
-#
-# <a target="_self" class="public-list-exp" href="/index.php/vod/detail/id/63352.html" title="蒸蒸日上">
-#   <img class="lazy lazy1 gen-movie-img mask-1" ... alt="蒸蒸日上封面图"
-#        data-src="https://vod.xiguazyimg.com/upload/vod/20261010-1/64a643647d9bc9855342d5612f2c485d.jpg" />
-#   ...
-# </a>
-# <div class="public-list-button">
-#   <a target="_self" class="time-title hide ft4" href="..." title="蒸蒸日上">蒸蒸日上</a>
-#   ...
+# ===================== 列表页正则 =====================
+# 真实结构（你发的完整 HTML）：
+# <div class="public-list-box public-pic-b [swiper]">
+#   <div class="public-list-div public-list-bj">
+#     <img class="fq-cover-glow lazy" ... data-src="背景图URL" />
+#     <a target="_self" class="public-list-exp" href="/index.php/vod/detail/id/65227.html" title="烈焰国度第五季">
+#       <img class="lazy lazy1 gen-movie-img mask-1" ... alt="烈焰国度第五季封面图"
+#            data-src="海报图URL" />
+#       ...
+#     </a>
+#   </div>
+#   <div class="public-list-button">
+#     <a target="_self" class="time-title hide ft4" href="..." title="烈焰国度第五季">烈焰国度第五季</a>
+#   </div>
 # </div>
 #
-# 关键：
-#   1. 锚点是 <a class="public-list-exp" href="detail/..." title="剧名">
-#   2. title 属性直接是剧名
-#   3. <a> 内部 <img data-src="海报URL"> 是封面
-_RE_CARD = re.compile(
-    r'<a[^>]+class="[^"]*public-list-exp[^"]*"'               # 锚点 a
-    r'[^>]*?href="(/index\.php/vod/detail/id/\d+\.html)"'    # 详情链接
-    r'[^>]*?title="([^"]*)"'                                 # 剧名（title属性）
-    r'[^>]*>'                                                # a 标签结束
-    r'[\s\S]{0,600}?'
-    r'<img[^>]+data-src="([^"]+)"',                          # 海报图
+# 策略：按 public-list-box 切分卡片，然后在每个卡片里分别抓 href/title/pic
+_RE_BOX = re.compile(
+    r'<div\b[^>]*class="[^"]*\bpublic-list-box\b[^"]*"[^>]*>'
+    r'([\s\S]*?)'
+    r'(?=<div\b[^>]*class="[^"]*\bpublic-list-box\b[^"]*"[^>]*>|</div>\s*</div>\s*</div>|$)',
     re.S | re.I)
 
+# 每个 box 里的 detail 链接
+_RE_BOX_HREF = re.compile(
+    r'<a\b[^>]*class="[^"]*\bpublic-list-exp\b[^"]*"[^>]*?>',
+    re.S | re.I)
+# 在 <a> 标签字符串里抓 href
+_RE_ATTR_HREF = re.compile(r'href="(/index\.php/vod/detail/id/\d+\.html)"', re.I)
+# 在 <a> 标签字符串里抓 title
+_RE_ATTR_TITLE = re.compile(r'title="([^"]*)"', re.I)
+# 在 box 里抓第一个海报 data-src（背景图和海报图 data-src 相同，取第一个即可）
+_RE_BOX_PIC = re.compile(r'<img\b[^>]*?data-src="([^"]+)"', re.S | re.I)
 
-# 详情页正则（不变）
+
+# 详情页正则
 _RE_TITLE_H1 = re.compile(
     r'<h1[^>]*class="[^"]*slide-info-title[^"]*"[^>]*>([\s\S]*?)</h1>', re.I)
 _RE_TITLE_TAG = re.compile(r'<title>([\s\S]*?)</title>', re.I)
@@ -304,27 +312,45 @@ class Spider(Spider):
             return None
 
     def _extract_videos(self, html):
+        """按 public-list-box 切卡片，在每个卡片里分别抓 href/title/pic"""
         videos = []
         seen = set()
         if not html:
             return videos
 
-        matches = _RE_CARD.findall(html)
-        self.log("  卡片匹配: %d 条" % len(matches))
+        boxes = _RE_BOX.findall(html)
+        self.log("  public-list-box 数: %d" % len(boxes))
 
-        # 真实正则返回顺序: href, name(title), pic
-        for href, name, pic in matches:
+        for box in boxes:
+            # 找 <a class="public-list-exp" ...>
+            a_tag_m = _RE_BOX_HREF.search(box)
+            if not a_tag_m:
+                continue
+            a_tag = a_tag_m.group(0)
+
+            href_m = _RE_ATTR_HREF.search(a_tag)
+            title_m = _RE_ATTR_TITLE.search(a_tag)
+            if not href_m:
+                continue
+
+            href = href_m.group(1)
             if href in seen:
                 continue
             seen.add(href)
+
+            name = self._clean(title_m.group(1)) if title_m else ""
+
+            pic_m = _RE_BOX_PIC.search(box)
+            pic = self._fix_url(pic_m.group(1)) if pic_m else DEFAULT_PIC
+
             videos.append({
                 "vod_id":      href,
-                "vod_name":    self._clean(name)[:100] or href,
-                "vod_pic":     self._fix_url(pic) or DEFAULT_PIC,
+                "vod_name":    name[:100] or href,
+                "vod_pic":     pic or DEFAULT_PIC,
                 "vod_remarks": "",
             })
 
-        # 兜底：只抓 detail 链接（名字会变成 id，仅应急）
+        # 兜底：只抓 detail 链接
         if not videos:
             self.log("  ⚠️ 主正则失败, 走兜底")
             hrefs = re.findall(
