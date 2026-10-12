@@ -1,6 +1,6 @@
 # coding=utf-8
 """
-被窝网 beiwowang.com | TVBox Python 爬虫 (localProxy 版)
+被窝网 beiwowang.com | TVBox Python 爬虫 (localProxy 版 v2)
 MacCMS V10 + 如意播放器 (ruyi)
 
 核心思路:
@@ -157,14 +157,36 @@ _RE_MAIN = re.compile(r'var\s+main\s*=\s*"([^"]+)"', re.I)
 # 本地代理工具
 # ============================================================
 
+_PROXY_PORT_CACHE = {"port": -1}
+
+
+def _proxy_port():
+    """拿 webhtv 的本地代理端口 (优先从 Java Proxy 拿, 拿不到就兜底 9978)"""
+    if _PROXY_PORT_CACHE["port"] > 0:
+        return _PROXY_PORT_CACHE["port"]
+    port = 9978
+    try:
+        # chaquo Python 里调用 Java 类的正确方式
+        from com.github.catvod import Proxy
+        p = Proxy.getPort()
+        if p and p > 0:
+            port = p
+            try:
+                print("[beiwo] Proxy.getPort() = %d" % port)
+            except Exception:
+                pass
+    except Exception as e:
+        try:
+            print("[beiwo] Proxy.getPort 调用失败: %s, 兜底 %d" % (e, port))
+        except Exception:
+            pass
+    _PROXY_PORT_CACHE["port"] = port
+    return port
+
+
 def _proxy_base_url():
     """拿 webhtv 的本地代理基地址 (http://127.0.0.1:<port>/proxy)"""
-    try:
-        from com.github.catvod import Proxy
-        return Proxy.getUrl(True)
-    except Exception:
-        # 兜底: 端口 9978
-        return "http://127.0.0.1:9978/proxy"
+    return "http://127.0.0.1:%d/proxy" % _proxy_port()
 
 
 def _build_proxy_url(real_url, referer):
@@ -198,8 +220,8 @@ class Spider(Spider):
         }
         self.default_pic = DEFAULT_PIC
         self._play_cache = {}
-        self._referer_cache = {}   # 记录 url -> referer, 供 localProxy 使用
         self.log("init: site=%s" % self.site_url)
+        self.log("init: proxy_base=%s" % _proxy_base_url())
 
     # ---------- 基础 ----------
     def _fetch(self, url, timeout=20, headers=None, allow_redirects=True):
@@ -554,14 +576,12 @@ class Spider(Spider):
         if real:
             # 关键: 走本地代理, Referer 在爬虫侧强制加
             proxy_url = _build_proxy_url(real, share_url)
-            self._referer_cache[real] = share_url
             res = {
                 "parse": 0,
                 "playUrl": "",
                 "url": proxy_url,
                 "header": {
                     "User-Agent": UA,
-                    # 给本地代理请求本身带一个 UA, Referer 不重要
                     "Referer": self.site_url + "/",
                 },
             }
@@ -656,8 +676,13 @@ class Spider(Spider):
     def localProxy(self, param):
         """
         webhtv 会把 /proxy?do=py&url=xxx&referer=yyy 的 query 变成 dict 传进来.
-        返回值格式: [status, ctype, content, headers]
+        返回值格式: [status, ctype, content, header]
         """
+        try:
+            print("[beiwo] !!!!!!! localProxy 被调用了 param=%s" % str(param)[:300])
+        except Exception:
+            pass
+
         try:
             if isinstance(param, str):
                 try:
@@ -683,7 +708,7 @@ class Spider(Spider):
 
             status, ctype, content = self._fetch_raw(url, timeout=20, headers=h)
 
-            # 如果是 m3u8 (text 或 mpegurl), 改写里面的 ts 路径
+            # 如果是 m3u8, 改写里面的 ts 路径
             ctype_l = (ctype or "").lower()
             is_m3u8 = (
                 url.lower().endswith(".m3u8")
@@ -709,8 +734,7 @@ class Spider(Spider):
         """
         把 m3u8 里的 ts 分片路径改写成再走一次本地代理.
         - 分片行: 不以 # 开头, 且是 ts / 路径
-        - 不改写子 m3u8 的 #EXT-X-STREAM-INF 下一行 (让播放器自己请求; 也可以改写)
-        这里把分片全部改写到本地代理.
+        - 子 m3u8 也改写 (让播放器再走一次代理拿子 m3u8)
         """
         lines = text.split("\n")
         out = []
@@ -719,19 +743,15 @@ class Spider(Spider):
             if not s:
                 out.append(ln)
                 continue
-            # 注释行不改
             if s.startswith("#"):
                 out.append(ln)
                 continue
-            # 分片行: 可能是 .ts 或 .m4s 或 .mp4 或子 m3u8
             if (".ts" in s or ".m4s" in s or ".mp4" in s
                     or s.endswith(".m3u8") or s.startswith("http")):
-                # 拼出绝对地址
                 if s.startswith("http"):
                     full = s
                 else:
                     full = urllib.parse.urljoin(base_url, s)
-                # 改写成再走代理
                 new_url = _build_proxy_url(full, referer)
                 out.append(new_url)
             else:
