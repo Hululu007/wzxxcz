@@ -4,8 +4,8 @@
 苹果CMS V10 + MacPlayer
 策略 (A+B):
   - 列表/详情: 标准 HTML 正则
-  - 播放: xiguam3u8 直链 → parse=0
-          其他加密线路 → parse=1 交给 TVBox 嗅探
+  - 播放: 直链 m3u8 → parse=0
+          加密线路 → parse=1 交给 TVBox 嗅探
 """
 import re
 import sys
@@ -81,6 +81,8 @@ _SUB_CLASS = {
         {"n": "恐怖片", "v": "10"},
         {"n": "剧情片", "v": "11"},
         {"n": "战争片", "v": "12"},
+        {"n": "纪录片", "v": "20"},
+        {"n": "动画片", "v": "37"},
     ],
     "2": [
         {"n": "全部",   "v": ""},
@@ -105,20 +107,52 @@ _SUB_CLASS = {
         {"n": "国产动漫", "v": "29"},
         {"n": "日韩动漫", "v": "30"},
         {"n": "欧美动漫", "v": "31"},
+        {"n": "港台动漫", "v": "32"},
+        {"n": "海外动漫", "v": "33"},
     ],
-    "46": [{"n": "全部", "v": ""}],
+    "46": [
+        {"n": "全部", "v": ""},
+        {"n": "足球", "v": "47"},
+        {"n": "篮球", "v": "48"},
+    ],
 }
 
-_YEARS = [{"n": "全部", "v": ""}] + \
-         [{"n": str(y), "v": str(y)} for y in range(2026, 2009, -1)]
+# 地区筛选
+_AREAS = [
+    {"n": "全部",   "v": ""},
+    {"n": "大陆",   "v": "大陆"},
+    {"n": "香港",   "v": "香港"},
+    {"n": "台湾",   "v": "台湾"},
+    {"n": "美国",   "v": "美国"},
+    {"n": "韩国",   "v": "韩国"},
+    {"n": "日本",   "v": "日本"},
+    {"n": "英国",   "v": "英国"},
+    {"n": "法国",   "v": "法国"},
+    {"n": "泰国",   "v": "泰国"},
+    {"n": "印度",   "v": "印度"},
+    {"n": "加拿大", "v": "加拿大"},
+    {"n": "西班牙", "v": "西班牙"},
+    {"n": "俄罗斯", "v": "俄罗斯"},
+    {"n": "德国",   "v": "德国"},
+    {"n": "意大利", "v": "意大利"},
+    {"n": "其它",   "v": "其它"},
+]
 
-# ⚠️ FILTERS 的 key 用字符串
+# 年份（"XX年前" 直接给编码后的值，避免二次编码）
+_YEARS = [{"n": "全部", "v": ""}] + \
+         [{"n": str(y), "v": str(y)} for y in range(2026, 2019, -1)] + \
+         [{"n": "2020年前", "v": "2020%E5%B9%B4%E5%89%8D"},
+          {"n": "2010年前", "v": "2010%E5%B9%B4%E5%89%8D"},
+          {"n": "2000年前", "v": "2000%E5%B9%B4%E5%89%8D"}]
+
+# ⚠️ FILTERS 的 key 必须是字符串
 FILTERS = {}
 for c in CLASSES:
     tid = str(c["type_id"])
     FILTERS[tid] = [
         {"key": "class", "name": "分类",
          "value": _SUB_CLASS.get(tid, [{"n": "全部", "v": ""}])},
+        {"key": "area",  "name": "地区", "value": _AREAS},
         {"key": "year",  "name": "年份", "value": _YEARS},
     ]
 
@@ -171,7 +205,7 @@ _RE_EP_A = re.compile(
     r'<a[^>]+href="(/index\.php/vod/play/id/\d+/sid/\d+/nid/\d+\.html)"[^>]*>'
     r'([\s\S]*?)</a>', re.S | re.I)
 
-_RE_PAGECOUNT = re.compile(r'当前(\d+)/(\d+)页')
+_RE_PAGECOUNT = re.compile(r'当前\d+/(\d+)页')
 
 
 def _is_direct_m3u8(u):
@@ -243,8 +277,8 @@ class Spider(Spider):
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
 
-    # ⚠️ 用 raw_decode 提取嵌套 JSON
     def _extract_json_var(self, html, var_name):
+        """从 html 里提取 `var xxx = {...}` 的 JSON 对象（用 raw_decode 处理嵌套）"""
         idx = html.find(var_name)
         if idx < 0:
             return None
@@ -288,7 +322,7 @@ class Spider(Spider):
         m = _RE_PAGECOUNT.search(html)
         if m:
             try:
-                return int(m.group(2))
+                return int(m.group(1))
             except Exception:
                 pass
         pages = re.findall(r'/page/(\d+)\.html', html)
@@ -299,7 +333,6 @@ class Spider(Spider):
                 pass
         return 1
 
-    # ⚠️ 加日志
     def homeContent(self, filter=False):
         self.log("homeContent called, classes=%d, filters=%d"
                  % (len(CLASSES), len(FILTERS)))
@@ -321,17 +354,23 @@ class Spider(Spider):
             extend = {}
 
         real_tid = str(extend.get("class") or tid)
+        area = extend.get("area") or ""
         year = extend.get("year") or ""
 
-        parts = ["/index.php/vod/show/id/%s" % real_tid]
+        # /index.php/vod/show/[area/XXX/]id/YYY/[page/N/][year/YYYY/].html
+        parts = ["/index.php/vod/show"]
+        if area:
+            parts.append("/area/%s" % urllib.parse.quote(area, safe=""))
+        parts.append("/id/%s" % real_tid)
         if page > 1:
             parts.append("/page/%d" % page)
         if year:
+            # year 可能是已编码的（XX年前），也可能是纯数字
             parts.append("/year/%s" % year)
         url = self.site_url + "".join(parts) + ".html"
 
-        self.log("category: tid=%s real_tid=%s page=%d year=%s"
-                 % (tid, real_tid, page, year))
+        self.log("category: tid=%s real_tid=%s area=%s year=%s page=%d"
+                 % (tid, real_tid, area, year, page))
         self.log("  url: %s" % url)
         html = self._fetch(url)
         self.log("  HTML 长度: %d" % len(html))
@@ -414,6 +453,7 @@ class Spider(Spider):
         if m:
             remarks = self._clean(m.group(1))
 
+        # ===== 线路 & 剧集 =====
         line_btns = _RE_LINE_BTN.findall(html)
         ep_uls = _RE_EP_UL.findall(html)
         self.log("  线路按钮: %d, 剧集ul: %d" % (len(line_btns), len(ep_uls)))
@@ -461,6 +501,7 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
+    # ---------------- 播放 (A+B 方案) ----------------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -478,7 +519,7 @@ class Spider(Spider):
             self._play_cache[play_page] = (now, res)
             return res
 
-        # ---- A: player_aaaa（用 raw_decode 解析嵌套 JSON）----
+        # ---- A: player_aaaa ----
         pa = self._extract_json_var(html, "var player_aaaa")
         if pa:
             url = (pa.get("url") or "").strip()
@@ -515,7 +556,7 @@ class Spider(Spider):
 
             self.log("  player_aaaa 非直链, 继续找 fqPreheat")
 
-        # ---- A: fqPreheat（用 raw_decode 解析嵌套 JSON）----
+        # ---- A: fqPreheat ----
         ph = self._extract_json_var(html, "var fqPreheat")
         if ph:
             for ln in ph.get("lines", []):
