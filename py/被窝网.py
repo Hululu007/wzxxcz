@@ -10,7 +10,7 @@ MacCMS V10 + 如意播放器 (ruyi)
   - var main 里的 \/ 必须还原成 /, 否则 CDN 会 403
   - master m3u8 内是 #EXT-X-STREAM-INF + 子 m3u8 相对路径,
     在 Python 侧拼好子 m3u8 绝对 URL (含 ?sign=) 再返回
-  - 播放 header 的 Referer 必须是完整 share 页地址
+  - 播放 header 的 Referer 用如意 CDN 的域名根 (参照豆花可用写法)
 """
 import re
 import sys
@@ -513,21 +513,21 @@ class Spider(Spider):
 
         real = self._resolve_m3u8(share_url)
         if real:
+            # 参照豆花可用写法: Referer 用如意 CDN 的域名根, 不用完整 share 页
+            pu = urlparse(share_url)
+            ry_root = "%s://%s/" % (pu.scheme, pu.netloc)
             res = {
                 "parse": 0,
                 "playUrl": "",
                 "url": real,
                 "header": {
                     "User-Agent": UA,
-                    "Referer": share_url,
+                    "Referer": ry_root,
                 },
             }
-            # ===== 新增: 打印返回的 URL 和 Referer, 方便排查 =====
-            self.log("  => 返回 URL: %s" % real)
-            self.log("  => 返回 Referer: %s" % share_url)
-
             self._play_cache[play_page] = (now, res)
             self.log("  => m3u8: %s" % real[:160])
+            self.log("  => Referer: %s" % ry_root)
             return res
 
         res = {"parse": 1, "playUrl": "", "url": play_page,
