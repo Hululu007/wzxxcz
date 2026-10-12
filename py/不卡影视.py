@@ -1,13 +1,13 @@
 # coding=utf-8
 """
-不卡影视 bukayingshi.com | TVBox Python 爬虫
+不卡影视 bukayingshi.com | TVBox Python 爬虫（修正版）
 网站结构：
   - 分类 /buka/{1-5}.html，翻页 /buka/{type}-{page}.html
   - 筛选 /vodshow/{type}-{area}-{lang}-{class}-{year}-{sort}-{page}.html
   - 搜索 /vodsearch/{kw}----------{page}---.html
-  - 详情 /ying/{id}.html，剧集 .episode-item -> /shi/{id}-{sid}-{nid}.html
+  - 详情 /ying/{id}.html，剧集 a.episode-item -> /shi/{id}-{sid}-{nid}.html
   - 播放 player_aaaa.url 是 share 页；请求 share 页提取 var main 的 m3u8，
-    拼上 share 页 origin，直出给 TVBox
+    拼上 share 页 origin，直出
 """
 import re
 import sys
@@ -117,14 +117,20 @@ for c in CLASSES:
     ]
 
 
-# ============ 正则 ============
+# ============ 正则（按真实源码修正） ============
+# 卡片：a 标签 href=/ying/xx.html，class 里含 video-item，img 有 src + alt
 _RE_VIDEO_ITEM = re.compile(
     r'<a\s+href="(/ying/\d+\.html)"[^>]*class="[^"]*video-item[^"]*"[^>]*>'
     r'[\s\S]*?<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
     re.S | re.I)
 
+# 搜索卡片：href 和 class 顺序不定，分两个分支
 _RE_SEARCH_ITEM = re.compile(
-    r'<a[^>]*href="(/ying/\d+\.html)"[^>]*class="search_result_list_item"[^>]*>'
+    r'<a[^>]*class="[^"]*search_result_list_item[^"]*"[^>]*href="(/ying/\d+\.html)"[^>]*>'
+    r'([\s\S]*?)</a>',
+    re.S | re.I)
+_RE_SEARCH_ITEM2 = re.compile(
+    r'<a[^>]*href="(/ying/\d+\.html)"[^>]*class="[^"]*search_result_list_item[^"]*"[^>]*>'
     r'([\s\S]*?)</a>',
     re.S | re.I)
 _RE_SEARCH_IMG = re.compile(r'<img[^>]*?src="([^"]*)"', re.I)
@@ -133,37 +139,49 @@ _RE_SEARCH_TITLE = re.compile(
 _RE_SEARCH_TAG = re.compile(
     r'search_result_list_item_content_tag"[^>]*>([^<]*)<', re.I)
 
+# 详情
 _RE_H1 = re.compile(
     r'<h1[^>]*class="[^"]*font-bold text-2xl[^"]*"[^>]*>([^<]*)</h1>', re.I)
 _RE_DETAIL_PIC = re.compile(r'<img\s+alt="[^"]*"\s+src="([^"]+)"', re.I)
 _RE_A_TAG = re.compile(r'<a[^>]*>([^<]*)</a>', re.I)
 
-_RE_ROW = re.compile(
-    r'video_appraise_title font-bold"[^>]*>([^<]*)</span>\s*'
-    r'<div class="video_appraise_list"[^>]*>([\s\S]*?)</div>',
+# 元信息：每个 video_appraise_row 是一块
+_RE_ROW_BLOCK = re.compile(
+    r'<div class="video_appraise_row"[^>]*>([\s\S]*?)</div>\s*</div>\s*</div>',
     re.S | re.I)
+_RE_ROW_TITLE = re.compile(
+    r'video_appraise_title font-bold"[^>]*>([^<]*)</span>', re.I)
 
+# 简介
 _RE_SHORT_DESC = re.compile(
     r'<span class="video-description-short">([\s\S]*?)</span>', re.I)
 
+# 剧集：class 可能含多个 class，data-episode-name 在 a 标签上
 _RE_EPISODE = re.compile(
-    r'<a[^>]*href="(/shi/\d+-\d+-\d+\.html)"[^>]*class="episode-item"'
-    r'(?:[^>]*data-episode-name="([^"]*)")?[^>]*>',
+    r'<a[^>]*href="(/shi/\d+-\d+-\d+\.html)"[^>]*class="[^"]*episode-item[^"]*"([^>]*)>',
+    re.S | re.I)
+_RE_EP_NAME_ATTR = re.compile(r'data-episode-name="([^"]*)"', re.I)
+# 播放页的剧集列表（不带 class episode-item，用 detail_list_item）
+_RE_EPISODE_PLAY = re.compile(
+    r'<a[^>]*href="(/shi/\d+-\d+-\d+\.html)"[^>]*class="[^"]*episode-item[^"]*"[^>]*>'
+    r'[\s\S]*?<div[^>]*class="[^"]*detail_list_item[^"]*"[^>]*>([^<]*)</div>',
     re.S | re.I)
 
+# 线路
 _RE_LINE_ITEM = re.compile(
     r'<div[^>]*class="[^"]*detail_line_ite[^"]*"[^>]*data-source="(\d+)"'
     r'[^>]*>[\s\S]*?<div[^>]*>([^<]*)</div>',
     re.S | re.I)
 
+# player_aaaa：以 </script> 为边界
 _RE_PLAYER_AAAA = re.compile(
-    r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>', re.I)
+    r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>', re.S | re.I)
 
-# share 页里 m3u8 变量：var main = "/xxx/index.m3u8?sign=xxx"
+# share 页 var main
 _RE_SHARE_MAIN = re.compile(
-    r'var\s+main\s*=\s*["\']([^"\']+\.m3u8[^"\']*)["\']', re.I)
+    r'var\s+main\s*=\s*["\']([^"\']+?\.m3u8[^"\']*)["\']', re.I)
 _RE_M3U8_ANY = re.compile(
-    r'["\']([^"\']+\.m3u8[^"\']*)["\']', re.I)
+    r'["\']([^"\']+?\.m3u8[^"\']*)["\']', re.I)
 
 _RE_TAIL_PAGE = re.compile(
     r'href="/buka/\d+-(\d+)\.html"[^>]*>\s*<button[^>]*>\s*<span[^>]*>尾页', re.I)
@@ -189,7 +207,6 @@ class Spider(Spider):
         }
         self._play_cache = {}
 
-    # ---------- 基础 ----------
     def _fetch(self, url, timeout=20, headers=None):
         try:
             h = dict(self.headers)
@@ -229,7 +246,6 @@ class Spider(Spider):
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
 
-    # ---------- 列表解析 ----------
     def _parse_video_items(self, html):
         out = []
         seen = set()
@@ -249,22 +265,20 @@ class Spider(Spider):
     def _parse_search_items(self, html):
         out = []
         seen = set()
-        for m in _RE_SEARCH_ITEM.finditer(html):
+        results = list(_RE_SEARCH_ITEM.finditer(html)) + \
+                  list(_RE_SEARCH_ITEM2.finditer(html))
+        for m in results:
             href = m.group(1)
             block = m.group(2)
             if href in seen:
                 continue
             seen.add(href)
-
             mi = _RE_SEARCH_IMG.search(block)
             pic = self._fix_url(mi.group(1)) if mi else DEFAULT_PIC
-
             mt = _RE_SEARCH_TITLE.search(block)
             name = self._clean(mt.group(1)) if mt else ""
-
             mtg = _RE_SEARCH_TAG.search(block)
             remarks = self._clean(mtg.group(1)) if mtg else ""
-
             out.append({
                 "vod_id": href,
                 "vod_name": name,
@@ -367,7 +381,6 @@ class Spider(Spider):
         videos = self._parse_search_items(html)
         if not videos:
             videos = self._parse_video_items(html)
-
         return {
             "list": videos,
             "page": page,
@@ -390,6 +403,7 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
+        # 名称
         name = ""
         m = _RE_H1.search(html)
         if m:
@@ -400,20 +414,27 @@ class Spider(Spider):
                 name = self._clean(m2.group(1))
         name = name or vod_id
 
+        # 封面
         pic = DEFAULT_PIC
         m = _RE_DETAIL_PIC.search(html)
         if m:
             pic = self._fix_url(m.group(1))
 
+        # 元信息：逐个 video_appraise_row 解析
         director = actor = area = lang = year = remarks = ""
-        for mm in _RE_ROW.finditer(html):
-            key = self._clean(mm.group(1))
-            val_html = mm.group(2)
-            links = _RE_A_TAG.findall(val_html)
+        for mm in _RE_ROW_BLOCK.finditer(html):
+            block = mm.group(1)
+            mt = _RE_ROW_TITLE.search(block)
+            if not mt:
+                continue
+            key = self._clean(mt.group(1))
+            links = _RE_A_TAG.findall(block)
             if links:
                 val = ", ".join(self._clean(x) for x in links if self._clean(x))
             else:
-                val = self._clean(val_html)
+                # 去掉 title 那段后的纯文本
+                rest = block[mt.end():]
+                val = self._clean(rest)
             if "导演" in key:
                 director = val
             elif "演员" in key or "主演" in key:
@@ -427,6 +448,7 @@ class Spider(Spider):
             elif "备注" in key:
                 remarks = val
 
+        # 简介
         content = ""
         m = _RE_SHORT_DESC.search(html)
         if m:
@@ -436,20 +458,31 @@ class Spider(Spider):
             if m:
                 content = self._clean(m.group(1))
 
+        # 剧集：详情页
         eps = []
         for m in _RE_EPISODE.finditer(html):
             href = m.group(1)
-            ep_name = m.group(2) or ""
-            if not ep_name:
-                mn = re.search(r'data-episode-name="([^"]*)"', m.group(0))
-                ep_name = mn.group(1) if mn else ""
+            attrs = m.group(2) or ""
+            ep_name = ""
+            mn = _RE_EP_NAME_ATTR.search(attrs)
+            if mn:
+                ep_name = self._clean(mn.group(1))
             if not ep_name:
                 ep_name = "第%02d集" % (len(eps) + 1)
-            eps.append((self._clean(ep_name), self._fix_url(href)))
+            eps.append((ep_name, self._fix_url(href)))
 
+        # 如果详情页没解析到，试试播放页的剧集结构
+        if not eps:
+            for m in _RE_EPISODE_PLAY.finditer(html):
+                href = m.group(1)
+                ep_name = self._clean(m.group(2)) or ("第%02d集" % (len(eps) + 1))
+                eps.append((ep_name, self._fix_url(href)))
+
+        self.log("eps count: %d" % len(eps))
         if not eps:
             return {"list": []}
 
+        # 线路名
         line_name = "buka"
         ml = _RE_LINE_ITEM.search(html)
         if ml:
@@ -475,10 +508,6 @@ class Spider(Spider):
 
     # ---------- share 页 -> 真 m3u8 ----------
     def _resolve_share_url(self, share_url):
-        """
-        请求 share 页，提取 var main 的 m3u8 地址并补全为绝对 URL。
-        验证过：拼出来的 URL 直接可播，无需 Referer。
-        """
         try:
             rsp = self.fetch(share_url, headers={
                 "User-Agent": UA,
@@ -496,12 +525,9 @@ class Spider(Spider):
 
         if not text:
             return ""
-
-        # 直接就是 m3u8
         if "#EXTM3U" in text:
             return share_url
 
-        # 优先 var main
         m = _RE_SHARE_MAIN.search(text)
         if not m:
             m = _RE_M3U8_ANY.search(text)
@@ -509,8 +535,9 @@ class Spider(Spider):
             self.log("share 页里没有找到 m3u8")
             return ""
 
-        m3u8 = m.group(1).replace("\\/", "/").replace("&amp;", "&")
-
+        m3u8 = m.group(1)
+        # 去掉 JSON 转义
+        m3u8 = m3u8.replace("\\/", "/").replace("&amp;", "&").replace("\\\\", "\\")
         if m3u8.startswith("//"):
             m3u8 = "https:" + m3u8
         elif m3u8.startswith("/"):
@@ -519,10 +546,9 @@ class Spider(Spider):
         elif not m3u8.startswith("http"):
             m3u8 = urllib.parse.urljoin(share_url, m3u8)
 
-        self.log("  resolve m3u8: %s" % m3u8[:200])
+        self.log("resolve m3u8: %s" % m3u8[:200])
         return m3u8
 
-    # ---------- 播放 ----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -536,12 +562,14 @@ class Spider(Spider):
         html = self._fetch(play_page)
         share_url = ""
         m = _RE_PLAYER_AAAA.search(html)
+        self.log("player_aaaa match: %s" % ("YES" if m else "NONE"))
         if m:
             raw = m.group(1)
             try:
                 data = json.loads(raw)
                 share_url = data.get("url", "") or ""
-            except Exception:
+            except Exception as e:
+                self.log("player_aaaa json fail: %s" % e)
                 m2 = re.search(r'"url"\s*:\s*"([^"]+)"', raw)
                 if m2:
                     share_url = m2.group(1)
@@ -549,22 +577,19 @@ class Spider(Spider):
             share_url = share_url.replace("\\/", "/").replace("&amp;", "&")
 
         if share_url:
-            self.log("  share: %s" % share_url[:160])
+            self.log("share: %s" % share_url[:160])
             real_m3u8 = self._resolve_share_url(share_url)
             if real_m3u8:
                 res = {
                     "parse": 0,
                     "playUrl": "",
                     "url": real_m3u8,
-                    "header": {
-                        "User-Agent": UA,
-                        "Referer": share_url,
-                    },
+                    "header": {"User-Agent": UA},
                 }
                 self._play_cache[play_page] = (now, res)
                 return res
 
-        # 兜底：交给 TVBox 嗅探
+        # 兜底
         res = {
             "parse": 1,
             "playUrl": "",
