@@ -154,7 +154,6 @@ for c in CLASSES:
 
 
 # ===================== 列表页正则 =====================
-# 按 public-list-box 切分卡片，在每个卡片里分别抓 href/title/pic
 _RE_BOX = re.compile(
     r'<div\b[^>]*class="[^"]*\bpublic-list-box\b[^"]*"[^>]*>'
     r'([\s\S]*?)'
@@ -180,38 +179,36 @@ _RE_PIC = re.compile(
 _RE_INTRO = re.compile(
     r'<div[^>]+id="height_limit"[^>]*>([\s\S]*?)</div>', re.S | re.I)
 
-# 备注：<div class="slide-info hide"><strong class="r6">备注 :</strong>已完结</div>
 _RE_REMARKS = re.compile(
     r'<div[^>]*class="slide-info hide"[^>]*>\s*'
     r'<strong[^>]*class="r6"[^>]*>备注\s*[:：]\s*</strong>([^<]*)',
     re.S | re.I)
 
-# 导演：<strong class="r6">导演 :</strong><a>...</a><span>/</span><a>...</a>...
 _RE_DIRECTOR = re.compile(
     r'<strong[^>]*class="r6"[^>]*>导演\s*[:：]\s*</strong>([\s\S]*?)</div>',
     re.S | re.I)
-
-# 演员：<strong class="r6">演员 :</strong>...（有的页面写"主演"，两个都兼容）
 _RE_ACTOR = re.compile(
     r'<strong[^>]*class="r6"[^>]*>(?:演员|主演)\s*[:：]\s*</strong>([\s\S]*?)</div>',
     re.S | re.I)
 
-# 线路按钮：<a data-form="xxx" class="vod-playerUrl ...">
 _RE_LINE_BTN = re.compile(
     r'<a\s+data-form="([^"]+)"[^>]*class="[^"]*vod-playerUrl[^"]*"[^>]*>'
     r'([\s\S]*?)</a>', re.S | re.I)
 
-# 剧集 ul
 _RE_EP_UL = re.compile(
     r'<ul\s+class="[^"]*anthology-list-play[^"]*"[^>]*>([\s\S]*?)</ul>',
     re.S | re.I)
 
-# 剧集 a
 _RE_EP_A = re.compile(
     r'<a[^>]+href="(/index\.php/vod/play/id/\d+/sid/\d+/nid/\d+\.html)"[^>]*>'
     r'([\s\S]*?)</a>', re.S | re.I)
 
 _RE_PAGECOUNT = re.compile(r'当前\s*\d+\s*/\s*(\d+)\s*页')
+
+# 删掉 badge 标签及其内容（线路名后面的数字角标）
+_RE_BADGE = re.compile(
+    r'<span\b[^>]*class="[^"]*\bbadge\b[^"]*"[^>]*>[\s\S]*?</span>',
+    re.S | re.I)
 
 
 def _is_direct_m3u8(u):
@@ -511,10 +508,11 @@ class Spider(Spider):
                 if not eps:
                     continue
 
-                # 线路名：取 <a> 里的纯文本，去掉尾部空格+数字
-                # 真实: <a data-form="kkytest" ...><i class="fa ds-dianying"></i>&nbsp;番茄<span class="badge">18</span></a>
-                line_name = self._clean(btn_html)
-                line_name = re.sub(r'\s*\d+\s*$', '', line_name).strip()
+                # ⚠️ 修复：先删掉 <span class="badge">18</span>，再清理
+                # 真实: <a data-form="xiguam3u8" ...>&nbsp;超清2<span class="badge">18</span></a>
+                # 删 badge 后: ...&nbsp;超清2  → _clean → "超清2" ✅
+                btn_no_badge = _RE_BADGE.sub('', btn_html)
+                line_name = self._clean(btn_no_badge).strip()
                 if not line_name:
                     line_name = data_form
 
@@ -537,8 +535,8 @@ class Spider(Spider):
             for idx, sid in enumerate(sorted(groups.keys(), key=lambda x: int(x))):
                 line_name = "线路%s" % sid
                 if idx < len(line_btns):
-                    cand = self._clean(line_btns[idx][1])
-                    cand = re.sub(r'\s*\d+\s*$', '', cand).strip()
+                    cand = _RE_BADGE.sub('', line_btns[idx][1])
+                    cand = self._clean(cand).strip()
                     if cand:
                         line_name = cand
                 play_from.append(line_name)
