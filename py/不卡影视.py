@@ -1,12 +1,13 @@
 # coding=utf-8
 """
 不卡影视 bukayingshi.com | TVBox Python 爬虫
-按网站真实结构编写：
+网站结构：
   - 分类 /buka/{1-5}.html，翻页 /buka/{type}-{page}.html
   - 筛选 /vodshow/{type}-{area}-{lang}-{class}-{year}-{sort}-{page}.html
   - 搜索 /vodsearch/{kw}----------{page}---.html
   - 详情 /ying/{id}.html，剧集 .episode-item -> /shi/{id}-{sid}-{nid}.html
-  - 播放页 player_aaaa.url 为 share 短链，交给 TVBox 跟随 302 播 HLS
+  - 播放 player_aaaa.url 是 share 页；请求 share 页提取 var main 的 m3u8，
+    拼上 share 页 origin，直出给 TVBox
 """
 import re
 import sys
@@ -61,7 +62,6 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 DEFAULT_PIC = HOST + "/static/images/logo.jpg"
 
-# 分类：type_id 用站点 /buka/{n}.html 里的 n
 CLASSES = [
     {"type_id": "1", "type_name": "电影"},
     {"type_id": "2", "type_name": "电视剧"},
@@ -70,8 +70,6 @@ CLASSES = [
     {"type_id": "5", "type_name": "短剧"},
 ]
 
-# 站点 vodshow 的 6 段顺序: type-area-lang-class-year-sort
-# 下面给每个分类做一份筛选。value 里的 v 直接拼进 URL 对应段。
 _AREAS = [
     ("全部", ""), ("内地", "内地"), ("韩国", "韩国"), ("香港", "香港"),
     ("台湾", "台湾"), ("日本", "日本"), ("美国", "美国"), ("泰国", "泰国"),
@@ -82,11 +80,8 @@ _LANGS = [
     ("闽南语", "闽南语"), ("韩语", "韩语"), ("日语", "日语"), ("其它", "其它"),
 ]
 _YEARS = [("全部", "")] + [(str(y), str(y)) for y in range(2026, 2003, -1)]
-_SORTS = [
-    ("最新", "time"), ("热门", "hits"), ("评分", "score"),
-]
+_SORTS = [("最新", "time"), ("热门", "hits"), ("评分", "score")]
 
-# 每个分类的 class（类型）选项，取自真实页面筛选区
 _CLASS_MAP = {
     "1": ["全部", "喜剧", "爱情", "动作", "科幻", "恐怖", "剧情", "战争",
           "警匪", "犯罪", "动画", "奇幻", "武侠", "冒险", "枪战", "悬疑",
@@ -123,13 +118,11 @@ for c in CLASSES:
 
 
 # ============ 正则 ============
-# 普通卡片（首页 / 分类页）
 _RE_VIDEO_ITEM = re.compile(
     r'<a\s+href="(/ying/\d+\.html)"[^>]*class="[^"]*video-item[^"]*"[^>]*>'
     r'[\s\S]*?<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
     re.S | re.I)
 
-# 搜索卡片
 _RE_SEARCH_ITEM = re.compile(
     r'<a[^>]*href="(/ying/\d+\.html)"[^>]*class="search_result_list_item"[^>]*>'
     r'([\s\S]*?)</a>',
@@ -140,13 +133,9 @@ _RE_SEARCH_TITLE = re.compile(
 _RE_SEARCH_TAG = re.compile(
     r'search_result_list_item_content_tag"[^>]*>([^<]*)<', re.I)
 
-# 详情页
-_RE_H1 = re.compile(r'<h1[^>]*class="[^"]*font-bold text-2xl[^"]*"[^>]*>([^<]*)</h1>', re.I)
+_RE_H1 = re.compile(
+    r'<h1[^>]*class="[^"]*font-bold text-2xl[^"]*"[^>]*>([^<]*)</h1>', re.I)
 _RE_DETAIL_PIC = re.compile(r'<img\s+alt="[^"]*"\s+src="([^"]+)"', re.I)
-_RE_DIRECTOR = re.compile(
-    r'导演:?</span>[\s\S]*?<div class="actor_list"[^>]*>([\s\S]*?)</div>', re.I)
-_RE_ACTOR = re.compile(
-    r'演员:?</span>[\s\S]*?<div class="actor_list"[^>]*>([\s\S]*?)</div>', re.I)
 _RE_A_TAG = re.compile(r'<a[^>]*>([^<]*)</a>', re.I)
 
 _RE_ROW = re.compile(
@@ -157,25 +146,27 @@ _RE_ROW = re.compile(
 _RE_SHORT_DESC = re.compile(
     r'<span class="video-description-short">([\s\S]*?)</span>', re.I)
 
-# 剧集
 _RE_EPISODE = re.compile(
     r'<a[^>]*href="(/shi/\d+-\d+-\d+\.html)"[^>]*class="episode-item"'
     r'(?:[^>]*data-episode-name="([^"]*)")?[^>]*>',
     re.S | re.I)
-_RE_EP_NAME = re.compile(r'data-episode-name="([^"]*)"', re.I)
 
-# 线路
 _RE_LINE_ITEM = re.compile(
     r'<div[^>]*class="[^"]*detail_line_ite[^"]*"[^>]*data-source="(\d+)"'
     r'[^>]*>[\s\S]*?<div[^>]*>([^<]*)</div>',
     re.S | re.I)
 
-# 播放页
 _RE_PLAYER_AAAA = re.compile(
     r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>', re.I)
 
-# 总页数：尾页 /buka/2-447.html 或 2/447
-_RE_TAIL_PAGE = re.compile(r'href="/buka/\d+-(\d+)\.html"[^>]*>\s*<button[^>]*>\s*<span[^>]*>尾页', re.I)
+# share 页里 m3u8 变量：var main = "/xxx/index.m3u8?sign=xxx"
+_RE_SHARE_MAIN = re.compile(
+    r'var\s+main\s*=\s*["\']([^"\']+\.m3u8[^"\']*)["\']', re.I)
+_RE_M3U8_ANY = re.compile(
+    r'["\']([^"\']+\.m3u8[^"\']*)["\']', re.I)
+
+_RE_TAIL_PAGE = re.compile(
+    r'href="/buka/\d+-(\d+)\.html"[^>]*>\s*<button[^>]*>\s*<span[^>]*>尾页', re.I)
 _RE_PAGE_INFO = re.compile(r'<span>(\d+)/(\d+)</span>')
 
 
@@ -319,7 +310,6 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        # 取筛选值（空/全部视为不筛）
         def _v(k):
             v = extend.get(k)
             if v in ("", None, "全部"):
@@ -332,9 +322,7 @@ class Spider(Spider):
         year = _v("year")
         sort = _v("sort") or "time"
 
-        # 有筛选参数 -> vodshow
         if area or lang or cls or year or (extend.get("sort") not in ("", None)):
-            # vodshow: type-area-lang-class-year-sort-page
             seg = [
                 tid,
                 urllib.parse.quote(area) if area else "",
@@ -349,7 +337,6 @@ class Spider(Spider):
             else:
                 url = "%s/vodshow/%s.html" % (self.site_url, path)
         else:
-            # 无筛选 -> buka
             if page > 1:
                 url = "%s/buka/%s-%d.html" % (self.site_url, tid, page)
             else:
@@ -374,7 +361,6 @@ class Spider(Spider):
         except Exception:
             page = 1
         kw = urllib.parse.quote(key)
-        # /vodsearch/{kw}----------{page}---.html
         url = "%s/vodsearch/%s----------%d---.html" % (self.site_url, kw, page)
         self.log("search: %s" % url)
         html = self._fetch(url)
@@ -404,7 +390,6 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # 名称
         name = ""
         m = _RE_H1.search(html)
         if m:
@@ -415,13 +400,11 @@ class Spider(Spider):
                 name = self._clean(m2.group(1))
         name = name or vod_id
 
-        # 封面
         pic = DEFAULT_PIC
         m = _RE_DETAIL_PIC.search(html)
         if m:
             pic = self._fix_url(m.group(1))
 
-        # 元信息：导演/演员/地区/语言/年份/备注
         director = actor = area = lang = year = remarks = ""
         for mm in _RE_ROW.finditer(html):
             key = self._clean(mm.group(1))
@@ -444,7 +427,6 @@ class Spider(Spider):
             elif "备注" in key:
                 remarks = val
 
-        # 简介
         content = ""
         m = _RE_SHORT_DESC.search(html)
         if m:
@@ -454,13 +436,12 @@ class Spider(Spider):
             if m:
                 content = self._clean(m.group(1))
 
-        # 剧集（本站只有一条线路 buka，data-source=1）
         eps = []
         for m in _RE_EPISODE.finditer(html):
             href = m.group(1)
             ep_name = m.group(2) or ""
             if not ep_name:
-                mn = _RE_EP_NAME.search(m.group(0))
+                mn = re.search(r'data-episode-name="([^"]*)"', m.group(0))
                 ep_name = mn.group(1) if mn else ""
             if not ep_name:
                 ep_name = "第%02d集" % (len(eps) + 1)
@@ -469,7 +450,6 @@ class Spider(Spider):
         if not eps:
             return {"list": []}
 
-        # 线路名：从 detail_line_ite 里取，默认 buka
         line_name = "buka"
         ml = _RE_LINE_ITEM.search(html)
         if ml:
@@ -493,6 +473,55 @@ class Spider(Spider):
             "vod_play_url": play_url,
         }]}
 
+    # ---------- share 页 -> 真 m3u8 ----------
+    def _resolve_share_url(self, share_url):
+        """
+        请求 share 页，提取 var main 的 m3u8 地址并补全为绝对 URL。
+        验证过：拼出来的 URL 直接可播，无需 Referer。
+        """
+        try:
+            rsp = self.fetch(share_url, headers={
+                "User-Agent": UA,
+                "Referer": self.site_url + "/",
+            }, timeout=15)
+        except Exception as e:
+            self.log("share fetch fail: %s" % e)
+            return ""
+
+        text = ""
+        if hasattr(rsp, "text"):
+            text = rsp.text or ""
+        elif hasattr(rsp, "content"):
+            text = rsp.content.decode("utf-8", "ignore")
+
+        if not text:
+            return ""
+
+        # 直接就是 m3u8
+        if "#EXTM3U" in text:
+            return share_url
+
+        # 优先 var main
+        m = _RE_SHARE_MAIN.search(text)
+        if not m:
+            m = _RE_M3U8_ANY.search(text)
+        if not m:
+            self.log("share 页里没有找到 m3u8")
+            return ""
+
+        m3u8 = m.group(1).replace("\\/", "/").replace("&amp;", "&")
+
+        if m3u8.startswith("//"):
+            m3u8 = "https:" + m3u8
+        elif m3u8.startswith("/"):
+            parsed = urllib.parse.urlparse(share_url)
+            m3u8 = "%s://%s%s" % (parsed.scheme, parsed.netloc, m3u8)
+        elif not m3u8.startswith("http"):
+            m3u8 = urllib.parse.urljoin(share_url, m3u8)
+
+        self.log("  resolve m3u8: %s" % m3u8[:200])
+        return m3u8
+
     # ---------- 播放 ----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
@@ -505,34 +534,35 @@ class Spider(Spider):
                 return res
 
         html = self._fetch(play_page)
-        real_url = ""
+        share_url = ""
         m = _RE_PLAYER_AAAA.search(html)
         if m:
             raw = m.group(1)
             try:
                 data = json.loads(raw)
-                real_url = data.get("url", "") or ""
+                share_url = data.get("url", "") or ""
             except Exception:
                 m2 = re.search(r'"url"\s*:\s*"([^"]+)"', raw)
                 if m2:
-                    real_url = m2.group(1)
-        if real_url:
-            real_url = real_url.replace("\\/", "/").replace("&amp;", "&")
+                    share_url = m2.group(1)
+        if share_url:
+            share_url = share_url.replace("\\/", "/").replace("&amp;", "&")
 
-        if real_url:
-            # share 短链交给 TVBox 跟随 302，直出
-            res = {
-                "parse": 0,
-                "playUrl": "",
-                "url": real_url,
-                "header": {
-                    "User-Agent": UA,
-                    "Referer": self.site_url + "/",
-                },
-            }
-            self._play_cache[play_page] = (now, res)
-            self.log("  => %s" % real_url[:160])
-            return res
+        if share_url:
+            self.log("  share: %s" % share_url[:160])
+            real_m3u8 = self._resolve_share_url(share_url)
+            if real_m3u8:
+                res = {
+                    "parse": 0,
+                    "playUrl": "",
+                    "url": real_m3u8,
+                    "header": {
+                        "User-Agent": UA,
+                        "Referer": share_url,
+                    },
+                }
+                self._play_cache[play_page] = (now, res)
+                return res
 
         # 兜底：交给 TVBox 嗅探
         res = {
