@@ -1,5 +1,10 @@
 # coding=utf-8
-"""被窝网 parse=1 版本，Python不解析share，直接返回中转链接，壳原生支持parse=1，零依赖"""
+"""
+被窝网 beiwowang.com
+适配 webhtv Chaquo 壳【纯标准库版本，无requests、无lxml】
+TVBOX/影视仓协议，playerContent内部完整解析，parse=0，不需要修改Java壳
+仅用于本地技术学习，版权风险自行承担
+"""
 import re
 import json
 import urllib.request
@@ -7,6 +12,7 @@ import urllib.parse
 from html.parser import HTMLParser
 from base.spider import Spider
 
+# 简易HTML解析器，替代lxml，纯标准库
 class SimpleHtmlParser(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -55,6 +61,7 @@ class Spider(Spider):
             'Referer': self.host
         }
         self.RE_PLAYER_AAAA = re.compile(r'var\s+player_aaaa\s*=\s*(\{.*?\})\s*;', re.S | re.I)
+        self.RE_MAIN = re.compile(r'var\s+main\s*=\s*"([^"]+)"', re.S | re.I)
         self._cat_map = {
             "1": "dianying",
             "2": "lianxuju",
@@ -69,6 +76,7 @@ class Spider(Spider):
     def init(self, extend=''):
         pass
 
+    # ========== 纯urllib GET请求，替代requests ==========
     def _get(self, url, params=None, referer=None):
         try:
             headers = self.headers.copy()
@@ -94,6 +102,7 @@ class Spider(Spider):
             return self.host + url
         return url
 
+    # ========== 用内置HTMLParser解析列表卡片，替代lxml ==========
     def _parse_video_list(self, html):
         videos = []
         parser = SimpleHtmlParser()
@@ -133,6 +142,7 @@ class Spider(Spider):
                     total = p
         return total
 
+    # ========== 首页分类 ==========
     def homeContent(self, filter):
         classes = [
             {"type_name": "电影", "type_id": "1"},
@@ -175,6 +185,7 @@ class Spider(Spider):
             pass
         return {"list": videos}
 
+    # ========== 分类内容 ==========
     def categoryContent(self, tid, pg, filter, extend):
         videos = []
         try:
@@ -200,11 +211,14 @@ class Spider(Spider):
         except Exception:
             return {'list': [], 'page': 1, 'pagecount': 0, 'limit': 0, 'total': 0}
 
+    # ========== 详情页，纯正则提取，不依赖lxml ==========
     def detailContent(self, ids):
         try:
             vod_id = str(ids[0])
             detail_url = self._fix_url(vod_id)
             html = self._get(detail_url)
+
+            # 标题
             vod_name = ""
             h1_match = re.search(r'<div class="movie-info">\s*<h1>(.*?)</h1>', html, re.S)
             if h1_match:
@@ -213,32 +227,43 @@ class Spider(Spider):
                 title_match = re.search(r'<title>(.*?)</title>', html, re.S)
                 if title_match:
                     vod_name = title_match.group(1).split("_")[0].strip()
+
+            # 封面
             vod_pic = ""
             pic_match = re.search(r'<div class="movie-poster".*?<img.*?data-original="([^"]+)"', html, re.S)
             if pic_match:
                 vod_pic = pic_match.group(1)
             vod_pic = self._fix_url(vod_pic)
+
+            # 年份
             vod_year = ""
             m_year = re.search(r'(\d{4})', html)
             if m_year:
                 vod_year = m_year.group(1)
+
+            # 简介
             vod_content = ""
             desc_match = re.search(r'<div class="movie-description">(.*?)</div>', html, re.S)
             if desc_match:
                 vod_content = re.sub(r'<.+?>', "", desc_match.group(1)).strip()
+
+            # 剧集列表
             ep_list = []
             ep_items = re.findall(r'<li>\s*<a href="([^"]+)" title="([^"]+)"', html, re.S)
             for href, title in ep_items:
                 ep_href = self._fix_url(href)
                 ep_title = title.strip()
                 ep_list.append(f"{ep_title}${ep_href}")
+
             play_from = []
             play_urls = []
             if ep_list:
                 play_from.append("如意")
                 play_urls.append("#".join(ep_list))
+
             vod_play_from_str = "$$$".join(play_from)
             vod_play_url_str = "$$$".join(play_urls)
+
             info = {
                 "vod_id": vod_id,
                 "vod_name": vod_name,
@@ -256,9 +281,11 @@ class Spider(Spider):
         except Exception:
             return {"list": []}
 
+    # ========== 播放解析【重点，纯标准库，无第三方包】 ==========
     def playerContent(self, flag, id, vipFlags):
         try:
             play_page_url = self._fix_url(id)
+            # 1 获取播放页，拿到player_aaaa
             play_html = self._get(play_page_url, referer=self.host)
             match_player = self.RE_PLAYER_AAAA.search(play_html)
             if not match_player:
@@ -269,18 +296,36 @@ class Spider(Spider):
             if not share_url:
                 return {"parse":0, "url":"", "header":""}
             share_url = self._fix_url(share_url)
+
+            # 2 获取share中转页面，提取var main
+            share_html = self._get(share_url, referer=play_page_url)
+            match_main = self.RE_MAIN.search(share_html)
+            if not match_main:
+                return {"parse":0, "url":"", "header":""}
+            main_path = match_main.group(1)
+
+            # 拼接m3u8完整地址
+            if main_path.startswith("/"):
+                url_parse = urllib.parse.urlparse(share_url)
+                base_domain = f"{url_parse.scheme}://{url_parse.netloc}"
+                real_m3u8 = base_domain + main_path
+            else:
+                real_m3u8 = main_path
+
+            # 返回结果，壳直接播放，携带防盗链头
             return {
-                "parse": 1,
+                "parse": 0,
                 "playUrl": "",
-                "url": share_url,
+                "url": real_m3u8,
                 "header": json.dumps({
                     "User-Agent": self.headers["User-Agent"],
-                    "Referer": play_page_url
+                    "Referer": share_url
                 })
             }
         except Exception:
             return {"parse": 0, "playUrl": "", "url": "", "header": ""}
 
+    # ========== 搜索 ==========
     def searchContent(self, key, quick, pg='1'):
         videos = []
         try:
@@ -294,6 +339,7 @@ class Spider(Spider):
         except Exception:
             return {'list': [], 'page': 1, 'pagecount': 0, 'limit': 0, 'total': 0}
 
+    # ========== 壳强制需要的固定方法，不能删 ==========
     def isVideoFormat(self, url):
         return any(url.lower().endswith(fmt) for fmt in ['.m3u8', '.mp4', '.flv', '.ts', '.mkv', '.avi', '.mov'])
 
