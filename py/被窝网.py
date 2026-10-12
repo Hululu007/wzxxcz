@@ -522,6 +522,10 @@ class Spider(Spider):
                     "Referer": share_url,
                 },
             }
+            # ===== 新增: 打印返回的 URL 和 Referer, 方便排查 =====
+            self.log("  => 返回 URL: %s" % real)
+            self.log("  => 返回 Referer: %s" % share_url)
+
             self._play_cache[play_page] = (now, res)
             self.log("  => m3u8: %s" % real[:160])
             return res
@@ -552,17 +556,9 @@ class Spider(Spider):
         return ""
 
     def _resolve_m3u8(self, share_url):
-        """
-        1. 请求 share 页, 抓 var main = "/xxx/index.m3u8?sign=xxx"
-        2. 把 \/ 还原成 /
-        3. 拼成 master m3u8 完整 URL
-        4. 请求 master, 解析 #EXT-X-STREAM-INF 下一行的子 m3u8
-        5. 返回子 m3u8 绝对 URL (含 ?sign=)
-        """
         pu = urlparse(share_url)
         base_ry = "%s://%s" % (pu.scheme, pu.netloc)
 
-        # 第 1 步: 请求 share 页
         html = self._fetch(share_url, headers={
             "User-Agent": UA,
             "Referer": base_ry + "/",
@@ -577,7 +573,6 @@ class Spider(Spider):
             self.log("  share 页未找到 var main")
             return ""
 
-        # ===== 关键修复: 把 \/ 还原成 / =====
         main_path = m.group(1).replace("\\/", "/")
 
         if main_path.startswith("http"):
@@ -588,7 +583,6 @@ class Spider(Spider):
             master_url = base_ry + "/" + main_path
         self.log("  master: %s" % master_url[:160])
 
-        # 第 2 步: 请求 master m3u8
         master = self._fetch(master_url, headers={
             "User-Agent": UA,
             "Referer": share_url,
@@ -598,7 +592,6 @@ class Spider(Spider):
             self.log("  master 非 m3u8, 直接返回 master_url")
             return master_url
 
-        # 第 3 步: 解析子 m3u8
         lines = [ln.strip() for ln in master.split("\n") if ln.strip()]
         for i, ln in enumerate(lines):
             if ln.startswith("#EXT-X-STREAM-INF"):
