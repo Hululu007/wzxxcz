@@ -2,8 +2,8 @@
 """
 山阳影院 zstjjs.com | TVBox Python 爬虫
 网站源码结构编写：
-  - 首页/分类/搜索：解析 stui-vodlist__box
-  - 详情页：解析 h1.title / p.data / stui-content__playlist
+  - 首页/分类/搜索：解析 stui-vodlist__box（含 pic-text 角标）
+  - 详情页：解析 h1.title / p.data / stui-content__playlist / 更新时间
   - 播放页：解析 var player_aaaa={...} 中的 url 字段
   - 筛选：按网站真实 url 规则拼接
 """
@@ -208,7 +208,7 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
-# 【新增】带 pic-text 角标的卡片（4 个捕获组：href, title, pic, remarks）
+# 【副标题来源①】列表卡片带 pic-text 角标（4 个捕获组：href, title, pic, remarks）
 _RE_CARD_NEW = re.compile(
     r'<a[^>]*class="[^"]*stui-vodlist__thumb[^"]*"[^>]*'
     r'href="(/detail/[^"]+)"[^>]*'
@@ -217,7 +217,7 @@ _RE_CARD_NEW = re.compile(
     r'[\s\S]*?<span[^>]*class="[^"]*pic-text[^"]*"[^>]*>([\s\S]*?)</span>',
     re.S | re.I)
 
-# 原卡片（无 pic-text，3 个捕获组）
+# 兜底卡片（无角标，3 个捕获组）
 _RE_CARD = re.compile(
     r'<a[^>]*class="[^"]*stui-vodlist__thumb[^"]*"[^>]*'
     r'href="(/detail/[^"]+)"[^>]*'
@@ -258,7 +258,7 @@ _RE_ACTOR = re.compile(r'<span class="text-muted">主演：</span>([\s\S]*?)</p>
 _RE_YEAR = re.compile(r'<span class="text-muted hidden-xs">年份：</span>([\s\S]*?)</p>', re.I)
 _RE_AREA = re.compile(r'<span class="text-muted hidden-xs">地区：</span>([\s\S]*?)</p>', re.I)
 
-# 【新增】更新时间：<p class="data hidden-sm"><span class="text-muted">更新：</span>2026-10-13</p>
+# 【副标题来源②】详情页更新时间
 _RE_UPDATE = re.compile(r'<span class="text-muted">更新：</span>\s*([\d\-]+)', re.I)
 
 _RE_PLAYLIST_BLOCK = re.compile(
@@ -295,7 +295,6 @@ class Spider(Spider):
         self.log("init: site=%s" % self.site_url)
 
     def _fetch(self, url, timeout=20, headers=None):
-        """直接使用 requests 请求，不依赖 TVBox 基类（基类不保证有 fetch 方法）"""
         try:
             h = dict(self.headers)
             if headers:
@@ -331,14 +330,14 @@ class Spider(Spider):
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
 
-    # ---------- 列表解析（优先带 pic-text 角标） ----------
+    # ---------- 列表解析（副标题来源：卡片右下角 pic-text 角标） ----------
     def _extract_videos(self, html):
         videos = []
         seen = set()
         if not html:
             return videos
 
-        # 【改动】优先用带 pic-text 角标的卡片
+        # ① 优先用带 pic-text 角标的卡片 → 拿到"第23集 / HD国语 / 已完结"等
         matches = _RE_CARD_NEW.findall(html)
         if matches:
             for href, alt, pic, remarks in matches:
@@ -354,7 +353,7 @@ class Spider(Spider):
                 })
             return videos
 
-        # 兜底：原来的无角标卡片
+        # ② 兜底：无角标卡片
         matches = _RE_CARD.findall(html)
         if not matches:
             matches = _RE_CARD2.findall(html)
@@ -571,7 +570,7 @@ class Spider(Spider):
         if m:
             area = self._clean(m.group(1)).strip("&nbsp; ")
 
-        # 【新增】更新时间
+        # 详情页更新时间
         update_time = ""
         m = _RE_UPDATE.search(html)
         if m:
@@ -597,7 +596,7 @@ class Spider(Spider):
             self.log("  未找到剧集")
             return {"list": []}
 
-        # 【改动】remarks 拼上更新时间
+        # remarks 拼上更新时间
         remarks = ("%s %s" % (year, area)).strip()
         if update_time:
             remarks = ("%s 更新:%s" % (remarks, update_time)).strip()
@@ -686,7 +685,6 @@ class Spider(Spider):
         return ""
 
     def _build_player_header(self, real_url):
-        """按 m3u8 域名判断 Referer：量子资源用站点 Referer，其他第三方 CDN 用空 Referer"""
         host = ""
         try:
             host = (urllib.parse.urlparse(real_url).netloc or "").lower()
