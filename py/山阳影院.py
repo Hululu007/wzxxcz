@@ -208,6 +208,16 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
+# 带 pic-text 角标的卡片（4 个捕获组：href, title, pic, remarks）
+_RE_CARD_NEW = re.compile(
+    r'<a[^>]*class="[^"]*stui-vodlist__thumb[^"]*"[^>]*'
+    r'href="(/detail/[^"]+)"[^>]*'
+    r'title="([^"]*)"[^>]*'
+    r'data-original="([^"]*)"[^>]*>'
+    r'[\s\S]*?<span[^>]*class="[^"]*pic-text[^"]*"[^>]*>([\s\S]*?)</span>',
+    re.S | re.I)
+
+# 兜底卡片（无 pic-text，3 个捕获组）
 _RE_CARD = re.compile(
     r'<a[^>]*class="[^"]*stui-vodlist__thumb[^"]*"[^>]*'
     r'href="(/detail/[^"]+)"[^>]*'
@@ -248,7 +258,7 @@ _RE_ACTOR = re.compile(r'<span class="text-muted">主演：</span>([\s\S]*?)</p>
 _RE_YEAR = re.compile(r'<span class="text-muted hidden-xs">年份：</span>([\s\S]*?)</p>', re.I)
 _RE_AREA = re.compile(r'<span class="text-muted hidden-xs">地区：</span>([\s\S]*?)</p>', re.I)
 
-# 【新增】更新时间：<p class="data hidden-sm"><span class="text-muted">更新：</span>2026-10-13</p>
+# 更新时间：<p class="data hidden-sm"><span class="text-muted">更新：</span>2026-10-13</p>
 _RE_UPDATE = re.compile(r'<span class="text-muted">更新：</span>\s*([\d\-]+)', re.I)
 
 _RE_PLAYLIST_BLOCK = re.compile(
@@ -321,13 +331,30 @@ class Spider(Spider):
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
 
-    # ---------- 列表解析 ----------
+    # ---------- 列表解析（优先带 pic-text 角标） ----------
     def _extract_videos(self, html):
         videos = []
         seen = set()
         if not html:
             return videos
 
+        # 优先：带 pic-text 角标的卡片
+        matches = _RE_CARD_NEW.findall(html)
+        if matches:
+            for href, alt, pic, remarks in matches:
+                if href in seen:
+                    continue
+                seen.add(href)
+                pic = pic if pic and "load.gif" not in pic else self.default_pic
+                videos.append({
+                    "vod_id":      href,
+                    "vod_name":    self._clean(alt)[:100],
+                    "vod_pic":     self._fix_url(pic),
+                    "vod_remarks": self._clean(remarks)[:30],
+                })
+            return videos
+
+        # 兜底：原来的无角标卡片
         matches = _RE_CARD.findall(html)
         if not matches:
             matches = _RE_CARD2.findall(html)
@@ -544,7 +571,7 @@ class Spider(Spider):
         if m:
             area = self._clean(m.group(1)).strip("&nbsp; ")
 
-        # 【新增】更新时间
+        # 更新时间
         update_time = ""
         m = _RE_UPDATE.search(html)
         if m:
@@ -570,7 +597,7 @@ class Spider(Spider):
             self.log("  未找到剧集")
             return {"list": []}
 
-        # 【改动】remarks 拼上更新时间
+        # remarks 拼上更新时间
         remarks = ("%s %s" % (year, area)).strip()
         if update_time:
             remarks = ("%s 更新:%s" % (remarks, update_time)).strip()
