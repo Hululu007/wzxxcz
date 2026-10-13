@@ -338,21 +338,22 @@ class Spider(Spider):
         class_id = extend.get("class") or tid
 
         # 其它筛选
-        area   = extend.get("area") or ""
         letter = extend.get("letter") or ""
-        order  = extend.get("sort") or "time"
+        order  = extend.get("sort") or ""
         year   = extend.get("year") or ""
 
-        # MacCMS 六段位：/vodshow/{class}-{area}-{letter}-{order}-{page}-{year}.html
-        url = "%s/vodshow/%s-%s-%s-%s-%s-%s.html" % (
-            self.site_url,
-            class_id,
-            urllib.parse.quote(area) if area else "",
-            urllib.parse.quote(letter) if letter else "",
-            order,
-            page,
-            year,
-        )
+        # MacCMS /vodshow/ 12 段模板：
+        # 索引 0=分类  2=排序  5=字母  8=页码  11=年份
+        # 其余段留空，用 "-" 补足
+        segs = [""] * 12
+        segs[0]  = str(class_id)
+        segs[2]  = order
+        segs[5]  = letter
+        segs[8]  = "" if page <= 1 else str(page)
+        segs[11] = year
+
+        path = "-".join(segs)
+        url = "%s/vodshow/%s.html" % (self.site_url, path)
 
         self.log("category: %s" % url)
         html = self._fetch(url)
