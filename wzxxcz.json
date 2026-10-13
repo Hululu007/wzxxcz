@@ -1436,7 +1436,7 @@
             "key": "aarnadhya",
             "name": "🔥燃超影院",
             "type": 3,
-            "api": "./aarnadhya.js",
+            "api": "./js/aarnadhya.js",
             "searchable": 1,
             "quickSearch": 1,
             "changeable": 1
