@@ -1,10 +1,8 @@
 # coding=utf-8
 """
-燃超影院 aarnadhya.com | TVBox Python 爬虫 (lxml 版)
-DOM 解析：
-  - 卡片 a.zj-item，标题 @title，封面 img@src，状态 .zj-corner
-  - 详情 .zj-detail-cover img、.zj-meta、.zj-desc、.zj-eps[data-sid] a.zj-ep
-  - 播放 player_aaaa 内嵌 url 直链
+燃超影院 aarnadhya.com | TVBox Python 爬虫 (curl_cffi 版)
+- 用 curl_cffi 模拟 Chrome TLS 指纹，绕过 Cloudflare Bot Fight
+- DOM 解析卡片、剧集、播放
 """
 import re
 import sys
@@ -13,6 +11,13 @@ import time
 import urllib.parse
 
 sys.path.append('..')
+
+# ============ 网络层：curl_cffi 优先 ============
+try:
+    from curl_cffi import requests as cffi_requests
+    HAS_CFFI = True
+except ImportError:
+    HAS_CFFI = False
 
 try:
     from base.spider import Spider
@@ -53,18 +58,13 @@ except ImportError:
 
     Spider = _BaseSpider
 
-try:
-    from lxml import etree
-    HAS_LXML = True
-except ImportError:
-    HAS_LXML = False
-
 
 HOST = "https://www.aarnadhya.com"
-UA = ("Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36")
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 DEFAULT_PIC = HOST + "/template/m4-drama/images/favicon.svg"
 
+# ============ 顶级分类 ============
 CLASSES = [
     {"type_id": "1",  "type_name": "电影"},
     {"type_id": "2",  "type_name": "电视剧"},
@@ -118,8 +118,42 @@ for c in CLASSES:
     ]
 
 
+# ============ 正则 ============
+_RE_CARD = re.compile(
+    r'<a\s+href="(/video/[^"]+\.html)"\s+class="zj-item"[^>]*?title="([^"]*)"[^>]*>'
+    r'([\s\S]*?)</a>',
+    re.S | re.I)
+_RE_BANNER = re.compile(
+    r'<a\s+href="(/video/[^"]+\.html)"\s+class="zj-banner"[^>]*?title="([^"]*)"[^>]*>'
+    r'([\s\S]*?)</a>',
+    re.S | re.I)
+
+_RE_CARD_IMG = re.compile(r'<img[^>]*?src="([^"]*)"', re.I)
+_RE_CARD_CORNER = re.compile(r'<div\s+class="zj-corner[^"]*"[^>]*title="([^"]*)"', re.I)
+_RE_CARD_TITLE = re.compile(r'<div\s+class="zj-item-title[^"]*"[^>]*>([\s\S]*?)</div>', re.I)
+_RE_BANNER_TAGS = re.compile(r'<span>([^<]*)</span>', re.I)
+
+_RE_H1 = re.compile(r'<h1[^>]*>([\s\S]*?)<small', re.I)
+_RE_DETAIL_COVER = re.compile(r'<div\s+class="zj-detail-cover">\s*<img[^>]*?src="([^"]*)"', re.S | re.I)
+_RE_DIRECTOR = re.compile(r'导演：<b>([^<]*)</b>', re.I)
+_RE_ACTOR = re.compile(r'主演：<b>([^<]*)</b>', re.I)
+_RE_SCORE = re.compile(r'<span\s+class="zj-rating-num">([\d.]+)</span>', re.I)
+_RE_DESC = re.compile(r'<p\s+class="zj-desc[^"]*">([\s\S]*?)</p>', re.S | re.I)
+
+_RE_LINE_BTN = re.compile(
+    r'<button\s+class="zj-line-btn[^"]*"\s+type="button"\s+data-sid="(\d+)"[^>]*>([^<]*)</button>',
+    re.I)
+_RE_EPS_PANEL = re.compile(
+    r'<div\s+class="zj-eps\s+zj-eps-panel[^"]*"\s+data-sid="(\d+)"[^>]*>([\s\S]*?)</div>',
+    re.S | re.I)
+_RE_EP = re.compile(
+    r'<a\s+href="(/play/[^"]+\.html)"\s+class="zj-ep[^"]*"\s+title="([^"]*)"[^>]*>([^<]*)</a>',
+    re.I)
+_RE_LAST_PAGE = re.compile(r'href="/tv/\d+/[^"]*?page/(\d+)', re.I)
+
 _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>', re.I)
 _RE_PLAYER_URL = re.compile(r'"url"\s*:\s*"([^"]+)"', re.I)
+_RE_PLAYER_FROM = re.compile(r'"from"\s*:\s*"([^"]*)"', re.I)
 
 
 class Spider(Spider):
@@ -143,20 +177,28 @@ class Spider(Spider):
         }
         self.default_pic = DEFAULT_PIC
         self._play_cache = {}
-        self.log("init: site=%s lxml=%s" % (self.site_url, HAS_LXML))
+        self.log("init: site=%s cffi=%s" % (self.site_url, HAS_CFFI))
 
-    def _fetch(self, url, timeout=20, headers=None):
+    # ---------- 网络 ----------
+    def _fetch(self, url, timeout=25, headers=None):
+        h = dict(self.headers)
+        h["Referer"] = url
+        if headers:
+            h.update(headers)
         try:
-            h = dict(self.headers)
-            h["Referer"] = url
-            if headers:
-                h.update(headers)
-            rsp = self.fetch(url, headers=h, timeout=timeout)
-            if hasattr(rsp, "text"):
+            if HAS_CFFI:
+                # 关键：impersonate 模拟 Chrome TLS 指纹，过 Cloudflare
+                rsp = cffi_requests.get(url, headers=h, timeout=timeout,
+                                        impersonate="chrome120", verify=False)
                 return rsp.text or ""
-            if hasattr(rsp, "content"):
-                return rsp.content.decode("utf-8", "ignore")
-            return str(rsp)
+            else:
+                # 兜底：原生 requests（会被 Cloudflare 拦，仅防完全跑不起来）
+                rsp = self.fetch(url, headers=h, timeout=timeout)
+                if hasattr(rsp, "text"):
+                    return rsp.text or ""
+                if hasattr(rsp, "content"):
+                    return rsp.content.decode("utf-8", "ignore")
+                return str(rsp)
         except Exception as e:
             self.log("fetch FAIL %s -> %s" % (url, e))
             return ""
@@ -177,80 +219,99 @@ class Spider(Spider):
         if not s:
             return ""
         s = (s.replace("&nbsp;", " ").replace("\xa0", " ")
-              .replace("&amp;", "&").replace("&quot;", '"'))
+              .replace("&amp;", "&").replace("&quot;", '"')
+              .replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">"))
         return re.sub(r"\s+", " ", s).strip()
 
-    # ---------- lxml 卡片解析 ----------
+    # ---------- 卡片解析 ----------
     def _extract_videos(self, html):
         videos = []
-        if not html or not HAS_LXML:
-            return videos
-        try:
-            tree = etree.HTML(html)
-        except Exception:
+        seen = set()
+        if not html:
             return videos
 
-        # a.zj-item —— 首页、分类页、搜索页结构一致
-        nodes = tree.xpath('//a[contains(@class,"zj-item")]')
-        seen = set()
-        for a in nodes:
-            href = a.get("href") or ""
-            if not href.startswith("/video/"):
-                continue
+        for m in _RE_CARD.finditer(html):
+            href, a_title, inner = m.group(1), m.group(2), m.group(3)
             if href in seen:
                 continue
             seen.add(href)
 
-            name = a.get("title") or ""
+            name = self._clean(a_title)
             if not name:
-                t = a.xpath('.//div[contains(@class,"zj-item-title")]/text()')
-                if t:
-                    name = self._clean(t[0])
+                tm = _RE_CARD_TITLE.search(inner)
+                if tm:
+                    name = self._clean(tm.group(1))
+            if not name:
+                name = href.rsplit("/", 1)[-1].replace(".html", "")
 
             pic = ""
-            imgs = a.xpath('.//img/@src')
-            if imgs:
-                pic = self._fix_url(imgs[0])
+            im = _RE_CARD_IMG.search(inner)
+            if im:
+                pic = self._fix_url(im.group(1))
+            if not pic:
+                pic = self.default_pic
 
             remark = ""
-            corners = a.xpath('.//div[contains(@class,"zj-corner")]/@title')
-            if corners:
-                remark = self._clean(corners[0])
+            cm = _RE_CARD_CORNER.search(inner)
+            if cm:
+                remark = self._clean(cm.group(1))
 
             videos.append({
                 "vod_id":      href,
                 "vod_name":    name[:100],
-                "vod_pic":     pic or self.default_pic,
+                "vod_pic":     pic,
                 "vod_remarks": remark,
             })
+
+        if not videos:
+            for m in _RE_BANNER.finditer(html):
+                href, a_title, inner = m.group(1), m.group(2), m.group(3)
+                if href in seen:
+                    continue
+                seen.add(href)
+
+                name = self._clean(a_title)
+                if not name:
+                    tm = re.search(r'<div\s+class="zj-banner-title[^"]*"[^>]*>([\s\S]*?)</div>', inner, re.I)
+                    if tm:
+                        name = self._clean(tm.group(1))
+
+                pic = ""
+                im = _RE_CARD_IMG.search(inner)
+                if im:
+                    pic = self._fix_url(im.group(1))
+                if not pic:
+                    pic = self.default_pic
+
+                remark = ""
+                tags = _RE_BANNER_TAGS.findall(inner)
+                if tags:
+                    remark = self._clean(tags[-1])
+
+                videos.append({
+                    "vod_id":      href,
+                    "vod_name":    name[:100],
+                    "vod_pic":     pic,
+                    "vod_remarks": remark,
+                })
+
         return videos
 
     def _page_count(self, html, current_page=1):
-        if not html or not HAS_LXML:
+        if not html:
             return current_page
-        try:
-            tree = etree.HTML(html)
-        except Exception:
-            return current_page
-        nums = tree.xpath('//nav[contains(@class,"zj-page")]//a/@href')
-        mx = current_page
-        for h in nums:
-            m = re.search(r'/page/(\d+)', h)
-            if m:
-                try:
-                    mx = max(mx, int(m.group(1)))
-                except Exception:
-                    pass
-        if mx > current_page:
-            return mx
-        spans = tree.xpath('//nav[contains(@class,"zj-page")]//span/text()')
-        for s in spans:
-            m = re.search(r'\d+/(\d+)', s)
-            if m:
-                try:
-                    return int(m.group(1))
-                except Exception:
-                    pass
+        nums = _RE_LAST_PAGE.findall(html)
+        if nums:
+            try:
+                return max(int(x) for x in nums)
+            except Exception:
+                pass
+        m = re.search(r'<span>\d+/(\d+)</span>', html)
+        if m:
+            try:
+                return int(m.group(1))
+            except Exception:
+                pass
         return current_page
 
     # ---------- TVBox 接口 ----------
@@ -279,6 +340,7 @@ class Spider(Spider):
             if extend[k] in ("", None, "全部"):
                 del extend[k]
 
+        # 站点真实拼接顺序：class → area → lang → page → year → by
         seg = []
         if extend.get("class"):
             seg.append("class/%s" % urllib.parse.quote(extend["class"]))
@@ -304,6 +366,7 @@ class Spider(Spider):
         videos = self._extract_videos(html)
         pc = self._page_count(html, page)
         self.log("  -> %d 条, 共 %d 页" % (len(videos), pc))
+
         return {
             "list": videos, "page": page, "pagecount": pc,
             "limit": 36, "total": pc * 36,
@@ -329,6 +392,7 @@ class Spider(Spider):
     def searchContentPage(self, key, quick, pg="1"):
         return self.searchContent(key, quick, pg)
 
+    # ---------- 详情 ----------
     def detailContent(self, ids):
         if not ids:
             return {"list": []}
@@ -336,81 +400,62 @@ class Spider(Spider):
         url = vod_id if vod_id.startswith("http") else self._fix_url(vod_id)
         self.log("detail: %s" % url)
         html = self._fetch(url)
-        if not html or not HAS_LXML:
+        if not html:
             return {"list": []}
 
-        try:
-            tree = etree.HTML(html)
-        except Exception:
-            return {"list": []}
-
-        # 标题
-        h1 = tree.xpath('//div[contains(@class,"zj-detail-info")]//h1//text()')
         name = ""
-        if h1:
-            name = self._clean(h1[0])
+        m = _RE_H1.search(html)
+        if m:
+            name = self._clean(m.group(1))
         if not name:
-            t = tree.xpath('//title/text()')
-            if t:
-                name = self._clean(t[0].split("_")[0].split("-")[0])
+            m = re.search(r"<title>(.*?)</title>", html, re.S)
+            if m:
+                name = self._clean(m.group(1).split("_")[0].split("-")[0])
         name = name or vod_id
 
-        # 封面
         pic = self.default_pic
-        imgs = tree.xpath('//div[contains(@class,"zj-detail-cover")]//img/@src')
-        if imgs:
-            pic = self._fix_url(imgs[0])
+        m = _RE_DETAIL_COVER.search(html)
+        if m:
+            pic = self._fix_url(m.group(1))
 
-        # 导演 / 主演
         director, actor = "", ""
-        metas = tree.xpath('//div[contains(@class,"zj-detail-info")]//span[contains(@class,"zj-meta-item")]')
-        for s in metas:
-            txt = "".join(s.itertext()).strip()
-            if txt.startswith("导演："):
-                director = self._clean(txt.replace("导演：", ""))
-            elif txt.startswith("主演："):
-                actor = self._clean(txt.replace("主演：", ""))
+        m = _RE_DIRECTOR.search(html)
+        if m:
+            director = self._clean(m.group(1))
+        m = _RE_ACTOR.search(html)
+        if m:
+            actor = self._clean(m.group(1))
 
-        # 评分
         score = ""
-        sc = tree.xpath('//span[contains(@class,"zj-rating-num")]/text()')
-        if sc:
-            score = self._clean(sc[0])
+        m = _RE_SCORE.search(html)
+        if m:
+            score = m.group(1)
 
-        # 简介
         content = ""
-        desc = tree.xpath('//p[contains(@class,"zj-desc")]//text()')
-        if desc:
-            content = self._clean("".join(desc))
+        m = _RE_DESC.search(html)
+        if m:
+            content = self._clean(m.group(1))
         if not content:
-            md = tree.xpath('//meta[@name="description"]/@content')
-            if md:
-                content = self._clean(md[0])
+            m = re.search(r'<meta[^>]*name="description"[^>]*content="([^"]*)"', html, re.I)
+            if m:
+                content = self._clean(m.group(1))
         content = ("🍊小橙子提醒您：请勿相信视频中的广告！\n" + content) if content \
             else "🍊小橙子提醒您：请勿相信视频中的广告！"
 
-        # 线路名
         line_names = {}
-        for b in tree.xpath('//button[contains(@class,"zj-line-btn")]'):
-            sid = b.get("data-sid") or ""
-            if sid:
-                line_names[sid] = self._clean(b.text_content() if hasattr(b, "text_content") else "".join(b.itertext())) or ("线路%s" % sid)
+        for m in _RE_LINE_BTN.finditer(html):
+            line_names[m.group(1)] = self._clean(m.group(2)) or ("线路%s" % m.group(1))
 
-        # 剧集面板
         groups = {}
-        for panel in tree.xpath('//div[contains(@class,"zj-eps-panel")]'):
-            sid = panel.get("data-sid") or ""
-            if not sid:
-                continue
+        for pm in _RE_EPS_PANEL.finditer(html):
+            sid = pm.group(1)
+            block = pm.group(2)
             eps = []
-            for a in panel.xpath('.//a[contains(@class,"zj-ep")]'):
-                href = a.get("href") or ""
-                if not href:
-                    continue
+            for em in _RE_EP.finditer(block):
+                href = em.group(1)
+                title = self._clean(em.group(2)) or self._clean(em.group(3))
                 if href.startswith("/"):
                     href = self.site_url + href
-                title = a.get("title") or "".join(a.itertext())
-                title = self._clean(title)
                 eps.append((title or ("第%d集" % (len(eps) + 1)), href))
             if eps:
                 groups[sid] = eps
@@ -428,8 +473,9 @@ class Spider(Spider):
         for sid in order:
             if sid not in groups:
                 continue
+            eps = groups[sid]
             play_from.append(line_names.get(sid, "线路%s" % sid))
-            play_url.append("#".join("%s$%s" % (n, h) for n, h in groups[sid]))
+            play_url.append("#".join("%s$%s" % (n, h) for n, h in eps))
 
         return {"list": [{
             "vod_id":       vod_id,
@@ -444,6 +490,7 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
+    # ---------- 播放 ----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -456,21 +503,38 @@ class Spider(Spider):
 
         html = self._fetch(play_page)
         real_url = ""
+        from_flag = ""
+
         if html:
             pm = _RE_PLAYER.search(html)
             if pm:
-                um = _RE_PLAYER_URL.search(pm.group(1))
+                obj_text = pm.group(1)
+                um = _RE_PLAYER_URL.search(obj_text)
                 if um:
-                    real_url = um.group(1).replace("\\/", "/").replace("&amp;", "&")
+                    real_url = um.group(1)
+                    real_url = (real_url.replace("\\/", "/")
+                                .replace("&amp;", "&"))
+                fm = _RE_PLAYER_FROM.search(obj_text)
+                if fm:
+                    from_flag = fm.group(1)
 
         if real_url:
-            self.log("  player url: %s" % real_url[:160])
-            res = {"parse": 0, "playUrl": "", "url": real_url,
-                   "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
-        else:
-            self.log("  未找到 player_aaaa，交给 TVBox 嗅探")
-            res = {"parse": 1, "playUrl": "", "url": play_page,
-                   "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
+            self.log("  player url: %s (from=%s)" % (real_url[:160], from_flag))
+            res = {
+                "parse": 0,
+                "playUrl": "",
+                "url": real_url,
+                "header": {
+                    "User-Agent": UA,
+                    "Referer": self.site_url + "/",
+                },
+            }
+            self._play_cache[play_page] = (now, res)
+            return res
+
+        self.log("  未找到 player_aaaa，交给 TVBox 嗅探")
+        res = {"parse": 1, "playUrl": "", "url": play_page,
+               "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
         self._play_cache[play_page] = (now, res)
         return res
 
