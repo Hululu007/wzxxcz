@@ -1,8 +1,9 @@
 # coding=utf-8
 """
 燃超影院 aarnadhya.com | TVBox Python 爬虫
-DOM 结构解析：
-  - 分类页 /tv/{id}.html，路径式筛选 /class/ /area/ /lang/ /year/ /by/
+DOM 与 URL 结构解析：
+  - 首页 /，卡片 a.zj-item，banner a.zj-banner
+  - 分类页 /tv/{id}.html，路径式筛选 class/area/lang/page/year/by
   - 卡片 a.zj-item，标题 .zj-item-title，封面 img[src]
   - 详情 /video/{id}.html，剧集 .zj-eps[data-sid] a.zj-ep
   - 播放 /play/{id}/{sid}/{nid}.html，player_aaaa 内嵌 url 直链
@@ -60,7 +61,7 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 DEFAULT_PIC = HOST + "/template/m4-drama/images/favicon.svg"
 
-# ============ 分类配置（严格按各分类页截图） ============
+# ============ 顶级分类（站点导航栏，仅此 7 个） ============
 CLASSES = [
     {"type_id": "1",  "type_name": "电影"},
     {"type_id": "2",  "type_name": "电视剧"},
@@ -71,22 +72,7 @@ CLASSES = [
     {"type_id": "47", "type_name": "AI漫剧"},
 ]
 
-# 每个 tid 的「分类」栏（对应站点 class/ 路径）
-_CAT_MAP = {
-    "1":  ["剧情片", "动作片", "冒险片", "喜剧片", "奇幻片", "恐怖片",
-           "悬疑片", "惊悚片", "灾难片", "爱情片", "犯罪片", "科幻片",
-           "动画电影", "战争片", "经典片"],
-    "2":  ["国产剧", "港剧", "韩剧", "日剧", "泰剧", "台剧", "欧美剧",
-           "新马剧", "纪录片"],
-    "3":  ["总裁短剧", "神豪短剧", "穿越重生短剧", "都市短剧",
-           "年代短剧", "长篇剧场"],
-    "4":  ["国产动漫", "日本动漫", "韩国动漫", "欧美动漫", "港台动漫", "AI漫剧"],
-    "5":  ["国产综艺", "港台综艺", "韩国综艺", "日本综艺", "欧美综艺"],
-    "48": ["网飞电影", "网飞自制剧"],
-    "47": ["国产动漫", "日本动漫", "韩国动漫", "欧美动漫", "港台动漫", "AI漫剧"],
-}
-
-# 每个 tid 的「剧情」栏（也走 class/ 路径，与「分类」互斥）
+# 各 tid 的剧情筛选（走 class/ 路径）
 _GENRE_MAP = {
     "1":  ["剧情", "喜剧", "动作", "恐怖", "爱情", "科幻", "惊悚",
            "战争", "犯罪", "悬疑", "奇幻"],
@@ -104,11 +90,8 @@ _GENRE_MAP = {
            "爱情", "科幻", "动作"],
 }
 
-# 全站统一的地区 / 语言 / 年份 / 排序
 _AREAS = ["大陆", "香港", "台湾", "美国", "韩国", "日本", "欧美", "英国",
           "法国", "泰国", "印度", "加拿大", "西班牙", "德国", "俄罗斯", "新加坡"]
-_LANGS = ["国语", "英语", "日语", "粤语", "韩语", "法语", "西班牙语", "泰语",
-          "德语", "意大利语", "俄语", "印地语", "其它"]
 _YEARS = [str(y) for y in range(2026, 2011, -1)]
 _SORTS = [("time", "最近更新"), ("hits", "最多播放"), ("score", "最高评分")]
 
@@ -124,27 +107,29 @@ FILTERS = {}
 for c in CLASSES:
     tid = c["type_id"]
     FILTERS[tid] = [
-        {"key": "class", "name": "分类",
-         "value": _mk(_CAT_MAP.get(tid, []))},
-        {"key": "genre", "name": "剧情",
+        {"key": "class", "name": "剧情",
          "value": _mk(_GENRE_MAP.get(tid, []))},
-        {"key": "area",  "name": "地区", "value": _mk(_AREAS)},
-        {"key": "lang",  "name": "语言", "value": _mk(_LANGS)},
-        {"key": "year",  "name": "年份", "value": _mk(_YEARS)},
-        {"key": "by",    "name": "排序",
+        {"key": "area", "name": "地区", "value": _mk(_AREAS)},
+        {"key": "year", "name": "年份", "value": _mk(_YEARS)},
+        {"key": "by",   "name": "排序",
          "value": [{"n": n, "v": v} for v, n in _SORTS]},
     ]
 
 
-# ============ 正则（严格对照真实源码） ============
+# ============ 正则 ============
 _RE_CARD = re.compile(
     r'<a\s+href="(/video/[^"]+\.html)"\s+class="zj-item"[^>]*?title="([^"]*)"[^>]*>'
     r'([\s\S]*?)</a>',
     re.S | re.I)
-_RE_CARD_SCORE = re.compile(r'<span\s+class="zj-score">([^<]*)</span>', re.I)
+_RE_BANNER = re.compile(
+    r'<a\s+href="(/video/[^"]+\.html)"\s+class="zj-banner"[^>]*?title="([^"]*)"[^>]*>'
+    r'([\s\S]*?)</a>',
+    re.S | re.I)                                              # 修正: 首页 banner 兜底
+
 _RE_CARD_IMG = re.compile(r'<img[^>]*?src="([^"]*)"', re.I)
 _RE_CARD_CORNER = re.compile(r'<div\s+class="zj-corner[^"]*"[^>]*title="([^"]*)"', re.I)
 _RE_CARD_TITLE = re.compile(r'<div\s+class="zj-item-title[^"]*"[^>]*>([\s\S]*?)</div>', re.I)
+_RE_BANNER_TAGS = re.compile(r'<span>([^<]*)</span>', re.I)  # 修正: banner 状态标签
 
 _RE_H1 = re.compile(r'<h1[^>]*>([\s\S]*?)<small', re.I)
 _RE_DETAIL_COVER = re.compile(r'<div\s+class="zj-detail-cover">\s*<img[^>]*?src="([^"]*)"', re.S | re.I)
@@ -162,7 +147,7 @@ _RE_EPS_PANEL = re.compile(
 _RE_EP = re.compile(
     r'<a\s+href="(/play/[^"]+\.html)"\s+class="zj-ep[^"]*"\s+title="([^"]*)"[^>]*>([^<]*)</a>',
     re.I)
-_RE_LAST_PAGE = re.compile(r'href="/tv/\d+/page/(\d+)', re.I)
+_RE_LAST_PAGE = re.compile(r'href="/tv/\d+/[^"]*?page/(\d+)', re.I)
 
 _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>', re.I)
 _RE_PLAYER_URL = re.compile(r'"url"\s*:\s*"([^"]+)"', re.I)
@@ -183,7 +168,7 @@ class Spider(Spider):
         self.site_url = (self.extend.get("site") or HOST).rstrip("/")
         self.headers = {
             "User-Agent": UA,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Referer": self.site_url + "/",
         }
@@ -237,6 +222,8 @@ class Spider(Spider):
         seen = set()
         if not html:
             return videos
+
+        # 主抓 a.zj-item
         for m in _RE_CARD.finditer(html):
             href, a_title, inner = m.group(1), m.group(2), m.group(3)
             if href in seen:
@@ -269,6 +256,41 @@ class Spider(Spider):
                 "vod_pic":     pic,
                 "vod_remarks": remark,
             })
+
+        # 首页 banner 兜底（zj-item 为空时才会走到这）
+        if not videos:
+            for m in _RE_BANNER.finditer(html):
+                href, a_title, inner = m.group(1), m.group(2), m.group(3)
+                if href in seen:
+                    continue
+                seen.add(href)
+
+                name = self._clean(a_title)
+                if not name:
+                    tm = re.search(r'<div\s+class="zj-banner-title[^"]*"[^>]*>([\s\S]*?)</div>', inner, re.I)
+                    if tm:
+                        name = self._clean(tm.group(1))
+
+                pic = ""
+                im = _RE_CARD_IMG.search(inner)
+                if im:
+                    pic = self._fix_url(im.group(1))
+                if not pic:
+                    pic = self.default_pic
+
+                # banner 状态取最后一个 span（可能是"已完结"）
+                remark = ""
+                tags = _RE_BANNER_TAGS.findall(inner)
+                if tags:
+                    remark = self._clean(tags[-1])
+
+                videos.append({
+                    "vod_id":      href,
+                    "vod_name":    name[:100],
+                    "vod_pic":     pic,
+                    "vod_remarks": remark,
+                })
+
         return videos
 
     def _page_count(self, html, current_page=1):
@@ -310,23 +332,20 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        # 清理空值
         for k in list(extend.keys()):
             if extend[k] in ("", None, "全部"):
                 del extend[k]
 
-        # class 与 genre 互斥，都走 class/ 路径；class 优先
-        cls = extend.get("class") or extend.get("genre") or ""
-
+        # 站点真实拼接顺序：class → area → lang → page → year → by
         seg = []
-        if page > 1:
-            seg.append("page/%d" % page)
-        if cls:
-            seg.append("class/%s" % urllib.parse.quote(cls))
+        if extend.get("class"):
+            seg.append("class/%s" % urllib.parse.quote(extend["class"]))
         if extend.get("area"):
             seg.append("area/%s" % urllib.parse.quote(extend["area"]))
         if extend.get("lang"):
             seg.append("lang/%s" % urllib.parse.quote(extend["lang"]))
+        if page > 1:
+            seg.append("page/%d" % page)
         if extend.get("year"):
             seg.append("year/%s" % extend["year"])
         if extend.get("by"):
@@ -379,7 +398,6 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # 标题
         name = ""
         m = _RE_H1.search(html)
         if m:
@@ -390,13 +408,11 @@ class Spider(Spider):
                 name = self._clean(m.group(1).split("_")[0].split("-")[0])
         name = name or vod_id
 
-        # 封面
         pic = self.default_pic
         m = _RE_DETAIL_COVER.search(html)
         if m:
             pic = self._fix_url(m.group(1))
 
-        # 导演 / 主演
         director, actor = "", ""
         m = _RE_DIRECTOR.search(html)
         if m:
@@ -405,13 +421,11 @@ class Spider(Spider):
         if m:
             actor = self._clean(m.group(1))
 
-        # 评分
         score = ""
         m = _RE_SCORE.search(html)
         if m:
             score = m.group(1)
 
-        # 简介
         content = ""
         m = _RE_DESC.search(html)
         if m:
@@ -423,12 +437,10 @@ class Spider(Spider):
         content = ("🍊小橙子提醒您：请勿相信视频中的广告！\n" + content) if content \
             else "🍊小橙子提醒您：请勿相信视频中的广告！"
 
-        # 剧集：先拿到线路名（按 data-sid 顺序）
         line_names = {}
         for m in _RE_LINE_BTN.finditer(html):
             line_names[m.group(1)] = self._clean(m.group(2)) or ("线路%s" % m.group(1))
 
-        # 剧集面板：<div class="zj-eps zj-eps-panel" data-sid="3">...</div>
         groups = {}
         for pm in _RE_EPS_PANEL.finditer(html):
             sid = pm.group(1)
@@ -447,7 +459,6 @@ class Spider(Spider):
             self.log("  未解析到剧集")
             return {"list": []}
 
-        # 按线路按钮顺序排列
         order = list(line_names.keys())
         for sid in groups.keys():
             if sid not in order:
@@ -460,8 +471,6 @@ class Spider(Spider):
             eps = groups[sid]
             play_from.append(line_names.get(sid, "线路%s" % sid))
             play_url.append("#".join("%s$%s" % (n, h) for n, h in eps))
-
-        self.log("  剧集线路: %s" % {k: len(v) for k, v in groups.items()})
 
         return {"list": [{
             "vod_id":       vod_id,
@@ -518,7 +527,6 @@ class Spider(Spider):
             self._play_cache[play_page] = (now, res)
             return res
 
-        # 兜底
         self.log("  未找到 player_aaaa，交给 TVBox 嗅探")
         res = {"parse": 1, "playUrl": "", "url": play_page,
                "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
