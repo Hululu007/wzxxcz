@@ -208,6 +208,16 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
+# 【新增】带 pic-text 角标的卡片（4 个捕获组：href, title, pic, remarks）
+_RE_CARD_NEW = re.compile(
+    r'<a[^>]*class="[^"]*stui-vodlist__thumb[^"]*"[^>]*'
+    r'href="(/detail/[^"]+)"[^>]*'
+    r'title="([^"]*)"[^>]*'
+    r'data-original="([^"]*)"[^>]*>'
+    r'[\s\S]*?<span[^>]*class="[^"]*pic-text[^"]*"[^>]*>([\s\S]*?)</span>',
+    re.S | re.I)
+
+# 原卡片（无 pic-text，3 个捕获组）
 _RE_CARD = re.compile(
     r'<a[^>]*class="[^"]*stui-vodlist__thumb[^"]*"[^>]*'
     r'href="(/detail/[^"]+)"[^>]*'
@@ -318,13 +328,30 @@ class Spider(Spider):
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
 
-    # ---------- 列表解析 ----------
+    # ---------- 列表解析（优先带 pic-text 角标） ----------
     def _extract_videos(self, html):
         videos = []
         seen = set()
         if not html:
             return videos
 
+        # 【改动】优先用带 pic-text 角标的卡片
+        matches = _RE_CARD_NEW.findall(html)
+        if matches:
+            for href, alt, pic, remarks in matches:
+                if href in seen:
+                    continue
+                seen.add(href)
+                pic = pic if pic and "load.gif" not in pic else self.default_pic
+                videos.append({
+                    "vod_id":      href,
+                    "vod_name":    self._clean(alt)[:100],
+                    "vod_pic":     self._fix_url(pic),
+                    "vod_remarks": self._clean(remarks)[:30],
+                })
+            return videos
+
+        # 兜底：原来的无角标卡片
         matches = _RE_CARD.findall(html)
         if not matches:
             matches = _RE_CARD2.findall(html)
