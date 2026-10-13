@@ -204,7 +204,6 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
-# 卡片（含 pic-text 角标，4 个捕获组：href, title, pic, remarks）
 _RE_CARD = re.compile(
     r'<a[^>]*class="[^"]*stui-vodlist__thumb[^"]*"[^>]*'
     r'href="(/detail/[^"]+)"[^>]*'
@@ -213,7 +212,6 @@ _RE_CARD = re.compile(
     r'[\s\S]*?<span[^>]*class="[^"]*pic-text[^"]*"[^>]*>([\s\S]*?)</span>',
     re.S | re.I)
 
-# 搜索页 v-thumb 卡片（含 pic-text）
 _RE_CARD2 = re.compile(
     r'<a[^>]*class="[^"]*v-thumb[^"]*"[^>]*'
     r'href="(/detail/[^"]+)"[^>]*'
@@ -222,7 +220,6 @@ _RE_CARD2 = re.compile(
     r'[\s\S]*?<span[^>]*class="[^"]*pic-text[^"]*"[^>]*>([\s\S]*?)</span>',
     re.S | re.I)
 
-# 兜底卡片（无 pic-text）
 _RE_CARD_FALLBACK = re.compile(
     r'<a[^>]*class="[^"]*(?:stui-vodlist__thumb|v-thumb)[^"]*"[^>]*'
     r'href="(/detail/[^"]+)"[^>]*'
@@ -230,7 +227,6 @@ _RE_CARD_FALLBACK = re.compile(
     r'(?:data-original|src)="([^"]*)"',
     re.S | re.I)
 
-# ===== <li> 分块抓取（最稳，不依赖属性顺序） =====
 _RE_LIST_ITEM = re.compile(
     r'<li[^>]*class="[^"]*col-[^"]*"[^>]*>([\s\S]*?)</li>',
     re.I)
@@ -240,15 +236,12 @@ _RE_BLOCK_PIC      = re.compile(r'(?:data-original|src)="([^"]+)"', re.I)
 _RE_BLOCK_PIC_TEXT = re.compile(
     r'<span[^>]*class="[^"]*pic-text[^"]*"[^>]*>([\s\S]*?)</span>', re.I)
 
-# 详情页标题
 _RE_H1 = re.compile(r'<h1[^>]*class="title"[^>]*>([\s\S]*?)</h1>', re.I)
 
-# 详情页封面
 _RE_DETAIL_PIC = re.compile(
     r'<a[^>]*class="[^"]*stui-vodlist__thumb[^"]*picture[^"]*"[^>]*>'
     r'[\s\S]*?<img[^>]*data-original="([^"]+)"', re.I)
 
-# meta 标签
 _RE_META_DESC = re.compile(
     r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', re.I)
 _RE_OG_IMAGE = re.compile(
@@ -258,23 +251,19 @@ _RE_OG_ACTOR = re.compile(
 _RE_OG_DIRECTOR = re.compile(
     r'<meta[^>]*property=["\']og:video:director["\'][^>]*content=["\']([^"\']*)["\']', re.I)
 
-# 详情页真实简介
 _RE_INTRO_DESC = re.compile(
     r'<p[^>]*class="[^"]*desc[^"]*"[^>]*>[\s\S]*?'
     r'<span[^>]*class="[^"]*left[^"]*text-muted[^"]*"[^>]*>简介：</span>\s*'
     r'([\s\S]*?)\s*<a[^>]*href="#desc"',
     re.I)
 
-# 详情页 p.data 里的导演/主演/年份/地区（兜底）
 _RE_DIRECTOR = re.compile(r'<span class="text-muted">导演：</span>([\s\S]*?)</p>', re.I)
 _RE_ACTOR = re.compile(r'<span class="text-muted">主演：</span>([\s\S]*?)</p>', re.I)
 _RE_YEAR = re.compile(r'<span class="text-muted hidden-xs">年份：</span>([\s\S]*?)</p>', re.I)
 _RE_AREA = re.compile(r'<span class="text-muted hidden-xs">地区：</span>([\s\S]*?)</p>', re.I)
 
-# 详情页更新时间
 _RE_UPDATE = re.compile(r'<span class="text-muted">更新：</span>\s*([\d\-]+)', re.I)
 
-# 剧集列表
 _RE_PLAYLIST_BLOCK = re.compile(
     r'<h3 class="title">\s*<img[^>]*/>\s*([^<]+?)\s*</h3>[\s\S]*?'
     r'<ul class="stui-content__playlist[^"]*">([\s\S]*?)</ul>',
@@ -282,10 +271,8 @@ _RE_PLAYLIST_BLOCK = re.compile(
 _RE_PLAYLIST_ITEM = re.compile(
     r'<li[^>]*><a[^>]*href="([^"]+)"[^>]*>([^<]+)</a></li>', re.I)
 
-# 播放页 player_aaaa
 _RE_PLAYER_AAAA = re.compile(r'var\s+player_aaaa\s*=\s*(\{.*?\})\s*</script>', re.S)
 
-# 分页
 _RE_PAGE_MAX = re.compile(r'/page/(\d+)\.html', re.I)
 
 
@@ -356,7 +343,6 @@ class Spider(Spider):
         if not html:
             return videos
 
-        # 优先：按 <li> 分块抓取
         for block in _RE_LIST_ITEM.finditer(html):
             chunk = block.group(1)
 
@@ -386,7 +372,6 @@ class Spider(Spider):
                 "vod_remarks": remarks,
             })
 
-        # 兜底：<li> 分块没抓到（如搜索页），退回卡片正则
         if not videos:
             matches = _RE_CARD.findall(html)
             if not matches:
@@ -442,7 +427,6 @@ class Spider(Spider):
 
     def _build_category_url(self, tid, pg, extend):
         """按网站真实 url 规则拼接（带白名单校验，防止 TVBox 传回非法值）"""
-        # 构建每个维度的白名单
         wl_class, wl_plot, wl_area, wl_year, wl_lang, wl_letter = set(), set(), set(), set(), set(), set()
         wl_sort = {"time", "hits", "score"}
         for key, name, items in _FILTERS.get(tid, []):
@@ -462,7 +446,6 @@ class Spider(Spider):
         letter = extend.get("letter", "").strip()
         sort   = extend.get("sort", "").strip() or "time"
 
-        # 白名单过滤，非法值全部清空
         if cls    not in wl_class:   cls = ""
         if plot   not in wl_plot:    plot = ""
         if area   not in wl_area:    area = ""
@@ -576,7 +559,6 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # 标题
         name = ""
         m = _RE_H1.search(html)
         if m:
@@ -588,7 +570,6 @@ class Spider(Spider):
                 name = self._clean(m.group(1).split("_")[0].split("-")[0])
         name = re.sub(r"\s*\(\d{4}\)\s*$", "", name).strip() or vod_id
 
-        # 封面
         pic = self.default_pic
         m = _RE_OG_IMAGE.search(html)
         if m:
@@ -598,7 +579,6 @@ class Spider(Spider):
             if m:
                 pic = self._fix_url(m.group(1))
 
-        # 简介
         content = ""
         m = _RE_INTRO_DESC.search(html)
         if m:
@@ -615,7 +595,6 @@ class Spider(Spider):
         else:
             content = INTRO_PREFIX
 
-        # 主演
         actor = ""
         m = _RE_OG_ACTOR.search(html)
         if m:
@@ -626,7 +605,6 @@ class Spider(Spider):
                 actor = re.sub(r"\s+", " ", self._clean(m.group(1))).strip()
                 actor = re.sub(r"\s*,\s*", ", ", actor)
 
-        # 导演
         director = ""
         m = _RE_OG_DIRECTOR.search(html)
         if m:
@@ -636,7 +614,6 @@ class Spider(Spider):
             if m:
                 director = re.sub(r"\s+", " ", self._clean(m.group(1))).strip()
 
-        # 年份 / 地区
         year = ""
         m = _RE_YEAR.search(html)
         if m:
@@ -646,13 +623,11 @@ class Spider(Spider):
         if m:
             area = self._clean(m.group(1)).strip("&nbsp; ")
 
-        # 更新时间
         update_time = ""
         m = _RE_UPDATE.search(html)
         if m:
             update_time = m.group(1).strip()
 
-        # 剧集列表
         play_from = []
         play_url = []
         for block in _RE_PLAYLIST_BLOCK.finditer(html):
@@ -672,7 +647,6 @@ class Spider(Spider):
             self.log("  未找到剧集")
             return {"list": []}
 
-        # remarks 拼上更新时间
         remarks = ("%s %s" % (year, area)).strip()
         if update_time:
             remarks = ("%s 更新:%s" % (remarks, update_time)).strip()
@@ -777,12 +751,21 @@ class Spider(Spider):
 
         if real_url:
             self.log("  => m3u8: %s" % real_url[:160])
-            # 按 m3u8 域名动态设置 Referer（解决暴风资源拒绝跨站 Referer）
+            # 电影多为 bfzym3u8（暴风），该 CDN 只允许无 Referer；电视剧多为 lzm3u8（量子），
+            # 需要 Referer 为站点域名。按 from 字段或域名判断。
+            host = ""
             try:
-                p = urllib.parse.urlparse(real_url)
-                ref = "%s://%s/" % (p.scheme, p.netloc)
+                host = (urllib.parse.urlparse(real_url).netloc or "").lower()
             except Exception:
+                pass
+
+            # 暴风资源：空 Referer
+            if ("fengbao" in host) or ("bfzy" in host) or ("bfvp" in host):
                 ref = ""
+            # 量子等：站点 Referer
+            else:
+                ref = self.site_url + "/"
+
             return {
                 "parse": 0, "playUrl": "", "url": real_url,
                 "header": {"User-Agent": UA, "Referer": ref},
