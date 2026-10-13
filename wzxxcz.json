@@ -1433,13 +1433,10 @@
             "api": "./py/飘花播播.py"
         },
         {
-            "key": "aarnadhya",
-            "name": "🔥燃超影院",
+            "key": "gqc",
+            "name": "🌃共青春影院",
             "type": 3,
-            "api": "./js/aarnadhya.js",
-            "searchable": 1,
-            "quickSearch": 1,
-            "changeable": 1
+            "api": "./py/共青春影院.py"
         },
         {
             "key": "蝶卡影视",
