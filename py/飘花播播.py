@@ -4,6 +4,7 @@
 结构依据：MacCMS + mxtheme 模板
 - 详情页 /voddetail/{id}.html
 - 播放页 /vodplay/{id}-{sid}-{nid}.html
+- 分类页 /vodshow/{class}-{area}-{letter}-{order}-{page}-{year}.html
 - player_aaaa.url 为 Base64(URL编码) 的 m3u8 地址
 - 搜索 /vodsearch/{wd}-------------.html ，有5秒频率限制
 """
@@ -70,6 +71,59 @@ CLASSES = [
     {"type_id": "5", "type_name": "短剧"},
 ]
 
+# 子分类映射（已全部实测）
+_SUB_CLASS = {
+    "1": [("动作片", "6"), ("喜剧片", "7"), ("爱情片", "8"), ("科幻片", "9"),
+          ("恐怖片", "10"), ("剧情片", "11"), ("战争片", "12"),
+          ("纪录片", "21"), ("其他片", "22")],
+    "2": [("国产剧", "13"), ("港台剧", "14"), ("日韩剧", "15"),
+          ("欧美剧", "16"), ("海外剧", "20")],
+    "3": [],   # 综艺：无子分类
+    "4": [],   # 动漫：无子分类
+    "5": [],   # 短剧：无子分类
+}
+
+# 年份
+_YEARS = [{"n": "全部", "v": ""}] + \
+         [{"n": str(y), "v": str(y)} for y in range(2026, 2009, -1)]
+
+# 字母
+_LETTERS = [{"n": "全部", "v": ""}] + \
+           [{"n": x, "v": x} for x in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"] + \
+           [{"n": "0-9", "v": "0-9"}]
+
+# 排序（网站：时间/人气/评分）
+_SORTS = [
+    {"n": "时间", "v": "time"},
+    {"n": "人气", "v": "hits"},
+    {"n": "评分", "v": "score"},
+]
+
+# 组装 FILTERS
+FILTERS = {}
+for c in CLASSES:
+    tid = c["type_id"]
+    subs = _SUB_CLASS.get(tid, [])
+
+    if subs:
+        # 电影 / 剧集：类型 + 年份 + 字母 + 排序
+        class_vals = [{"n": "全部", "v": ""}] + [{"n": n, "v": sid} for n, sid in subs]
+        FILTERS[tid] = [
+            {"key": "class",  "name": "类型", "value": class_vals},
+            {"key": "year",   "name": "年份", "value": _YEARS},
+            {"key": "letter", "name": "字母", "value": _LETTERS},
+            {"key": "sort",   "name": "排序", "value": _SORTS},
+        ]
+    else:
+        # 综艺 / 动漫 / 短剧：只有 年份 + 字母 + 排序
+        FILTERS[tid] = [
+            {"key": "year",   "name": "年份", "value": _YEARS},
+            {"key": "letter", "name": "字母", "value": _LETTERS},
+            {"key": "sort",   "name": "排序", "value": _SORTS},
+        ]
+
+
+# 线路别名兜底
 _LINE_ALIAS = {
     "lzm3u8": "量子云",
     "wjm3u8": "无尽云",
@@ -77,49 +131,17 @@ _LINE_ALIAS = {
     "ffm3u8": "非凡云",
 }
 
-_SORTS = [{"n": "最新", "v": "time"}, {"n": "最热", "v": "hits"}]
-_YEARS = [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]
-_AREAS = [
-    {"n": "全部", "v": ""},
-    {"n": "大陆", "v": "大陆"}, {"n": "香港", "v": "香港"},
-    {"n": "台湾", "v": "台湾"}, {"n": "美国", "v": "美国"},
-    {"n": "韩国", "v": "韩国"}, {"n": "日本", "v": "日本"},
-    {"n": "泰国", "v": "泰国"}, {"n": "英国", "v": "英国"},
-]
-
-_FILTERS_MAP = {
-    "1": ["全部", "动作片", "喜剧片", "爱情片", "科幻片", "恐怖片", "剧情片", "战争片", "纪录片", "其他片"],
-    "2": ["全部", "国产剧", "港台剧", "日韩剧", "欧美剧", "海外剧"],
-    "3": ["全部", "国产综艺", "港台综艺", "日韩综艺", "欧美综艺"],
-    "4": ["全部", "国漫", "日漫", "欧美动漫"],
-    "5": ["全部", "短剧", "AI漫剧"],
-}
-
-FILTERS = {}
-for c in CLASSES:
-    tid = c["type_id"]
-    FILTERS[tid] = [
-        {"key": "class", "name": "分类",
-         "value": [{"n": x, "v": "" if x == "全部" else x} for x in _FILTERS_MAP.get(tid, ["全部"])]},
-        {"key": "area", "name": "地区", "value": _AREAS},
-        {"key": "year", "name": "年份", "value": _YEARS},
-        {"key": "sort", "name": "排序", "value": _SORTS},
-    ]
-
 
 # ============ 正则 ============
-_RE_CARD = re.compile(
+# 列表卡片：抓整个 a 块
+_RE_CARD_BLOCK = re.compile(
     r'<a\s+href="(/voddetail/\d+\.html)"[^>]*?title="([^"]*)"[^>]*?class="[^"]*module-poster-item[^"]*"'
-    r'[\s\S]{0,400}?'
-    r'(?:<div class="module-item-note">([^<]*)</div>)?'
-    r'[\s\S]{0,200}?'
-    r'<img[^>]*?(?:data-original|src)="([^"]*)"',
+    r'[\s\S]*?</a>',
     re.S | re.I)
+_RE_CARD_PIC  = re.compile(r'<img[^>]*?(?:data-original|src)="([^"]*)"', re.I)
+_RE_CARD_NOTE = re.compile(r'<div class="module-item-note">([^<]*)</div>', re.I)
 
-_RE_CARD_A = re.compile(
-    r'<a\s+href="(/voddetail/\d+\.html)"[^>]*?title="([^"]*)"',
-    re.I)
-
+# 详情页字段
 _RE_H1 = re.compile(r'<h1[^>]*>([\s\S]*?)</h1>', re.I)
 _RE_PIC = re.compile(r'data-original="(/upload/vod/[^"]+)"', re.I)
 _RE_INTRO = re.compile(
@@ -144,19 +166,18 @@ _RE_UPDATE = re.compile(
 _RE_EPISODE_CNT = re.compile(
     r'<span class="module-info-item-title">集数：</span>\s*<div[^>]*>([^<]*)</div>',
     re.I)
-
 _RE_TAGS = re.compile(
     r'<div class="module-info-tag-link"><a[^>]*>([^<]+)</a>',
     re.I)
-
 _RE_A_TAG = re.compile(r'<a[^>]*>([^<]*)</a>', re.I)
 
+# 详情页播放源 tab
 _RE_TAB = re.compile(
     r'<div class="module-tab-item tab-item"[^>]*data-dropdown-value="([^"]+)"[^>]*>'
     r'\s*<span>([^<]+)</span>',
     re.I)
 
-# ====== 剧集：抓整个 a 块，再从块里单独抓 href / title / span ======
+# 详情页剧集：抓整个 a 块
 _RE_EP_BLOCK = re.compile(
     r'<a\s+class="module-play-list-link[^"]*"\s+([^>]*?)>(.*?)</a>',
     re.S | re.I)
@@ -164,9 +185,12 @@ _RE_EP_HREF  = re.compile(r'href="(/vodplay/(\d+)-(\d+)-(\d+)\.html)"', re.I)
 _RE_EP_TITLE = re.compile(r'title="([^"]*)"', re.I)
 _RE_EP_SPAN  = re.compile(r'<span>([^<]*)</span>', re.I)
 
+# 播放页
 _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>', re.S)
 
-_RE_PAGE = re.compile(r'/vodshow/[^"\']+?page/(\d+)', re.I)
+# 分页
+_RE_PAGE_NUM = re.compile(r'/vodshow/[^"\']*?-(\d+)---[^"\']*?\.html', re.I)
+_RE_PAGE_TAIL = re.compile(r'尾页[^/]*href="[^"]*?-(\d+)---', re.I)
 
 
 class Spider(Spider):
@@ -238,11 +262,25 @@ class Spider(Spider):
         if not html:
             return videos
 
-        for m in _RE_CARD.finditer(html):
-            href, title, note, pic = m.group(1), m.group(2), m.group(3) or "", m.group(4)
+        for mb in _RE_CARD_BLOCK.finditer(html):
+            href = mb.group(1)
+            title = mb.group(2)
+            block = mb.group(0)
+
             if href in seen:
                 continue
             seen.add(href)
+
+            pic = ""
+            mp = _RE_CARD_PIC.search(block)
+            if mp:
+                pic = mp.group(1)
+
+            note = ""
+            mn = _RE_CARD_NOTE.search(block)
+            if mn:
+                note = mn.group(1)
+
             videos.append({
                 "vod_id": href,
                 "vod_name": self._clean(title)[:100],
@@ -250,24 +288,18 @@ class Spider(Spider):
                 "vod_remarks": self._clean(note),
             })
 
-        if not videos:
-            for href, title in _RE_CARD_A.findall(html):
-                if href in seen:
-                    continue
-                seen.add(href)
-                videos.append({
-                    "vod_id": href,
-                    "vod_name": self._clean(title)[:100],
-                    "vod_pic": self.default_pic,
-                    "vod_remarks": "",
-                })
         return videos
 
     def _page_count(self, html, cur=1):
         if not html:
             return cur
         nums = []
-        for m in _RE_PAGE.finditer(html):
+        for m in _RE_PAGE_NUM.finditer(html):
+            try:
+                nums.append(int(m.group(1)))
+            except Exception:
+                pass
+        for m in _RE_PAGE_TAIL.finditer(html):
             try:
                 nums.append(int(m.group(1)))
             except Exception:
@@ -302,27 +334,32 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        area = extend.get("area") or ""
-        year = extend.get("year") or ""
-        sub = extend.get("class") or ""
+        # 子分类 id：extend["class"] 为空时用一级 tid
+        class_id = extend.get("class") or tid
 
-        if sub or area or year:
-            url = "%s/vodshow/%s-%s--------%s.html" % (
-                self.site_url, tid,
-                urllib.parse.quote(area) if area else "",
-                year)
-        else:
-            url = "%s/vodtype/%s.html" % (self.site_url, tid)
+        # 其它筛选
+        area   = extend.get("area") or ""
+        letter = extend.get("letter") or ""
+        order  = extend.get("sort") or "time"
+        year   = extend.get("year") or ""
 
-        if page > 1:
-            url = url.replace(".html", "/page/%d.html" % page) if ".html" in url \
-                else url + ("&" if "?" in url else "?") + "page=%d" % page
+        # MacCMS 六段位：/vodshow/{class}-{area}-{letter}-{order}-{page}-{year}.html
+        url = "%s/vodshow/%s-%s-%s-%s-%s-%s.html" % (
+            self.site_url,
+            class_id,
+            urllib.parse.quote(area) if area else "",
+            urllib.parse.quote(letter) if letter else "",
+            order,
+            page,
+            year,
+        )
 
         self.log("category: %s" % url)
         html = self._fetch(url)
         videos = self._extract_videos(html)
         pc = self._page_count(html, page)
-        return {"list": videos, "page": page, "pagecount": pc, "limit": 24, "total": pc * 24}
+        return {"list": videos, "page": page, "pagecount": pc,
+                "limit": 24, "total": pc * 24}
 
     def searchContent(self, key, quick, pg="1"):
         now = time.time()
@@ -341,7 +378,8 @@ class Spider(Spider):
 
         if "请勿频繁操作" in html or "系统提示" in html:
             self.log("search 被限频拦截")
-            return {"list": [], "page": page, "pagecount": 1, "limit": 24, "total": 0}
+            return {"list": [], "page": page, "pagecount": 1,
+                    "limit": 24, "total": 0}
 
         videos = self._extract_videos(html)
         return {"list": videos, "page": page,
@@ -360,7 +398,7 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # ---------- 标题 ----------
+        # 标题
         name = ""
         m = _RE_H1.search(html)
         if m:
@@ -371,20 +409,20 @@ class Spider(Spider):
                 name = self._clean(m.group(1).split("_")[0])
         name = re.sub(r"\s*\(\d{4}\)\s*$", "", name).strip() or vod_id
 
-        # ---------- 封面 ----------
+        # 封面
         pic = self.default_pic
         m = _RE_PIC.search(html)
         if m:
             pic = self._fix_url(m.group(1))
 
-        # ---------- 简介 ----------
+        # 简介
         content = ""
         m = _RE_INTRO.search(html)
         if m:
             content = self._clean(m.group(1))
         content = (INTRO_PREFIX + "\n" + content) if content else INTRO_PREFIX
 
-        # ---------- 元信息 ----------
+        # 元信息
         director = ""
         m = _RE_DIRECTOR.search(html)
         if m:
@@ -439,14 +477,13 @@ class Spider(Spider):
             remark_parts.append("更新:" + update)
         vod_remarks = " · ".join(remark_parts) if remark_parts else ""
 
-        # ---------- 播放源（tab 顺序） ----------
+        # 播放源
         tab_names = []
         for m in _RE_TAB.finditer(html):
             tn = self._clean(m.group(2))
             if tn:
                 tab_names.append(tn)
 
-        # ---------- 剧集解析 ----------
         groups = {}
         sid_order = []
         for mb in _RE_EP_BLOCK.finditer(html):
@@ -460,21 +497,16 @@ class Spider(Spider):
             sid = mh.group(3)
             nid = mh.group(4)
 
-            # 优先取 <span> 集名
             ep_name = ""
             ms = _RE_EP_SPAN.search(inner)
             if ms:
                 ep_name = self._clean(ms.group(1))
-            # 退回 title
             if not ep_name:
                 mt = _RE_EP_TITLE.search(attrs)
                 if mt:
                     ep_name = self._clean(mt.group(1))
-            # 再退回 "第nid集"
             if not ep_name:
                 ep_name = "第%s集" % nid
-
-            # 兜底清洗 title 前缀 "播放xxx第01集" -> "第01集"
             ep_name = re.sub(r'^播放.*?(第\s*\d+\s*集.*)$', r'\1', ep_name).strip()
             ep_name = re.sub(r'^播放', '', ep_name).strip()
             if not ep_name:
