@@ -401,6 +401,19 @@ class Spider(Spider):
         return {"list": self._extract_videos(html)}
 
     def _build_category_url(self, tid, pg, extend):
+        """按网站真实 url 规则拼接（带白名单校验，防止 TVBox 传回非法值）"""
+        # 构建每个维度的白名单
+        wl_class, wl_plot, wl_area, wl_year, wl_lang, wl_letter = set(), set(), set(), set(), set(), set()
+        wl_sort = {"time", "hits", "score"}
+        for key, name, items in _FILTERS.get(tid, []):
+            vals = {v for _, v in items if v}
+            if key == "class":    wl_class = vals
+            elif key == "plot":   wl_plot = vals
+            elif key == "area":   wl_area = vals
+            elif key == "year":   wl_year = vals
+            elif key == "lang":   wl_lang = vals
+            elif key == "letter": wl_letter = vals
+
         cls    = extend.get("class", "").strip()
         plot   = extend.get("plot", "").strip()
         area   = extend.get("area", "").strip()
@@ -408,6 +421,15 @@ class Spider(Spider):
         lang   = extend.get("lang", "").strip()
         letter = extend.get("letter", "").strip()
         sort   = extend.get("sort", "").strip() or "time"
+
+        # 白名单过滤，非法值全部清空
+        if cls    not in wl_class:   cls = ""
+        if plot   not in wl_plot:    plot = ""
+        if area   not in wl_area:    area = ""
+        if year   not in wl_year:    year = ""
+        if lang   not in wl_lang:    lang = ""
+        if letter not in wl_letter:  letter = ""
+        if sort   not in wl_sort:    sort = "time"
 
         path = "/pack"
         if sort and sort != "time":
