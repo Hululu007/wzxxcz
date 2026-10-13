@@ -82,7 +82,6 @@ _SUB_CLASS = {
     "5": [],
 }
 
-# 中文名 → 数字 id（兼容 TVBox 传 n 而不是 v）
 _NAME2ID = {
     "动作片": "6", "喜剧片": "7", "爱情片": "8", "科幻片": "9",
     "恐怖片": "10", "剧情片": "11", "战争片": "12", "纪录片": "21", "其他片": "22",
@@ -161,9 +160,13 @@ _RE_UPDATE = re.compile(
 _RE_EPISODE_CNT = re.compile(
     r'<span class="module-info-item-title">集数：</span>\s*<div[^>]*>([^<]*)</div>',
     re.I)
-_RE_TAGS = re.compile(
-    r'<div class="module-info-tag-link"><a[^>]*>([^<]+)</a>',
-    re.I)
+
+# 标签块 + 所有 <a>
+_RE_TAG_BLOCK = re.compile(
+    r'<div class="module-info-tag">([\s\S]*?)</div>\s*</div>',
+    re.S | re.I)
+_RE_TAG_A = re.compile(r'<a[^>]*>([^<]+)</a>', re.I)
+
 _RE_A_TAG = re.compile(r'<a[^>]*>([^<]*)</a>', re.I)
 
 _RE_TAB = re.compile(
@@ -334,7 +337,6 @@ class Spider(Spider):
                 v = v[0] if v else ""
             return str(v or "").strip()
 
-        # 子分类 id：兼容"数字 id"和"中文名"两种传参
         class_id = _pick("class") or str(tid)
         if class_id in _NAME2ID:
             class_id = _NAME2ID[class_id]
@@ -345,11 +347,7 @@ class Spider(Spider):
         order  = _pick("sort")
         year   = _pick("year")
 
-        # MacCMS 12 段真实字段（依据页面真实链接）：
-        #   0=class  2=order  4=letter  8=page  11=year
-        # 例如：
-        #   /vodshow/13--time---A------2026.html
-        #   /vodshow/13--time------3---2026.html
+        # MacCMS 12 段：0=class 2=order 4=letter 8=page 11=year
         segs = [""] * 12
         segs[0]  = class_id
         segs[2]  = order
@@ -364,7 +362,6 @@ class Spider(Spider):
         videos = self._extract_videos(html)
         self.log("category: %s | html=%d videos=%d" % (url, len(html), len(videos)))
 
-        # 兜底：vodshow 拿不到内容时退回 vodtype
         if not videos:
             fb = "%s/vodtype/%s.html" % (self.site_url, tid)
             if page > 1:
@@ -442,33 +439,44 @@ class Spider(Spider):
         m = _RE_DIRECTOR.search(html)
         if m:
             director = self._extract_names(m.group(1))
+
         writer = ""
         m = _RE_WRITER.search(html)
         if m:
             writer = self._extract_names(m.group(1))
+
         actor = ""
         m = _RE_ACTOR.search(html)
         if m:
             actor = self._extract_names(m.group(1))
+
+        # ---------- 片长（去重"分钟分钟"） ----------
         duration = ""
         m = _RE_DURATION.search(html)
         if m:
             duration = self._clean(m.group(1))
+            duration = re.sub(r'分钟+$', '分钟', duration)
+
         update = ""
         m = _RE_UPDATE.search(html)
         if m:
             update = self._clean(m.group(1))
+
         ep_cnt = ""
         m = _RE_EPISODE_CNT.search(html)
         if m:
             ep_cnt = self._clean(m.group(1))
 
+        # ---------- 标签：从 module-info-tag 整块里抓所有 <a> ----------
         tags = []
-        for m in _RE_TAGS.finditer(html):
-            t = self._clean(m.group(1))
-            if t:
-                tags.append(t)
+        mtb = _RE_TAG_BLOCK.search(html)
+        if mtb:
+            for am in _RE_TAG_A.finditer(mtb.group(1)):
+                t = self._clean(am.group(1))
+                if t and t not in tags:
+                    tags.append(t)
 
+        # ---------- 组装 ----------
         dir_parts = []
         if director:
             dir_parts.append(director)
@@ -487,6 +495,7 @@ class Spider(Spider):
             remark_parts.append("更新:" + update)
         vod_remarks = " · ".join(remark_parts) if remark_parts else ""
 
+        # 播放源
         tab_names = []
         for m in _RE_TAB.finditer(html):
             tn = self._clean(m.group(2))
