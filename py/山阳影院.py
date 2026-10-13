@@ -77,9 +77,6 @@ CLASSES = [
 ]
 
 # ============ 筛选数据（完全按真实网站） ============
-# 每项: (key, name, [(label, value), ...])
-# value 为 "" 表示"全部"
-
 _FILTERS = {
     # -------- 电影 --------
     "1": [
@@ -229,7 +226,7 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
-# 列表卡片：<a class="stui-vodlist__thumb lazyload" href="/detail/xxx.html" title="片名" data-original="封面">
+# 列表卡片
 _RE_CARD = re.compile(
     r'<a[^>]*class="[^"]*stui-vodlist__thumb[^"]*"[^>]*'
     r'href="(/detail/[^"]+)"[^>]*'
@@ -237,7 +234,6 @@ _RE_CARD = re.compile(
     r'data-original="([^"]*)"',
     re.S | re.I)
 
-# 备用卡片（搜索页/某些列表用 v-thumb）
 _RE_CARD2 = re.compile(
     r'<a[^>]*class="[^"]*v-thumb[^"]*"[^>]*'
     r'href="(/detail/[^"]+)"[^>]*'
@@ -253,17 +249,30 @@ _RE_DETAIL_PIC = re.compile(
     r'<a[^>]*class="[^"]*stui-vodlist__thumb[^"]*picture[^"]*"[^>]*>'
     r'[\s\S]*?<img[^>]*data-original="([^"]+)"', re.I)
 
-# 详情页简介（meta description 最稳）
+# meta 标签
 _RE_META_DESC = re.compile(
     r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', re.I)
+_RE_OG_IMAGE = re.compile(
+    r'<meta[^>]*property=["\']og:image["\'][^>]*content=["\']([^"\']*)["\']', re.I)
+_RE_OG_ACTOR = re.compile(
+    r'<meta[^>]*property=["\']og:video:actor["\'][^>]*content=["\']([^"\']*)["\']', re.I)
+_RE_OG_DIRECTOR = re.compile(
+    r'<meta[^>]*property=["\']og:video:director["\'][^>]*content=["\']([^"\']*)["\']', re.I)
 
-# 详情页导演/主演/年份/地区（在 p.data 里）
+# 详情页真实简介：<p class="desc ...">...<span class="left text-muted">简介：</span>XXX<a href="#desc">
+_RE_INTRO_DESC = re.compile(
+    r'<p[^>]*class="[^"]*desc[^"]*"[^>]*>[\s\S]*?'
+    r'<span[^>]*class="[^"]*left[^"]*text-muted[^"]*"[^>]*>简介：</span>\s*'
+    r'([\s\S]*?)\s*<a[^>]*href="#desc"',
+    re.I)
+
+# 详情页 p.data 里的导演/主演/年份/地区（兜底用）
 _RE_DIRECTOR = re.compile(r'<span class="text-muted">导演：</span>([\s\S]*?)</p>', re.I)
 _RE_ACTOR = re.compile(r'<span class="text-muted">主演：</span>([\s\S]*?)</p>', re.I)
 _RE_YEAR = re.compile(r'<span class="text-muted hidden-xs">年份：</span>([\s\S]*?)</p>', re.I)
 _RE_AREA = re.compile(r'<span class="text-muted hidden-xs">地区：</span>([\s\S]*?)</p>', re.I)
 
-# 剧集列表：<ul class="stui-content__playlist ..."><li><a href="...">第x集</a></li>...
+# 剧集列表
 _RE_PLAYLIST_BLOCK = re.compile(
     r'<h3 class="title">\s*<img[^>]*/>\s*([^<]+?)\s*</h3>[\s\S]*?'
     r'<ul class="stui-content__playlist[^"]*">([\s\S]*?)</ul>',
@@ -274,7 +283,7 @@ _RE_PLAYLIST_ITEM = re.compile(
 # 播放页 player_aaaa
 _RE_PLAYER_AAAA = re.compile(r'var\s+player_aaaa\s*=\s*(\{.*?\})\s*</script>', re.S)
 
-# 分页（取尾页 page/N）
+# 分页
 _RE_PAGE_MAX = re.compile(r'/page/(\d+)\.html', re.I)
 
 
@@ -385,7 +394,6 @@ class Spider(Spider):
 
     def _build_category_url(self, tid, pg, extend):
         """按网站真实 url 规则拼接"""
-        # 收集各维度值
         cls    = extend.get("class", "").strip()
         plot   = extend.get("plot", "").strip()
         area   = extend.get("area", "").strip()
@@ -394,17 +402,11 @@ class Spider(Spider):
         letter = extend.get("letter", "").strip()
         sort   = extend.get("sort", "").strip() or "time"
 
-        # 基础：/pack/id/{tid}.html
-        # 如果有 by 排序：/pack/by/{sort}/id/{tid}.html
         path = "/pack"
         if sort and sort != "time":
             path += "/by/%s" % sort
 
-        # class（剧情）优先用 class 路径；否则用 id
-        # 网站规则：按类型走 /pack/id/{tid}/...；按剧情走 /pack/class/{plot}/id/{tid}/...
         if cls:
-            # 类型值像 "动作片" 这种，对应 /pack/id/{子id}.html
-            # 需要映射：类型名 -> 子 id
             sub_id = self._class_to_subid(tid, cls)
             if sub_id:
                 path += "/id/%s" % sub_id
@@ -462,7 +464,6 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        # 清理空值
         for k in list(extend.keys()):
             if extend[k] in ("", None, "全部"):
                 del extend[k]
@@ -517,7 +518,6 @@ class Spider(Spider):
         m = _RE_H1.search(html)
         if m:
             name = self._clean(m.group(1))
-            # 去掉评分 span
             name = re.sub(r"\d+(\.\d+)?$", "", name).strip()
         if not name:
             m = re.search(r"<title>(.*?)</title>", html, re.S)
@@ -525,36 +525,53 @@ class Spider(Spider):
                 name = self._clean(m.group(1).split("_")[0].split("-")[0])
         name = re.sub(r"\s*\(\d{4}\)\s*$", "", name).strip() or vod_id
 
-        # 封面
+        # 封面：优先 og:image，兜底详情页 img data-original
         pic = self.default_pic
-        m = _RE_DETAIL_PIC.search(html)
+        m = _RE_OG_IMAGE.search(html)
         if m:
             pic = self._fix_url(m.group(1))
+        else:
+            m = _RE_DETAIL_PIC.search(html)
+            if m:
+                pic = self._fix_url(m.group(1))
 
-        # 简介
+        # 简介：优先 p.desc 里的真实简介，兜底 meta description
         content = ""
-        m = _RE_META_DESC.search(html)
+        m = _RE_INTRO_DESC.search(html)
         if m:
             content = self._clean(m.group(1))
-            # 去掉模板化的前后缀
-            content = re.sub(r"^《.*?》剧情介绍：", "", content)
-            content = re.sub(r"《.*?》在线观看.*$", "", content)
-            content = re.sub(r"《.*?》剧情观看分集解析.*$", "", content)
-            content = re.sub(r"，就来山阳影院.*$", "", content)
+        if not content:
+            m = _RE_META_DESC.search(html)
+            if m:
+                content = self._clean(m.group(1))
+                content = re.sub(r"^《.*?》剧情介绍：", "", content)
+                content = re.sub(r"，就来山阳影院.*$", "", content)
+                content = re.sub(r"《.*?》剧情观看分集解析.*$", "", content)
         if content:
             content = INTRO_PREFIX + "\n" + content
         else:
             content = INTRO_PREFIX
 
-        # 导演 / 主演
-        director = ""
-        m = _RE_DIRECTOR.search(html)
-        if m:
-            director = self._clean(m.group(1)).strip("&nbsp; ")
+        # 主演：优先 og:video:actor（完整）
         actor = ""
-        m = _RE_ACTOR.search(html)
+        m = _RE_OG_ACTOR.search(html)
         if m:
-            actor = self._clean(m.group(1)).strip("&nbsp; ")
+            actor = re.sub(r"\s*,\s*", ", ", m.group(1).strip())
+        if not actor:
+            m = _RE_ACTOR.search(html)
+            if m:
+                actor = re.sub(r"\s+", " ", self._clean(m.group(1))).strip()
+                actor = re.sub(r"\s*,\s*", ", ", actor)
+
+        # 导演：优先 og:video:director（完整）
+        director = ""
+        m = _RE_OG_DIRECTOR.search(html)
+        if m:
+            director = re.sub(r"\s*,\s*", ", ", m.group(1).strip())
+        if not director:
+            m = _RE_DIRECTOR.search(html)
+            if m:
+                director = re.sub(r"\s+", " ", self._clean(m.group(1))).strip()
 
         # 年份 / 地区（拼到 remarks）
         year = ""
@@ -570,7 +587,7 @@ class Spider(Spider):
         play_from = []
         play_url = []
         for block in _RE_PLAYLIST_BLOCK.finditer(html):
-            line_name = self._clean(block.group(1))  # "线路2" / "线路3" ...
+            line_name = self._clean(block.group(1))
             ul_html = block.group(2)
             eps = []
             for m2 in _RE_PLAYLIST_ITEM.finditer(ul_html):
@@ -602,38 +619,106 @@ class Spider(Spider):
         }]}
 
     # ---------- 播放 ----------
+    def _get_real_m3u8(self, play_page):
+        """从播放页拿 player_aaaa.url"""
+        html = self._fetch(play_page)
+        if not html:
+            return ""
+        m = _RE_PLAYER_AAAA.search(html)
+        if not m:
+            return ""
+        try:
+            data = json.loads(m.group(1))
+            u = data.get("url", "")
+            if u:
+                return u.replace("\\/", "/")
+        except Exception:
+            pass
+        return ""
+
+    def _find_alternative(self, play_page):
+        """
+        从播放页 URL 反推同剧其他线路的同一集：
+          /frame/z3133107/1/1.html  ->  抓 /detail/z3133107.html
+          找到同名集的 URL
+        """
+        m = re.match(r'(https?://[^/]+)/frame/(z\d+)/(\d+)/(\d+)\.html', play_page)
+        if not m:
+            return ""
+        host, vid, sid, ep_idx = m.groups()
+        detail_url = "%s/detail/%s.html" % (host, vid)
+        html = self._fetch(detail_url)
+        if not html:
+            return ""
+
+        lines = []  # [(line_name, [(ep_name, href), ...]), ...]
+        for block in _RE_PLAYLIST_BLOCK.finditer(html):
+            line_name = self._clean(block.group(1))
+            eps = []
+            for m2 in _RE_PLAYLIST_ITEM.finditer(block.group(2)):
+                href = m2.group(1).replace("&amp;", "&")
+                ep_name = self._clean(m2.group(2))
+                if href.startswith("/"):
+                    href = host + href
+                eps.append((ep_name, href))
+            if eps:
+                lines.append((line_name, eps))
+
+        # 找当前集名
+        cur_ep_name = ""
+        for name, eps in lines:
+            for en, href in eps:
+                if href == play_page:
+                    cur_ep_name = en
+                    break
+            if cur_ep_name:
+                break
+
+        if not cur_ep_name:
+            # 索引兜底：第 ep_idx 集
+            try:
+                idx = int(ep_idx) - 1
+                for name, eps in lines:
+                    if 0 <= idx < len(eps):
+                        en, href = eps[idx]
+                        if href != play_page:
+                            return href
+            except Exception:
+                pass
+            return ""
+
+        # 找其他线路里同名集的 URL
+        for name, eps in lines:
+            for en, href in eps:
+                if en == cur_ep_name and href != play_page:
+                    return href
+        return ""
+
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
 
-        html = self._fetch(play_page)
-        if not html:
-            return {"parse": 1, "playUrl": "", "url": play_page,
-                    "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
+        # 1. 先试当前页
+        real_url = self._get_real_m3u8(play_page)
+        if real_url:
+            self.log("  => m3u8: %s" % real_url[:160])
+            return {
+                "parse": 0, "playUrl": "", "url": real_url,
+                "header": {"User-Agent": UA, "Referer": self.site_url + "/"},
+            }
 
-        # 从 player_aaaa 里取 url
-        m = _RE_PLAYER_AAAA.search(html)
-        if m:
-            raw = m.group(1)
-            try:
-                data = json.loads(raw)
-                real_url = data.get("url", "")
-                if real_url:
-                    real_url = real_url.replace("\\/", "/")
-                    self.log("  => m3u8: %s" % real_url[:160])
-                    return {
-                        "parse": 0,
-                        "playUrl": "",
-                        "url": real_url,
-                        "header": {
-                            "User-Agent": UA,
-                            "Referer": self.site_url + "/",
-                        },
-                    }
-            except Exception as e:
-                self.log("  player_aaaa 解析失败: %s" % e)
+        # 2. 当前页拿不到，尝试同剧其他线路的同一集
+        alt = self._find_alternative(play_page)
+        if alt:
+            real_url = self._get_real_m3u8(alt)
+            if real_url:
+                self.log("  => 降级到备用线路: %s" % alt)
+                return {
+                    "parse": 0, "playUrl": "", "url": real_url,
+                    "header": {"User-Agent": UA, "Referer": self.site_url + "/"},
+                }
 
-        # 兜底：交给 TVBox 嗅探
+        # 3. 都拿不到，交给 TVBox 嗅探
         return {"parse": 1, "playUrl": "", "url": play_page,
                 "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
 
