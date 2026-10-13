@@ -11,13 +11,13 @@ import re
 import sys
 import json
 import urllib.parse
+import requests
 
 sys.path.append('..')
 
 try:
     from base.spider import Spider
 except ImportError:
-    import requests as _rq
     try:
         import urllib3
         urllib3.disable_warnings()
@@ -31,19 +31,13 @@ except ImportError:
         @property
         def _sess(self):
             if self._session is None:
-                self._session = _rq.Session()
+                self._session = requests.Session()
                 self._session.verify = False
-                adapter = _rq.adapters.HTTPAdapter(
+                adapter = requests.adapters.HTTPAdapter(
                     pool_connections=10, pool_maxsize=10, max_retries=0)
                 self._session.mount('https://', adapter)
                 self._session.mount('http://', adapter)
             return self._session
-
-        def fetch(self, url, headers=None, **kw):
-            timeout = kw.pop('timeout', 15)
-            r = self._sess.get(url, headers=headers, timeout=timeout, **kw)
-            r.encoding = 'utf-8'
-            return r
 
         def log(self, *a, **kw):
             try:
@@ -288,16 +282,14 @@ class Spider(Spider):
         self.log("init: site=%s" % self.site_url)
 
     def _fetch(self, url, timeout=20, headers=None):
+        """直接使用 requests 请求，不依赖 TVBox 基类（基类不保证有 fetch 方法）"""
         try:
             h = dict(self.headers)
             if headers:
                 h.update(headers)
-            rsp = self.fetch(url, headers=h, timeout=timeout)
-            if hasattr(rsp, "text"):
-                return rsp.text or ""
-            if hasattr(rsp, "content"):
-                return rsp.content.decode("utf-8", "ignore")
-            return str(rsp)
+            rsp = requests.get(url, headers=h, timeout=timeout, verify=False)
+            rsp.encoding = 'utf-8'
+            return rsp.text or ""
         except Exception as e:
             self.log("fetch FAIL %s -> %s" % (url, e))
             return ""
@@ -650,14 +642,8 @@ class Spider(Spider):
                     return href
         return ""
 
-    # ---------- 播放（核心：按 CDN 域名动态设置 Referer） ----------
     def _build_player_header(self, real_url):
-        """
-        按 m3u8 域名判断 Referer：
-          - lzcdn25.com（量子资源）→ 需要站点 Referer
-          - fengbao13.com（暴风）、ppqrrs.com（无尽）等第三方 CDN → 空 Referer
-        这样电影、短剧、电视剧、动漫、综艺全部可播。
-        """
+        """按 m3u8 域名判断 Referer：量子资源用站点 Referer，其他第三方 CDN 用空 Referer"""
         host = ""
         try:
             host = (urllib.parse.urlparse(real_url).netloc or "").lower()
@@ -673,7 +659,6 @@ class Spider(Spider):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
 
-        # 1. 先试当前页
         real_url = self._get_real_m3u8(play_page)
         if real_url:
             self.log("  => m3u8: %s" % real_url[:160])
@@ -682,7 +667,6 @@ class Spider(Spider):
                 "header": self._build_player_header(real_url),
             }
 
-        # 2. 当前页拿不到，尝试同剧其他线路的同一集
         alt = self._find_alternative(play_page)
         if alt:
             real_url = self._get_real_m3u8(alt)
@@ -693,7 +677,6 @@ class Spider(Spider):
                     "header": self._build_player_header(real_url),
                 }
 
-        # 3. 都拿不到，交给 TVBox 嗅探
         return {"parse": 1, "playUrl": "", "url": play_page,
                 "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
 
