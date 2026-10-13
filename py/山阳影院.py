@@ -230,6 +230,16 @@ _RE_CARD_FALLBACK = re.compile(
     r'(?:data-original|src)="([^"]*)"',
     re.S | re.I)
 
+# ===== 新增：<li> 分块抓取（最稳，不依赖属性顺序） =====
+_RE_LIST_ITEM = re.compile(
+    r'<li[^>]*class="[^"]*col-[^"]*"[^>]*>([\s\S]*?)</li>',
+    re.I)
+_RE_BLOCK_HREF     = re.compile(r'href="(/detail/[^"]+)"', re.I)
+_RE_BLOCK_TITLE    = re.compile(r'title="([^"]*)"', re.I)
+_RE_BLOCK_PIC      = re.compile(r'(?:data-original|src)="([^"]+)"', re.I)
+_RE_BLOCK_PIC_TEXT = re.compile(
+    r'<span[^>]*class="[^"]*pic-text[^"]*"[^>]*>([\s\S]*?)</span>', re.I)
+
 # 详情页标题
 _RE_H1 = re.compile(r'<h1[^>]*class="title"[^>]*>([\s\S]*?)</h1>', re.I)
 
@@ -339,19 +349,64 @@ class Spider(Spider):
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
 
-    # ---------- 列表解析 ----------
+    # ---------- 列表解析（重写：<li> 分块 + 块内独立抓属性，最稳） ----------
     def _extract_videos(self, html):
         videos = []
         seen = set()
         if not html:
             return videos
 
-        # 优先带 pic-text 的卡片正则
-        matches = _RE_CARD.findall(html)
-        if not matches:
-            matches = _RE_CARD2.findall(html)
-        if matches:
-            for href, alt, pic, remarks in matches:
+        # 优先：按 <li> 分块抓取
+        for block in _RE_LIST_ITEM.finditer(html):
+            chunk = block.group(1)
+
+            m = _RE_BLOCK_HREF.search(chunk)
+            if not m:
+                continue
+            href = m.group(1)
+            if href in seen:
+                continue
+            seen.add(href)
+
+            mt = _RE_BLOCK_TITLE.search(chunk)
+            alt = mt.group(1) if mt else ""
+
+            mp = _RE_BLOCK_PIC.search(chunk)
+            pic = mp.group(1) if mp else ""
+            if not pic or "load.gif" in pic or "load.png" in pic:
+                pic = self.default_pic
+
+            mpt = _RE_BLOCK_PIC_TEXT.search(chunk)
+            remarks = self._clean(mpt.group(1))[:30] if mpt else ""
+
+            videos.append({
+                "vod_id":      href,
+                "vod_name":    self._clean(alt)[:100],
+                "vod_pic":     self._fix_url(pic),
+                "vod_remarks": remarks,
+            })
+
+        # 兜底：<li> 分块没抓到（如搜索页），退回卡片正则
+        if not videos:
+            matches = _RE_CARD.findall(html)
+            if not matches:
+                matches = _RE_CARD2.findall(html)
+            if matches:
+                for href, alt, pic, remarks in matches:
+                    if href in seen:
+                        continue
+                    seen.add(href)
+                    pic = pic if pic and "load.gif" not in pic else self.default_pic
+                    videos.append({
+                        "vod_id":      href,
+                        "vod_name":    self._clean(alt)[:100],
+                        "vod_pic":     self._fix_url(pic),
+                        "vod_remarks": self._clean(remarks)[:30],
+                    })
+                return videos
+
+            matches = _RE_CARD_FALLBACK.findall(html)
+            for href, alt, pic in matches:
                 if href in seen:
                     continue
                 seen.add(href)
@@ -360,23 +415,8 @@ class Spider(Spider):
                     "vod_id":      href,
                     "vod_name":    self._clean(alt)[:100],
                     "vod_pic":     self._fix_url(pic),
-                    "vod_remarks": self._clean(remarks)[:30],
+                    "vod_remarks": "",
                 })
-            return videos
-
-        # 兜底：无 pic-text
-        matches = _RE_CARD_FALLBACK.findall(html)
-        for href, alt, pic in matches:
-            if href in seen:
-                continue
-            seen.add(href)
-            pic = pic if pic and "load.gif" not in pic else self.default_pic
-            videos.append({
-                "vod_id":      href,
-                "vod_name":    self._clean(alt)[:100],
-                "vod_pic":     self._fix_url(pic),
-                "vod_remarks": "",
-            })
         return videos
 
     def _page_count(self, html):
