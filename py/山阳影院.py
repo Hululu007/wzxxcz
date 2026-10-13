@@ -230,7 +230,7 @@ _RE_CARD_FALLBACK = re.compile(
     r'(?:data-original|src)="([^"]*)"',
     re.S | re.I)
 
-# ===== 新增：<li> 分块抓取（最稳，不依赖属性顺序） =====
+# ===== <li> 分块抓取（最稳，不依赖属性顺序） =====
 _RE_LIST_ITEM = re.compile(
     r'<li[^>]*class="[^"]*col-[^"]*"[^>]*>([\s\S]*?)</li>',
     re.I)
@@ -349,7 +349,7 @@ class Spider(Spider):
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
 
-    # ---------- 列表解析（重写：<li> 分块 + 块内独立抓属性，最稳） ----------
+    # ---------- 列表解析 ----------
     def _extract_videos(self, html):
         videos = []
         seen = set()
@@ -767,23 +767,26 @@ class Spider(Spider):
 
         # 1. 试当前页
         real_url = self._get_real_m3u8(play_page)
+        if not real_url:
+            # 2. 降级：同剧其他线路同一集
+            alt = self._find_alternative(play_page)
+            if alt:
+                real_url = self._get_real_m3u8(alt)
+                if real_url:
+                    self.log("  => 降级到备用线路: %s" % alt)
+
         if real_url:
             self.log("  => m3u8: %s" % real_url[:160])
+            # 按 m3u8 域名动态设置 Referer（解决暴风资源拒绝跨站 Referer）
+            try:
+                p = urllib.parse.urlparse(real_url)
+                ref = "%s://%s/" % (p.scheme, p.netloc)
+            except Exception:
+                ref = ""
             return {
                 "parse": 0, "playUrl": "", "url": real_url,
-                "header": {"User-Agent": UA, "Referer": self.site_url + "/"},
+                "header": {"User-Agent": UA, "Referer": ref},
             }
-
-        # 2. 降级：同剧其他线路同一集
-        alt = self._find_alternative(play_page)
-        if alt:
-            real_url = self._get_real_m3u8(alt)
-            if real_url:
-                self.log("  => 降级到备用线路: %s" % alt)
-                return {
-                    "parse": 0, "playUrl": "", "url": real_url,
-                    "header": {"User-Agent": UA, "Referer": self.site_url + "/"},
-                }
 
         # 3. 交给 TVBox 嗅探
         return {"parse": 1, "playUrl": "", "url": play_page,
