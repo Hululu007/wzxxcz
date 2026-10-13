@@ -208,7 +208,7 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
-# 带 pic-text 角标的卡片（4 个捕获组：href, title, pic, remarks）
+# 【新增】带 pic-text 角标的卡片（4 个捕获组：href, title, pic, remarks）
 _RE_CARD_NEW = re.compile(
     r'<a[^>]*class="[^"]*stui-vodlist__thumb[^"]*"[^>]*'
     r'href="(/detail/[^"]+)"[^>]*'
@@ -217,7 +217,7 @@ _RE_CARD_NEW = re.compile(
     r'[\s\S]*?<span[^>]*class="[^"]*pic-text[^"]*"[^>]*>([\s\S]*?)</span>',
     re.S | re.I)
 
-# 兜底卡片（无 pic-text，3 个捕获组）
+# 原卡片（无 pic-text，3 个捕获组）
 _RE_CARD = re.compile(
     r'<a[^>]*class="[^"]*stui-vodlist__thumb[^"]*"[^>]*'
     r'href="(/detail/[^"]+)"[^>]*'
@@ -258,7 +258,7 @@ _RE_ACTOR = re.compile(r'<span class="text-muted">主演：</span>([\s\S]*?)</p>
 _RE_YEAR = re.compile(r'<span class="text-muted hidden-xs">年份：</span>([\s\S]*?)</p>', re.I)
 _RE_AREA = re.compile(r'<span class="text-muted hidden-xs">地区：</span>([\s\S]*?)</p>', re.I)
 
-# 更新时间：<p class="data hidden-sm"><span class="text-muted">更新：</span>2026-10-13</p>
+# 【新增】更新时间：<p class="data hidden-sm"><span class="text-muted">更新：</span>2026-10-13</p>
 _RE_UPDATE = re.compile(r'<span class="text-muted">更新：</span>\s*([\d\-]+)', re.I)
 
 _RE_PLAYLIST_BLOCK = re.compile(
@@ -338,7 +338,7 @@ class Spider(Spider):
         if not html:
             return videos
 
-        # 优先：带 pic-text 角标的卡片
+        # 【改动】优先用带 pic-text 角标的卡片
         matches = _RE_CARD_NEW.findall(html)
         if matches:
             for href, alt, pic, remarks in matches:
@@ -571,7 +571,7 @@ class Spider(Spider):
         if m:
             area = self._clean(m.group(1)).strip("&nbsp; ")
 
-        # 更新时间
+        # 【新增】更新时间
         update_time = ""
         m = _RE_UPDATE.search(html)
         if m:
@@ -597,7 +597,7 @@ class Spider(Spider):
             self.log("  未找到剧集")
             return {"list": []}
 
-        # remarks 拼上更新时间
+        # 【改动】remarks 拼上更新时间
         remarks = ("%s %s" % (year, area)).strip()
         if update_time:
             remarks = ("%s 更新:%s" % (remarks, update_time)).strip()
