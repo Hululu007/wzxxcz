@@ -79,11 +79,43 @@ _SUB_CLASS = {
     "1":  [("6", "动作片"), ("7", "喜剧片"), ("8", "爱情片"), ("9", "科幻片"),
            ("10", "剧情片"), ("11", "战争片"), ("12", "纪录片"), ("39", "恐怖片"),
            ("41", "动画片")],
-    "2":  [],
+    "2":  [("13", "国产剧"), ("14", "香港剧"), ("15", "韩国剧"), ("16", "欧美剧"),
+           ("22", "台湾剧"), ("21", "日本剧"), ("20", "泰国剧"), ("23", "海外剧")],
     "3":  [],
     "4":  [],
     "24": [],
 }
+
+# ---- 以下三块是"筛选面板"的选项，从分类页源码提取 ----
+_AREAS = [
+    {"n": "全部", "v": ""},
+    {"n": "内地", "v": "内地"}, {"n": "韩国", "v": "韩国"},
+    {"n": "香港", "v": "香港"}, {"n": "台湾", "v": "台湾"},
+    {"n": "日本", "v": "日本"}, {"n": "美国", "v": "美国"},
+    {"n": "泰国", "v": "泰国"}, {"n": "英国", "v": "英国"},
+    {"n": "新加坡", "v": "新加坡"}, {"n": "其他", "v": "其他"},
+]
+
+_YEARS = [{"n": "全部", "v": ""}] + \
+         [{"n": str(y), "v": str(y)} for y in range(2026, 2009, -1)]
+
+_LANGS = [
+    {"n": "全部", "v": ""},
+    {"n": "国语", "v": "国语"}, {"n": "英语", "v": "英语"},
+    {"n": "粤语", "v": "粤语"}, {"n": "闽南语", "v": "闽南语"},
+    {"n": "韩语", "v": "韩语"}, {"n": "日语", "v": "日语"},
+    {"n": "其它", "v": "其它"},
+]
+
+_SORTS = [{"n": "时间", "v": "time"},
+          {"n": "人气", "v": "hits"},
+          {"n": "评分", "v": "score"}]
+
+_PLOT_TV = ["全部", "古装", "战争", "青春偶像", "喜剧", "家庭", "犯罪",
+            "动作", "奇幻", "剧情", "历史", "经典", "乡村", "情景",
+            "商战", "网剧", "其他"]
+_PLOT_MOVIE = ["全部", "喜剧", "爱情", "恐怖", "科幻", "动作", "战争",
+               "犯罪", "悬疑", "奇幻", "剧情", "动画", "文艺", "纪录", "其他"]
 
 
 class Spider(Spider):
@@ -154,9 +186,13 @@ class Spider(Spider):
     def _extract_videos(self, html):
         """
         从首页/分类页/搜索页提取影片卡片。
-        真实卡片结构（首页/分类/搜索通用）：
+        真实卡片结构：
         <a class="iqy-vodlist__thumb ..." href="/film/g{id}.html" title="片名"
            data-original="图片">
+           <span class="play ..."></span>
+           <span class="pic-tag pic-tag-top">1.0分</span>
+           <span class="pic-text text-right">更新至第12集</span>
+        </a>
         """
         videos = []
         seen = set()
@@ -167,6 +203,10 @@ class Spider(Spider):
         href_re = re.compile(r'href="(/film/g[^"]+?\.html)"', re.I)
         title_re = re.compile(r'title="([^"]*)"', re.I)
         pic_re = re.compile(r'data-original="([^"]*)"', re.I)
+        # ↓↓↓ 新增：备注（"更新至第12集""已完结"等）↓↓↓
+        remark_re = re.compile(
+            r'<span[^>]*class="pic-text[^"]*"[^>]*>([^<]*)</span>', re.I)
+        # ↑↑↑ 新增 ↑↑↑
         next_re = re.compile(r'<a[^>]*iqy-vodlist__thumb|</li>', re.I)
 
         starts = [m.start() for m in start_re.finditer(html)]
@@ -182,6 +222,7 @@ class Spider(Spider):
                 continue
             tm = title_re.search(seg)
             pm = pic_re.search(seg)
+            rm = remark_re.search(seg)   # ← 新增
 
             href = hm.group(1).replace("&amp;", "&")
             if href in seen:
@@ -192,7 +233,7 @@ class Spider(Spider):
                 "vod_id":      href,
                 "vod_name":    self._clean(tm.group(1))[:100] if tm else href,
                 "vod_pic":     self._fix_url(pm.group(1)) if pm else self.default_pic,
-                "vod_remarks": "",
+                "vod_remarks": self._clean(rm.group(1)) if rm else "",  # ← 改
             })
 
         return videos
@@ -208,15 +249,24 @@ class Spider(Spider):
     # ---------------- 首页 / 分类 / 搜索 ----------------
 
     def homeContent(self, filter=False):
+        # ↓↓↓ 改动：补全筛选面板 ↓↓↓
         FILTERS = {}
         for c in CLASSES:
             tid = c["type_id"]
             sub = [{"n": "全部", "v": ""}] + \
                   [{"n": n, "v": sid} for sid, n in _SUB_CLASS.get(tid, [])]
+            plot_list = _PLOT_MOVIE if tid == "1" else _PLOT_TV
+            plot = [{"n": p, "v": "" if p == "全部" else p} for p in plot_list]
             FILTERS[tid] = [
                 {"key": "class", "name": "分类", "value": sub},
+                {"key": "plot",  "name": "剧情", "value": plot},
+                {"key": "area",  "name": "地区", "value": _AREAS},
+                {"key": "year",  "name": "年份", "value": _YEARS},
+                {"key": "lang",  "name": "语言", "value": _LANGS},
+                {"key": "by",    "name": "排序", "value": _SORTS},
             ]
         return {"class": CLASSES, "filters": FILTERS}
+        # ↑↑↑ 改动 ↑↑↑
 
     def homeVideoContent(self):
         html = self._fetch(self.site_url + "/")
@@ -328,21 +378,32 @@ class Spider(Spider):
                 content = self._clean(m.group(1))
         content = INTRO_PREFIX + "\n" + content if content else INTRO_PREFIX
 
+        # ↓↓↓ 新增：抓"更新：xxx"作为 vod_remarks ↓↓↓
+        remarks = ""
+        m = re.search(
+            r'<p[^>]*class="data"[^>]*>\s*<span[^>]*class="text-muted"[^>]*>更新：</span>'
+            r'\s*<span[^>]*class="text-red"[^>]*>([\s\S]*?)</span>',
+            html, re.I)
+        if m:
+            remarks = self._clean(m.group(1))
+        if not remarks:
+            m = re.search(
+                r'<span[^>]*class="pic-text[^"]*"[^>]*>([^<]*)</span>',
+                html, re.I)
+            if m:
+                remarks = self._clean(m.group(1))
+        # ↑↑↑ 新增 ↑↑↑
+
         # 播放源线路：<li><a href="#playlist1" data-toggle="tab">lz线路</a></li>
-        # 每个 playlist 对应 <div id="playlist1"> <ul class="iqy-content__list ..."> <li>...<a href="/watch/...">第01集</a></li>...</ul></div>
         play_from = []
         play_url = []
 
-        # 先抓 tab 列表（线路名 + #playlistN）
         tabs = re.findall(
             r'<li[^>]*>\s*<a[^>]*href="(#playlist\d+)"[^>]*data-toggle="tab"[^>]*>([^<]+)</a>',
             html, re.I)
 
-        # 对每个 playlistN，抓它下面的 <ul> ... </ul> 区块
         for tab_id, tab_name in tabs:
-            # tab_id = "#playlist1"
             pid = tab_id.lstrip("#")
-            # 匹配 <div id="playlist1" ...> ... </div>
             m = re.search(
                 r'<div[^>]*id="%s"[^>]*>([\s\S]*?)</div>' % re.escape(pid),
                 html, re.I)
@@ -372,7 +433,7 @@ class Spider(Spider):
             "vod_name":     name,
             "vod_pic":      pic,
             "vod_content":  content,
-            "vod_remarks":  "%d条线路" % len(play_from),
+            "vod_remarks":  remarks or ("%d条线路" % len(play_from)),  # ← 改
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url":  "$$$".join(play_url),
         }]}
