@@ -200,20 +200,31 @@ class Spider(Spider):
         self.log("init: site=%s" % self.site_url)
 
     # ---------- 基础 ----------
-    def _fetch(self, url, timeout=20, headers=None):
-        try:
-            h = dict(self.headers)
-            if headers:
-                h.update(headers)
-            rsp = self.fetch(url, headers=h, timeout=timeout)
-            if hasattr(rsp, "text"):
-                return rsp.text or ""
-            if hasattr(rsp, "content"):
-                return rsp.content.decode("utf-8", "ignore")
-            return str(rsp)
-        except Exception as e:
-            self.log("fetch FAIL %s -> %s" % (url, e))
-            return ""
+    def _fetch(self, url, timeout=30, headers=None, retry=2):
+        """带重试的 GET。默认超时 30s，重试 2 次（共 3 次请求）。
+        源站偶发抖动时能显著降低超时概率。"""
+        for attempt in range(retry + 1):
+            try:
+                h = dict(self.headers)
+                if headers:
+                    h.update(headers)
+                rsp = self.fetch(url, headers=h, timeout=timeout)
+                if hasattr(rsp, "text"):
+                    text = rsp.text or ""
+                elif hasattr(rsp, "content"):
+                    text = rsp.content.decode("utf-8", "ignore")
+                else:
+                    text = str(rsp)
+                if text:
+                    return text
+                self.log("fetch EMPTY %s (attempt %d/%d)"
+                         % (url, attempt + 1, retry + 1))
+            except Exception as e:
+                self.log("fetch FAIL %s (attempt %d/%d) -> %s"
+                         % (url, attempt + 1, retry + 1, e))
+            if attempt < retry:
+                time.sleep(1)
+        return ""
 
     def _fix_url(self, url):
         if not url:
@@ -335,11 +346,6 @@ class Spider(Spider):
             # 段位（依据站方真实 href 反推，共 12 段）:
             # 1=tid  2=area  3=order  4=class  5=lang  6=letter
             # 7~11=扩展位(空)  12=year
-            # 实例:
-            #   /vodshow/1-----------.html        全部
-            #   /vodshow/1---喜剧--------.html    类型=喜剧  (段4)
-            #   /vodshow/1-----------2018.html    年份=2018  (段12)
-            #   /vodshow/1--hits---------.html    排序=hits  (段3)
             seg = [
                 t,                    # 1 tid
                 enc(area),            # 2 地区
@@ -411,9 +417,6 @@ class Spider(Spider):
                 pic = m2.group(1)
 
         # 元信息: 评分 / 年份 / 地区 / 类型
-        # 真实结构: <p class="detail-meta">
-        #   <span><b>4.0</b> 分</span><span>2026</span>
-        #   <span>大陆</span><span>爱情,古装,剧情,国产</span></p>
         score = ""
         year = area = type_name = ""
         m = _RE_META.search(html)
@@ -449,8 +452,6 @@ class Spider(Spider):
             content = INTRO_PREFIX
 
         # 导演 / 主演
-        # 真实结构: <p class="cast cast-links">
-        #   <span>导演：</span><span>黄颖湘</span> <span>陈丹</span></p>
         director = actor = ""
         for cast_block in _RE_CAST.findall(html):
             spans = re.findall(r'<span[^>]*>([\s\S]*?)</span>',
