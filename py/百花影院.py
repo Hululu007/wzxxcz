@@ -11,8 +11,11 @@
           导演/主演: <p class="cast"><span>导演：</span><span>黄颖湘</span> <span>陈丹</span></p>
           选集: div.play-source > div.episode-list > a[href=/player/{vid}-{sid}-{nid}.html]
   - 分类分页: /category/{tid}-{pg}.html
-  - 分类筛选: /vodshow/{tid}-{order}-{class}-{area}-{lang}-{letter}-{year}.html
-              段位固定 7 段，空段用空串占位
+  - 分类筛选: /vodshow/{tid}-{area}-{order}-{class}-{lang}-{letter}-{x}-{x}-{x}-{x}-{x}-{year}.html
+              依据站方真实 href 反推为 12 段，空段用空串占位
+              实例: /vodshow/1---喜剧--------.html   (class=段4)
+                    /vodshow/1-----------2018.html (year=段12)
+                    /vodshow/1--hits---------.html (order=段3)
   - 搜索: /search.html?wd=关键词 (+ &page=N 翻页)
   - 播放: <script>var player_aaaa={...,"url":"m3u8直链"}</script>  走直链
 """
@@ -316,9 +319,10 @@ class Spider(Spider):
         cls = extend.get("class") or ""
         area = extend.get("area") or ""
         year = extend.get("year") or ""
-        order = extend.get("order") or "time"
+        order = extend.get("order") or ""
 
-        has_filter = bool(cls or area or year or (order and order != "time"))
+        # order 默认空，用户不选排序时不带该段；选了就带
+        has_filter = bool(cls or area or year or order)
         if not has_filter:
             real_tid = sub or tid
             url = "%s/category/%s-%d.html" % (self.site_url, real_tid, page)
@@ -328,16 +332,23 @@ class Spider(Spider):
             def enc(x):
                 return urllib.parse.quote(x) if x else ""
 
-            # 段位（依据站方真实 URL 反推）:
-            # 1=tid  2=order  3=class  4=area  5=lang  6=letter  7=year
+            # 段位（依据站方真实 href 反推，共 12 段）:
+            # 1=tid  2=area  3=order  4=class  5=lang  6=letter
+            # 7~11=扩展位(空)  12=year
+            # 实例:
+            #   /vodshow/1-----------.html        全部
+            #   /vodshow/1---喜剧--------.html    类型=喜剧  (段4)
+            #   /vodshow/1-----------2018.html    年份=2018  (段12)
+            #   /vodshow/1--hits---------.html    排序=hits  (段3)
             seg = [
-                t,                  # 1 tid
-                order or "time",    # 2 排序
-                enc(cls),           # 3 类型
-                enc(area),          # 4 地区
-                "",                 # 5 语言
-                "",                 # 6 字母
-                enc(year),          # 7 年份
+                t,                    # 1 tid
+                enc(area),            # 2 地区
+                order or "",          # 3 排序
+                enc(cls),             # 4 类型
+                "",                   # 5 语言
+                "",                   # 6 字母
+                "", "", "", "", "",   # 7~11 扩展位
+                enc(year),            # 12 年份
             ]
             url = "%s/vodshow/%s.html" % (self.site_url, "-".join(seg))
             if page > 1:
