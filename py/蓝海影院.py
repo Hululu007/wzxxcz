@@ -245,40 +245,44 @@ class Spider(Spider):
     def _extract_videos(self, html):
         """
         从分类页/搜索页/详情页提取影片卡片。
-        真实源码中，每个卡片的 <a> 标签格式：
+        真实源码：每个卡片的 <a> 标签在单行内，格式：
         <a class="moive-vodlist__thumb lazyload" href="/video/xxx.html" title="片名" data-original="图片">
+        逐行匹配，不用 re.S / 不用非贪婪，TVBox 环境最稳。
         """
         videos = []
         seen = set()
         if not html:
             return videos
 
-        pattern = re.compile(
-            r'<a[^>]*class="[^"]*moive-vodlist__thumb[^"]*"[^>]*?'
-            r'href="(/video/[^"]+?\.html)"[^>]*?'
-            r'title="([^"]*)"[^>]*?'
-            r'data-original="([^"]*)"',
-            re.S | re.I)
+        # 逐行处理
+        re_href = re.compile(r'href="(/video/[^"]+?\.html)"', re.I)
+        re_title = re.compile(r'title="([^"]*)"', re.I)
+        re_pic = re.compile(r'data-original="([^"]*)"', re.I)
 
-        for m in pattern.finditer(html):
-            href, title, pic = m.group(1), m.group(2), m.group(3)
-            href = href.replace("&amp;", "&")
+        for line in html.split("\n"):
+            if "moive-vodlist__thumb" not in line:
+                continue
+
+            hm = re_href.search(line)
+            if not hm:
+                continue
+
+            href = hm.group(1).replace("&amp;", "&")
             if href in seen:
                 continue
             seen.add(href)
 
-            # 备注：从该卡片往后 300 字符内找 pic-text
-            remarks = ""
-            tail = html[m.end(): m.end() + 300]
-            pt = _RE_PIC_TEXT.search(tail)
-            if pt:
-                remarks = self._clean(pt.group(1))
+            tm = re_title.search(line)
+            title = tm.group(1) if tm else ""
+
+            pm = re_pic.search(line)
+            pic = pm.group(1) if pm else ""
 
             videos.append({
                 "vod_id":      href,
                 "vod_name":    self._clean(title)[:100] or href,
                 "vod_pic":     self._fix_url(pic) or self.default_pic,
-                "vod_remarks": remarks,
+                "vod_remarks": "",
             })
 
         return videos
@@ -344,7 +348,7 @@ class Spider(Spider):
         by = by_map.get(by, by)
 
         # 真实源码路径规则：/tv/{cid}[/page/{n}][/class/{c}][/area/{a}][/year/{y}][/by/{b}].html
-        # 注意：page 段紧随 cid，位于其他筛选段之前
+        # page 段紧随 cid，位于其他筛选段之前
         path = "/tv/%s" % cid
         if page and page > 1:
             path += "/page/%d" % page
