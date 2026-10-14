@@ -1,7 +1,7 @@
 # coding=utf-8
 """
-百花影院 yctd.cc | TVBox Python 爬虫（本地代理版）
-- 播放：player_aaaa.url 交给本地代理，由 Python 代拉 m3u8 及分片
+百花影院 yctd.cc | TVBox Python 爬虫（轻代理版）
+- 播放：只代理 m3u8 主文件，分片地址不重写，分片由 TVBox 直连源站
 """
 import re
 import sys
@@ -59,7 +59,6 @@ DEFAULT_PIC = HOST + "/template/frost/asset/img/placeholder.svg"
 
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
-# ============ 分类 ============
 CLASSES = [
     {"type_id": "1",  "type_name": "电影"},
     {"type_id": "2",  "type_name": "电视剧"},
@@ -124,7 +123,6 @@ for c in CLASSES:
     ]
 
 
-# ===================== 正则 =====================
 _RE_CARD = re.compile(
     r'<article class="paper-card[^"]*">([\s\S]*?)</article>',
     re.S | re.I)
@@ -176,7 +174,21 @@ class Spider(Spider):
             "Referer": self.site_url + "/",
         }
         self._play_cache = {}
+        self._proxy_sess = None
         self.log("init: site=%s" % self.site_url)
+
+    def _get_proxy_sess(self):
+        """代理专用 Session：连接池复用 + keep-alive，避免每片都重连"""
+        if self._proxy_sess is None:
+            import requests as _rq
+            s = _rq.Session()
+            s.verify = False
+            adapter = _rq.adapters.HTTPAdapter(
+                pool_connections=20, pool_maxsize=20, max_retries=2)
+            s.mount('https://', adapter)
+            s.mount('http://', adapter)
+            self._proxy_sess = s
+        return self._proxy_sess
 
     def _fetch(self, url, timeout=20, headers=None):
         try:
@@ -308,13 +320,9 @@ class Spider(Spider):
                 return urllib.parse.quote(x) if x else ""
 
             seg = [
-                t,                    # 1 tid
-                enc(area),            # 2 地区
-                order or "",          # 3 排序
-                enc(cls),             # 4 类型
-                "", "",               # 5-6
-                "", "", "", "", "",   # 7-11
-                enc(year),            # 12 年份
+                t, enc(area), order or "", enc(cls),
+                "", "", "", "", "", "", "",
+                enc(year),
             ]
             url = "%s/vodshow/%s.html" % (self.site_url, "-".join(seg))
             if page > 1:
@@ -453,7 +461,6 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # ---------- 播放（走本地代理）----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -496,6 +503,7 @@ class Spider(Spider):
                     self.log("encrypt=2 decode fail: %s" % e)
 
         if play_url:
+            # 只代理 m3u8 主文件；分片保持源站地址，由 TVBox 直连
             proxy_url = ("http://127.0.0.1:9978/proxy?do=py&url="
                          + urllib.parse.quote(play_url, safe=""))
             self.log("  proxy: %s" % proxy_url[:200])
@@ -523,7 +531,10 @@ class Spider(Spider):
         return False
 
     def localProxy(self, param):
-        """代理 m3u8 及其分片请求，绕过 TVBox 播放器的 DNS/请求头限制"""
+        """
+        只代理 m3u8 主文件（带浏览器同款请求头去取），
+        内容原样返回，分片地址不重写，分片由 TVBox 直连源站。
+        """
         try:
             url = ""
             if isinstance(param, dict):
@@ -544,34 +555,12 @@ class Spider(Spider):
                 "Referer": self.site_url + "/",
                 "Origin": self.site_url,
             }
-            rsp = self.fetch(url, headers=h, timeout=20)
+            sess = self._get_proxy_sess()
+            rsp = sess.get(url, headers=h, timeout=15)
             content = rsp.content if hasattr(rsp, "content") else b""
 
             if url.lower().endswith(".m3u8") or b"#EXTM3U" in content[:64]:
-                text = content.decode("utf-8", "ignore")
-                base = url.rsplit("/", 1)[0] + "/"
-                parts = url.split("/")
-                origin = parts[0] + "//" + parts[2] if len(parts) > 2 else ""
-                new_lines = []
-                for line in text.splitlines():
-                    s = line.strip()
-                    if s and not s.startswith("#"):
-                        if s.startswith("http"):
-                            full = s
-                        elif s.startswith("//"):
-                            full = "https:" + s
-                        elif s.startswith("/"):
-                            full = origin + s
-                        else:
-                            full = base + s
-                        proxy = ("http://127.0.0.1:9978/proxy?do=py&url="
-                                 + urllib.parse.quote(full, safe=""))
-                        new_lines.append(proxy)
-                    else:
-                        new_lines.append(line)
-                text = "\n".join(new_lines)
-                return [200, "application/vnd.apple.mpegurl",
-                        text.encode("utf-8"), ""]
+                return [200, "application/vnd.apple.mpegurl", content, ""]
 
             ctype = "video/mp2t"
             if hasattr(rsp, "headers"):
