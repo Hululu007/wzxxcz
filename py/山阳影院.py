@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-五平台聚合爬虫（TVBox Python 格式）
-====================================
+五平台聚合爬虫（TVBox Python 格式）—— 稳定增强版
+================================================
 平台：腾讯视频 / 爱奇艺 / 优酷 / 芒果TV / 哔哩哔哩
 
-接口约定（TVBox py 爬虫）：
-  - 类名必须为 Spider，继承 base.spider.Spider
-  - 各方法返回 dict，由 TVBox 引擎序列化
-  - playerContent 返回 parse=1 + jx=1 表示交由外部解析播放
-
 播放策略：
-  - 哔哩哔哩：优先调用官方 playurl 接口返回直链（parse=0），失败回退播放页外挂解析
-  - 腾讯/爱奇艺/优酷/芒果：输出官方播放页地址，parse=1 交由外部解析
+  - 哔哩哔哩：合流直链(fnval=1) > DASH直链(fnval=16) > 播放页外挂解析
+  - 腾讯    ：getinfo直链 > 播放页外挂解析
+  - 芒果    ：streamList直链 > 播放页外挂解析
+  - 爱奇艺  ：播放页外挂解析
+  - 优酷    ：播放页外挂解析
+
+所有自研解析均静默失败并回退，保证播放链路不中断。
 """
 
 import re
@@ -21,8 +21,6 @@ import hashlib
 import threading
 
 # ---------- 壳子兼容层 ----------
-# TVBox / OK影视(影视仓) 的 Python 引擎为 Jython 2.7，没有 urllib.parse/urllib.request/urllib.error，
-# 且 urllib2 不支持 method= / context= 参数。这里做 Py3/Py2 双兼容，_quote 统一处理中文编码。
 try:  # Python 3
     from urllib.parse import quote as _quote
     from urllib.request import Request, urlopen
@@ -37,7 +35,7 @@ except Exception:  # Jython 2.7 / Python 2 (TVBox/OK影视)
     from urllib2 import Request, urlopen, URLError, HTTPError
 
     def _q(s):
-        if isinstance(s, unicode):
+        if isinstance(s, unicode):  # noqa: F821
             s = s.encode("utf-8")
         return _quote(str(s), safe="/")
 
@@ -78,7 +76,7 @@ BL_CATE = {"1": "番剧", "4": "国创", "2": "电影", "5": "电视剧", "3": "
 
 def _http(method, url, headers=None, body=None, timeout=15):
     """统一 HTTP 请求：优先 requests，缺失时兜底 urllib（兼容 Jython2/Py2）。
-    返回 (status, text)，text 强制 UTF-8 解码，避免壳子编码推断不一致乱码。"""
+    返回 (status, text)，text 强制 UTF-8 解码。"""
     hdrs = {"User-Agent": UA_PC, "Accept": "*/*"}
     if headers:
         hdrs.update(headers)
@@ -129,7 +127,16 @@ def _clean(s):
     return re.sub(r"</?em[^>]*>", "", str(s)).strip()
 
 
+def _fmt_header(hdrs):
+    """header 字段兼容：dict 优先（新壳子），字符串兼容（老壳子）。
+    这里统一返回 dict，让 TVBox 引擎自己序列化。"""
+    return hdrs if isinstance(hdrs, dict) else {}
+
+
 class Spider(Spider):
+
+    # B站 WBI mixin 缓存（类级别，10 分钟有效）
+    _bl_mixin_cache = {"key": "", "time": 0}
 
     def getName(self):
         return "五平台聚合"
@@ -265,6 +272,31 @@ class Spider(Spider):
         vod["vod_play_url"] = "#".join(eps)
         return vod
 
+    def _tx_direct(self, vid):
+        """尝试从腾讯 getinfo 接口提取直链，失败返回空字符串。
+        注意：getinfo 返回的 vkey 有时效性（通常几小时），且部分 VIP 内容不返回有效 fvkey。"""
+        if not vid:
+            return ""
+        try:
+            u = ("https://vv.video.qq.com/getinfo?otype=json&appver=3.2.19.333"
+                 "&platform=11&defnpayver=1&vid=" + vid)
+            st, txt = _http("GET", u, headers={"Referer": "https://v.qq.com/"})
+            if "QZOutputJson=" in txt:
+                txt = txt.split("QZOutputJson=", 1)[1].rstrip(";")
+            j = _jload(txt)
+            vi = (j.get("vl") or {}).get("vi") or []
+            if not vi:
+                return ""
+            fn = vi[0].get("fn") or ""
+            fvkey = vi[0].get("fvkey") or ""
+            ul = (vi[0].get("ul") or {}).get("ui") or []
+            host = ul[0].get("url") if ul else ""
+            if host and fn and fvkey:
+                return host + fn + "?vkey=" + fvkey
+        except Exception:
+            pass
+        return ""
+
     # ================================================================
     #  爱奇艺
     # ================================================================
@@ -349,7 +381,8 @@ class Spider(Spider):
                            content=d.get("description") or "",
                            type_name=",".join([c.get("name", "") for c in cats if isinstance(c, dict)]))
         eps = []
-        if d.get("channelId") in (1, 5) and d.get("playUrl"):
+        # 电影用单集直链；电视剧/综艺/动漫走分页
+        if d.get("channelId") == 1 and d.get("playUrl"):
             eps.append("正片$%s" % d.get("playUrl"))
         else:
             page = 1
@@ -435,7 +468,9 @@ class Spider(Spider):
             eps.append("%s$https://v.youku.com/v_show/id_%s.html" % (title, vid))
         vod = self._mk_vod("yk|" + sid, sid, "", remarks=src, type_name=src)
         if sl:
-            vod["vod_name"] = re.sub(r"\d+", "", _clean(sl[0].get("title")) or "") or src
+            # 只去掉"第X集"这类后缀，保留剧名中的数字
+            first_title = _clean(sl[0].get("title")) or ""
+            vod["vod_name"] = re.sub(r"第\s*\d+\s*集.*$", "", first_title).strip() or src
         vod["vod_play_from"] = src
         vod["vod_play_url"] = "#".join(eps)
         return vod
@@ -517,7 +552,7 @@ class Spider(Spider):
             t = e.get("t4") or e.get("t1") or "正片"
             eps.append("%s$%s" % (t, url))
         if not eps and series:
-            url = series[0].get("url") or ""
+            url = (series[0].get("url") or "") if isinstance(series[0], dict) else ""
             if url:
                 if not url.startswith("http"):
                     url = "https://www.mgtv.com" + url
@@ -530,6 +565,37 @@ class Spider(Spider):
         vod["vod_play_url"] = "#".join(eps)
         return vod
 
+    def _mg_direct(self, page_url):
+        """尝试从芒果 API 提取 m3u8 直链，失败返回空字符串。
+        非 VIP 内容通常能拿到 480P/576P/720P 的 m3u8；VIP 内容返回空。"""
+        if not page_url:
+            return ""
+        try:
+            # 从播放页 HTML 提取 video_id
+            st, html = _http("GET", page_url,
+                             headers={"Referer": "https://www.mgtv.com/", "User-Agent": UA_MB})
+            m = (re.search(r'"video_id"\s*:\s*"(\d+)"', html)
+                 or re.search(r'"vid"\s*:\s*"(\d+)"', html)
+                 or re.search(r'videoId["\']?\s*[:=]\s*["\']?(\d+)', html))
+            if not m:
+                return ""
+            vid = m.group(1)
+            api = "https://pcweb.api.mgtv.com/player/video?video_id=%s&support=1" % vid
+            st2, txt2 = _http("GET", api,
+                              headers={"Referer": page_url, "User-Agent": UA_MB})
+            j = _jload(txt2)
+            stream = (j.get("data") or {}).get("stream") or []
+            # 从高到低取第一个可用的 m3u8
+            for s in reversed(stream):
+                if not isinstance(s, dict):
+                    continue
+                url = s.get("url") or ""
+                if url and (".m3u8" in url or url.startswith("http")):
+                    return url
+        except Exception:
+            pass
+        return ""
+
     # ================================================================
     #  哔哩哔哩
     # ================================================================
@@ -538,6 +604,11 @@ class Spider(Spider):
                 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52]
 
     def _bl_mixin(self):
+        """获取 WBI mixin key，带 10 分钟类级别缓存，避免频繁请求 nav 接口被风控。"""
+        now = time.time()
+        cache = Spider._bl_mixin_cache
+        if cache.get("key") and now - cache.get("time", 0) < 600:
+            return cache["key"]
         st, txt = _http("GET", "https://api.bilibili.com/x/web-interface/nav",
                         headers={"Referer": "https://www.bilibili.com/"})
         j = _jload(txt)
@@ -547,7 +618,9 @@ class Spider(Spider):
         orig = img_key + sub_key
         if len(orig) < 32:
             return ""
-        return "".join(orig[self._WBI_TAB[i]] for i in range(32))
+        mixin = "".join(orig[self._WBI_TAB[i]] for i in range(32))
+        Spider._bl_mixin_cache = {"key": mixin, "time": now}
+        return mixin
 
     def _bl_search(self, key, pg):
         mixin = self._bl_mixin()
@@ -628,20 +701,52 @@ class Spider(Spider):
                 direct.append("%s$blplay|%s|%s|%s" % (name, ep_id, cid, link))
             if link:
                 pages.append("%s$%s" % (name, link))
-        vod["vod_play_from"] = "$$$".join([x for x in (["B站直链"] if direct else []) + (["B站播放页"] if pages else [])])
-        vod["vod_play_url"] = "$$$".join([x for x in (["#".join(direct)] if direct else []) + (["#".join(pages)] if pages else [])])
+        froms, urls = [], []
+        if direct:
+            froms.append("B站直链")
+            urls.append("#".join(direct))
+        if pages:
+            froms.append("B站播放页")
+            urls.append("#".join(pages))
+        if not froms:
+            froms.append("B站")
+            urls.append("")
+        vod["vod_play_from"] = "$$$".join(froms)
+        vod["vod_play_url"] = "$$$".join(urls)
         return vod
 
     def _bl_play(self, ep_id, cid):
-        u = ("https://api.bilibili.com/pgc/player/web/playurl?ep_id=%s&cid=%s&fnval=16&qn=64"
-             "&fnver=0&fourk=0&session=&device=pc&platform=web&otype=json" % (ep_id, cid))
-        st, txt = _http("GET", u, headers={"Referer": "https://www.bilibili.com/"})
-        res = (_jload(txt).get("result") or {})
-        if res.get("durl"):
-            return res["durl"][0].get("url") or ""
-        dash = res.get("dash") or {}
-        if dash.get("video"):
-            return dash["video"][0].get("baseUrl") or ""
+        """B站解析：合流优先（有声音），DASH 兜底。
+        返回：
+          - 普通 URL 字符串：合流直链
+          - "dash|videoUrl|audioUrl"：DASH 双轨（壳子支持时用）
+          - ""：失败，走外挂解析
+        """
+        # 1) 合流格式（durl）—— MP4/FLV，有声音有画面
+        try:
+            u1 = ("https://api.bilibili.com/pgc/player/web/playurl?ep_id=%s&cid=%s&fnval=1&qn=64"
+                  "&fnver=0&fourk=0&device=pc&platform=web&otype=json" % (ep_id, cid))
+            st, txt = _http("GET", u1, headers={"Referer": "https://www.bilibili.com/"})
+            res = (_jload(txt).get("result") or {})
+            if res.get("durl"):
+                url = res["durl"][0].get("url") or ""
+                if url:
+                    return url
+        except Exception:
+            pass
+        # 2) DASH 格式——返回音视频双轨信息
+        try:
+            u2 = ("https://api.bilibili.com/pgc/player/web/playurl?ep_id=%s&cid=%s&fnval=16&qn=64"
+                  "&fnver=0&fourk=0&device=pc&platform=web&otype=json" % (ep_id, cid))
+            st2, txt2 = _http("GET", u2, headers={"Referer": "https://www.bilibili.com/"})
+            res2 = (_jload(txt2).get("result") or {})
+            dash = res2.get("dash") or {}
+            video = dash.get("video") or []
+            audio = dash.get("audio") or []
+            if video and audio:
+                return "dash|%s|%s" % (video[0].get("baseUrl", ""), audio[0].get("baseUrl", ""))
+        except Exception:
+            pass
         return ""
 
     # ================================================================
@@ -666,7 +771,6 @@ class Spider(Spider):
         return {"class": classes, "filters": {}}
 
     def homeVideoContent(self):
-        # 并行拉取五个平台首页推荐，总限时 8s，避免壳子对首页接口超时
         out = []
         lock = threading.Lock()
 
@@ -753,6 +857,9 @@ class Spider(Spider):
         fns = [lambda: self._tx_search(key, pg), lambda: self._iq_search(key, pg),
                lambda: self._yk_search(key, pg), lambda: self._mg_search(key, pg),
                lambda: self._bl_search(key, pg)]
+        # quick=1 时只搜主平台（腾讯），加快响应
+        if str(quick) == "1":
+            fns = fns[:1]
         threads = [threading.Thread(target=run, args=(f,)) for f in fns]
         for t in threads:
             t.start()
@@ -761,34 +868,75 @@ class Spider(Spider):
         return {"list": results, "page": pg}
 
     def playerContent(self, flag, id, vipFlags):
+        """播放策略分层：
+        1. B站：合流直链 > DASH双轨 > 播放页外挂解析
+        2. 腾讯：getinfo直链 > 播放页外挂解析
+        3. 芒果：streamList直链 > 播放页外挂解析
+        4. 爱奇艺/优酷：播放页外挂解析
+        所有自研解析失败均静默回退，保证播放不中断。
+        """
         try:
             id = str(id or "")
+
+            # ---------- B站 ----------
             if id.startswith("blplay|"):
                 parts = id.split("|")
-                ep_id, cid = parts[1], parts[2]
+                ep_id = parts[1] if len(parts) > 1 else ""
+                cid = parts[2] if len(parts) > 2 else ""
                 link = parts[3] if len(parts) > 3 else ""
                 url = self._bl_play(ep_id, cid)
-                if url:
+                # 合流直链
+                if url and not url.startswith("dash|"):
                     return {"parse": 0, "url": url, "jx": 0,
                             "header": {"User-Agent": UA_PC, "Referer": HDR_REF["bl"]}}
+                # DASH 双轨：部分壳子支持，返回特殊结构；不支持则回退播放页
+                if url.startswith("dash|"):
+                    _, vurl, aurl = url.split("|", 2)
+                    if vurl and aurl:
+                        # 提示壳子走外挂解析合并音视频（比返回无声视频体验好）
+                        # 若你的壳子支持音视频分离，可改成返回 {"parse":0, "url":vurl, "audio":aurl}
+                        if link:
+                            return {"parse": 1, "jx": 1, "url": link,
+                                    "header": {"User-Agent": UA_PC, "Referer": HDR_REF["bl"]}}
+                # 回退播放页
                 if link:
                     return {"parse": 1, "jx": 1, "url": link,
-                            "header": json.dumps({"User-Agent": UA_PC, "Referer": HDR_REF["bl"]})}
-                return {"parse": 1, "jx": 1, "url": "", "header": json.dumps({})}
-            ref = "https://www.mgtv.com/"
+                            "header": {"User-Agent": UA_PC, "Referer": HDR_REF["bl"]}}
+                return {"parse": 1, "jx": 1, "url": "", "header": {}}
+
+            # ---------- 腾讯 ----------
             if "v.qq.com" in id:
-                ref = HDR_REF["tx"]
-            elif "iqiyi.com" in id:
+                m = re.search(r"/([A-Za-z0-9]+)\.html", id)
+                if m:
+                    direct = self._tx_direct(m.group(1))
+                    if direct:
+                        return {"parse": 0, "url": direct, "jx": 0,
+                                "header": {"User-Agent": UA_PC, "Referer": HDR_REF["tx"]}}
+                return {"parse": 1, "jx": 1, "url": id,
+                        "header": {"User-Agent": UA_PC, "Referer": HDR_REF["tx"]}}
+
+            # ---------- 芒果 ----------
+            if "mgtv.com" in id:
+                direct = self._mg_direct(id)
+                if direct:
+                    return {"parse": 0, "url": direct, "jx": 0,
+                            "header": {"User-Agent": UA_MB, "Referer": HDR_REF["mg"]}}
+                return {"parse": 1, "jx": 1, "url": id,
+                        "header": {"User-Agent": UA_PC, "Referer": HDR_REF["mg"]}}
+
+            # ---------- 爱奇艺 / 优酷 / 其他 ----------
+            ref = "https://www.mgtv.com/"
+            if "iqiyi.com" in id:
                 ref = HDR_REF["iq"]
             elif "youku.com" in id:
                 ref = HDR_REF["yk"]
             elif "bilibili.com" in id:
                 ref = HDR_REF["bl"]
             return {"parse": 1, "jx": 1, "url": id,
-                    "header": json.dumps({"User-Agent": UA_PC, "Referer": ref})}
+                    "header": {"User-Agent": UA_PC, "Referer": ref}}
         except Exception:
             return {"parse": 1, "jx": 1, "url": str(id or ""),
-                    "header": json.dumps({"User-Agent": UA_PC})}
+                    "header": {"User-Agent": UA_PC}}
 
     def isVideoFormat(self, url):
         return bool(re.search(r"\.(m3u8|mp4|flv|mkv|webm)(\?|$)", str(url or "")))
