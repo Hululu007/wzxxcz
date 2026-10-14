@@ -11,10 +11,7 @@
               段位固定 7 段，空段用空串占位
   - 搜索: /search.html?wd=关键词  (+ &page=N 翻页)
   - 播放: <script>var player_aaaa={...,"url":"m3u8直链","from":"1080zyk",...}</script>
-          player.js 依据 playerconfig.js 的 player_list 判定：
-            ps=1 -> 加载 /static/player/parse.js
-                    iframe src = MacPlayer.Parse + MacPlayer.PlayUrl (字符串直拼, 不编码)
-            ps=0 -> 直接播放 MacPlayer.PlayUrl
+          走直链：直接返回 player_aaaa.url
 """
 import re
 import sys
@@ -179,14 +176,6 @@ _RE_PLAYER = re.compile(
 
 class Spider(Spider):
 
-    # 与 /static/js/playerconfig.js 的 MacPlayerConfig.player_list 对应
-    # 只有 ps == "1" 的线路才走 parse 接口
-    # 键 = player_aaaa.from 字段值, 值 = parse 前缀
-    _PARSE_MAP = {
-        "1080zyk": "/ali.html?url=",
-        # 以后站方新增 ps=1 的线路, 加到这里即可
-    }
-
     def getName(self):
         return "百花影院"
 
@@ -272,7 +261,6 @@ class Spider(Spider):
             if mi:
                 pic = mi.group(1)
                 if pic.endswith("placeholder.svg"):
-                    # 尝试再找 data-src
                     md = re.search(r'data-src="([^"]+)"', block, re.I)
                     if md:
                         pic = md.group(1)
@@ -294,7 +282,6 @@ class Spider(Spider):
         return videos
 
     def _parse_pagination(self, html, tid):
-        """返回总页数；找不到则给一个较大上限"""
         if not html:
             return 1
         mp = _RE_PAGINATION.search(html)
@@ -323,7 +310,6 @@ class Spider(Spider):
                 extend = {}
         extend = extend or {}
 
-        # 子类用 category/{id}-{page}.html；带筛选走 vodshow
         sub = extend.get("sub") or ""
         cls = extend.get("class") or ""
         area = extend.get("area") or ""
@@ -335,8 +321,6 @@ class Spider(Spider):
             real_tid = sub or tid
             url = "%s/category/%s-%d.html" % (self.site_url, real_tid, page)
         else:
-            # /vodshow/{tid}-{area}-{order}-{class}-{lang}-{letter}-{year}.html
-            # 空段保留占位
             t = sub or tid
 
             def enc(x):
@@ -345,7 +329,6 @@ class Spider(Spider):
             seg = [t, enc(area), order or "", enc(cls), "", "", enc(year)]
             url = "%s/vodshow/%s.html" % (self.site_url, "-".join(seg))
             if page > 1:
-                # mac 系 vodshow 翻页常见 ?page=N
                 url += "?page=%d" % page
 
         self.log("category: %s" % url)
@@ -404,7 +387,7 @@ class Spider(Spider):
             if m2:
                 pic = m2.group(1)
 
-        # 元信息：评分 / 年份 / 地区 / 类型
+        # 元信息
         score = ""
         year = area = type_name = ""
         m = _RE_META.search(html)
@@ -433,7 +416,6 @@ class Spider(Spider):
             if md:
                 content = self._clean(md.group(1))
 
-        # 简介加前缀（保持和原站点简介拼接方式一致）
         if content:
             content = INTRO_PREFIX + "\n" + content
         else:
@@ -450,8 +432,8 @@ class Spider(Spider):
             elif "主演" in label:
                 actor = re.sub(r"\s*,\s*", ", ", v)
 
-        # 选集：解析 play-source 分组
-        groups = []  # [(line_name, [(ep_name, ep_url), ...]), ...]
+        # 选集
+        groups = []
         for line_name, ep_block in _RE_PLAY_SOURCE.findall(html):
             eps = []
             for ep_href, ep_name in _RE_EP.findall(ep_block):
@@ -482,7 +464,7 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # ---------- 播放 ----------
+    # ---------- 播放（走直链）----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -504,7 +486,6 @@ class Spider(Spider):
             try:
                 info = json.loads(raw)
             except Exception:
-                # 兜底：正则抓取 url / from / encrypt
                 info = {}
                 m2 = re.search(r'"url"\s*:\s*"([^"]+)"', raw)
                 if m2:
@@ -532,26 +513,9 @@ class Spider(Spider):
                 except Exception as e:
                     self.log("encrypt=2 decode fail: %s" % e)
 
-        # ps=1 的线路：与 parse.js 中 MacPlayer.Parse + MacPlayer.PlayUrl 一致
-        # 字符串直拼，不做 URL 编码，也不加其它参数
-        if play_url and from_flag in self._PARSE_MAP:
-            parse_url = self.site_url + self._PARSE_MAP[from_flag] + play_url
-            self.log("  parse(ps=1): %s" % parse_url[:220])
-            res = {
-                "parse": 1,
-                "playUrl": "",
-                "url": parse_url,
-                "header": {
-                    "User-Agent": UA,
-                    "Referer": play_page,
-                },
-            }
-            self._play_cache[play_page] = (now, res)
-            return res
-
-        # ps=0 的线路：直接返回 m3u8 直链
+        # 走直链：直接把 m3u8 地址交给 TVBox 播放
         if play_url:
-            self.log("  direct(ps=0): %s" % play_url[:180])
+            self.log("  direct: %s" % play_url[:200])
             res = {
                 "parse": 0,
                 "playUrl": "",
@@ -564,7 +528,7 @@ class Spider(Spider):
             self._play_cache[play_page] = (now, res)
             return res
 
-        # 兜底：交给 TVBox 嗅探
+        # 兜底
         res = {"parse": 1, "playUrl": "", "url": play_page,
                "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
         self._play_cache[play_page] = (now, res)
