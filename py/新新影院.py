@@ -184,9 +184,6 @@ class Spider(Spider):
     # ---------------- 列表解析 ----------------
 
     def _extract_videos(self, html):
-        """
-        从首页/分类页/搜索页提取影片卡片。
-        """
         videos = []
         seen = set()
         if not html:
@@ -229,13 +226,24 @@ class Spider(Spider):
 
         return videos
 
+    # ================= 修改：_page_count =================
     def _page_count(self, html):
+        """
+        分类页分页 URL 是 /genre/13-N.html 或 /filter/id/13-N.html。
+        从"尾页"链接或所有 -N.html 抓最大页码。
+        """
         if not html:
             return 1
+        # 抓所有 -N.html 里的 N
+        pages = [int(x) for x in re.findall(r'-(\d+)\.html', html)]
+        if pages:
+            return max(pages)
+        # 退化：/page/N
         pages = [int(x) for x in re.findall(r'/page/(\d+)', html)]
         if pages:
             return max(pages)
         return 1
+    # =====================================================
 
     # ---------------- 首页 / 分类 / 搜索 ----------------
 
@@ -261,6 +269,7 @@ class Spider(Spider):
         html = self._fetch(self.site_url + "/")
         return {"list": self._extract_videos(html)}
 
+    # ================= 修改：categoryContent =================
     def categoryContent(self, tid, pg, filter, extend):
         page = int(pg) if pg else 1
         if isinstance(extend, str):
@@ -275,16 +284,50 @@ class Spider(Spider):
             if extend[k] in ("", None, "全部"):
                 del extend[k]
 
-        cid = extend.pop("class", "") or tid
+        cid   = extend.pop("class", "") or tid
+        plot  = extend.pop("plot", "")
+        area  = extend.pop("area", "")
+        year  = extend.pop("year", "")
+        lang  = extend.pop("lang", "")
+        by    = extend.pop("by", "time")
 
-        if cid in ("1", "2", "3", "4", "24"):
-            path = "/genre/%s.html" % cid
-            if page and page > 1:
-                path = "/genre/%s/page/%d.html" % (cid, page)
+        # ---- 判断有没有"筛选"（除分类外） ----
+        has_filter = bool(plot or area or year or lang or (by and by != "time"))
+
+        if not has_filter:
+            # ---- 无筛选 ----
+            # 顶级: /genre/{cid}.html
+            # 子分类: /filter/id/{cid}.html
+            if cid in ("1", "2", "3", "4", "24"):
+                if page and page > 1:
+                    path = "/genre/%s-%d.html" % (cid, page)
+                else:
+                    path = "/genre/%s.html" % cid
+            else:
+                if page and page > 1:
+                    path = "/genre/%s-%d.html" % (cid, page)
+                else:
+                    path = "/filter/id/%s.html" % cid
         else:
-            path = "/filter/id/%s.html" % cid
+            # ---- 有筛选：按真实源码顺序拼 ----
+            # /filter/[area/{a}]/[by/{b}]/[class/{c}]/id/{cid}[/lang/{l}]/year/{y}.html
+            parts = ["/filter"]
+            if area:
+                parts.append("/area/" + urllib.parse.quote(area))
+            if by and by != "time":
+                parts.append("/by/" + by)
+            if plot:
+                parts.append("/class/" + urllib.parse.quote(plot))
+            parts.append("/id/" + cid)
+            if lang:
+                parts.append("/lang/" + urllib.parse.quote(lang))
+            if year:
+                parts.append("/year/" + year)
+            path = "".join(parts) + ".html"
+
+            # 筛选页分页：真实源码里跳回 /genre/{cid}-{n}.html
             if page and page > 1:
-                path = "/filter/id/%s/page/%d.html" % (cid, page)
+                path = "/genre/%s-%d.html" % (cid, page)
 
         url = self.site_url + path
         self.log("category: %s" % url)
@@ -294,8 +337,9 @@ class Spider(Spider):
         self.log("  got %d videos, pagecount=%d" % (len(videos), pagecount))
         return {
             "list": videos, "page": page, "pagecount": pagecount,
-            "limit": 24, "total": pagecount * 24,
+            "limit": 36, "total": pagecount * 36,
         }
+    # =========================================================
 
     def searchContent(self, key, quick, pg="1"):
         page = int(pg) if pg else 1
@@ -325,7 +369,7 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # 标题：<h1 class="title">老舅</h1>
+        # 标题
         name = ""
         m = re.search(r'<h1[^>]*class="title"[^>]*>([\s\S]*?)</h1>', html, re.I)
         if m:
@@ -336,7 +380,7 @@ class Spider(Spider):
                 name = self._clean(m.group(1).split("-")[0].split("_")[0])
         name = name.strip() or vod_id
 
-        # 封面：og:image
+        # 封面
         pic = self.default_pic
         m = re.search(
             r'<meta[^>]*property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']',
@@ -364,7 +408,7 @@ class Spider(Spider):
                 content = self._clean(m.group(1))
         content = INTRO_PREFIX + "\n" + content if content else INTRO_PREFIX
 
-        # 主演：<p class="data"><span class="text-muted">主演：</span><a>史彭元</a>&nbsp;<a>杨烁</a>...</p>
+        # 主演
         actor = ""
         m = re.search(
             r'<p[^>]*class="data"[^>]*>\s*<span[^>]*class="text-muted"[^>]*>主演：</span>([\s\S]*?)</p>',
@@ -376,7 +420,7 @@ class Spider(Spider):
             else:
                 actor = self._clean(m.group(1))
 
-        # 导演：<p class="data"><span class="text-muted">导演：</span><a>五百</a>&nbsp;<a>陈泳旭</a>...</p>
+        # 导演
         director = ""
         m = re.search(
             r'<p[^>]*class="data"[^>]*>\s*<span[^>]*class="text-muted"[^>]*>导演：</span>([\s\S]*?)</p>',
@@ -388,7 +432,7 @@ class Spider(Spider):
             else:
                 director = self._clean(m.group(1))
 
-        # 备注："更新：全30集/2026-07-20"
+        # 备注
         remarks = ""
         m = re.search(
             r'<p[^>]*class="data"[^>]*>\s*<span[^>]*class="text-muted"[^>]*>更新：</span>'
@@ -442,8 +486,8 @@ class Spider(Spider):
             "vod_name":     name,
             "vod_pic":      pic,
             "vod_content":  content,
-            "vod_actor":    actor,      # ← 新增
-            "vod_director": director,   # ← 新增
+            "vod_actor":    actor,
+            "vod_director": director,
             "vod_remarks":  remarks or ("%d条线路" % len(play_from)),
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url":  "$$$".join(play_url),
