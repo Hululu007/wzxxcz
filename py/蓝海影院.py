@@ -3,8 +3,8 @@
 蓝海影院 desouk.net | TVBox Python 爬虫
 架构: 苹果CMS V10 (maccms) + m4-red 模板
 关键:
-  - 分类: /tv/{id}.html, 分页 /tv/{id}/page/{n}.html
-  - 筛选: /tv/{id}[/class/{v}][/area/{v}][/year/{v}][/by/{v}][/page/{n}].html
+  - 分类: /tv/{id}.html
+  - 分页+筛选: /tv/{id}[/page/{n}][/class/{c}][/area/{a}][/year/{y}][/by/{b}].html
   - 详情: /video/{id}.html
   - 播放: /play/{id}/{sid}/{nid}.html, player_aaaa.url 即 m3u8 直链
   - 搜索: /search.html?wd={kw}
@@ -174,7 +174,7 @@ _RE_PLAYER = re.compile(
 _RE_PAGE_INFO = re.compile(
     r'<span[^>]*class="num"[^>]*>\s*\d+\s*/\s*(\d+)\s*</span>', re.I)
 _RE_PAGE_TAIL = re.compile(
-    r'href="/tv/[^"]*?/page/(\d+)\.html"[^>]*>\s*尾页', re.I)
+    r'href="/tv/[^"]*?/page/(\d+)[^"]*\.html"[^>]*>\s*尾页', re.I)
 
 
 class Spider(Spider):
@@ -245,7 +245,8 @@ class Spider(Spider):
     def _extract_videos(self, html):
         """
         从分类页/搜索页/详情页提取影片卡片。
-        直接匹配 <a class="moive-vodlist__thumb" href="/video/xxx.html" title="片名" data-original="图片">
+        真实源码中，每个卡片的 <a> 标签格式：
+        <a class="moive-vodlist__thumb lazyload" href="/video/xxx.html" title="片名" data-original="图片">
         """
         videos = []
         seen = set()
@@ -342,16 +343,17 @@ class Spider(Spider):
         }
         by = by_map.get(by, by)
 
-        # 拼路径: /tv/{cid}[/area/{area}][/year/{year}][/by/{by}][/page/{n}].html
+        # 真实源码路径规则：/tv/{cid}[/page/{n}][/class/{c}][/area/{a}][/year/{y}][/by/{b}].html
+        # 注意：page 段紧随 cid，位于其他筛选段之前
         path = "/tv/%s" % cid
+        if page and page > 1:
+            path += "/page/%d" % page
         if area:
             path += "/area/" + urllib.parse.quote(area)
         if year:
             path += "/year/" + year
         if by:
             path += "/by/" + by
-        if page and page > 1:
-            path += "/page/%d" % page
         path += ".html"
 
         url = self.site_url + path
