@@ -4,14 +4,17 @@
 网站结构：
   - 列表卡片: article.paper-card > a.paper-cover[href=/video/{id}.html]
               img[data-src=封面] + span.score-tag + span.duration
-  - 详情: h1 标题 / .detail-poster-wrap img[src] / .detail-meta / .description
+  - 详情: h1 标题 / .detail-poster-wrap img[src]
+          元信息: <p class="detail-meta"><span><b>4.0</b> 分</span>
+                  <span>2026</span><span>大陆</span>
+                  <span>爱情,古装,剧情,国产</span></p>
+          导演/主演: <p class="cast"><span>导演：</span><span>黄颖湘</span> <span>陈丹</span></p>
           选集: div.play-source > div.episode-list > a[href=/player/{vid}-{sid}-{nid}.html]
-  - 分类分页: /category/{tid}-{pg}.html  (尾页在 nav.pagination 的“尾页”)
-  - 分类筛选: /vodshow/{tid}-{area}-{order}-{class}-{lang}-{letter}-{year}.html
+  - 分类分页: /category/{tid}-{pg}.html
+  - 分类筛选: /vodshow/{tid}-{order}-{class}-{area}-{lang}-{letter}-{year}.html
               段位固定 7 段，空段用空串占位
-  - 搜索: /search.html?wd=关键词  (+ &page=N 翻页)
-  - 播放: <script>var player_aaaa={...,"url":"m3u8直链","from":"1080zyk",...}</script>
-          走直链：直接返回 player_aaaa.url
+  - 搜索: /search.html?wd=关键词 (+ &page=N 翻页)
+  - 播放: <script>var player_aaaa={...,"url":"m3u8直链"}</script>  走直链
 """
 import re
 import sys
@@ -101,7 +104,8 @@ _TYPE_OPT = {
            "农村", "儿童", "网络电影"],
     "2":  ["全部", "国产", "港台", "日韩", "欧美", "泰国", "海外"],
     "3":  ["全部", "真人秀", "脱口秀", "国产综艺", "喜剧", "晚会", "音乐",
-           "纪录", "游戏", "生活", "文化", "相声", "情感", "竞技"],
+           "纪录", "游戏", "生活", "文化", "相声", "情感", "竞技",
+           "选秀", "访谈", "播报", "旅游", "美食", "曲艺", "财经", "求职"],
     "4":  ["全部", "国产", "日韩", "欧美", "港台", "海外", "动画", "冒险",
            "喜剧", "奇幻", "剧情", "科幻", "动作", "儿童", "悬疑", "日常"],
     "25": ["全部", "AI漫剧", "短剧", "剧情", "爱情", "爽文", "古装", "短片",
@@ -109,7 +113,7 @@ _TYPE_OPT = {
            "惊悚", "武侠", "科幻", "动作", "冒险", "恐怖", "青春", "历史"],
 }
 
-_YEARS = ["全部"] + [str(y) for y in range(2026, 2009, -1)]
+_YEARS = ["全部"] + [str(y) for y in range(2026, 2003, -1)]
 _AREAS = ["全部", "大陆", "香港", "台湾", "美国", "日本", "韩国",
           "英国", "法国", "加拿大", "印度", "泰国", "其它"]
 _SORTS = [("更新", "time"), ("热度", "hits"), ("评分", "score")]
@@ -134,7 +138,6 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
-# 卡片：完整 article
 _RE_CARD = re.compile(
     r'<article class="paper-card[^"]*">([\s\S]*?)</article>',
     re.S | re.I)
@@ -152,11 +155,10 @@ _RE_POSTER = re.compile(
     re.S | re.I)
 _RE_META = re.compile(r'<p class="detail-meta">([\s\S]*?)</p>', re.I)
 _RE_DESC = re.compile(r'<p class="description">([\s\S]*?)</p>', re.I)
-_RE_CAST = re.compile(
-    r'<p class="cast[^"]*"><span>([^<]+)：</span><em>([\s\S]*?)</em></p>',
-    re.S | re.I)
+# 导演/主演: <p class="cast cast-links"><span>导演：</span><span>名字</span> ... </p>
+_RE_CAST = re.compile(r'<p class="cast[^"]*">([\s\S]*?)</p>', re.S | re.I)
 
-# 选集：div.play-source -> h3 + div.episode-list -> a
+# 选集
 _RE_PLAY_SOURCE = re.compile(
     r'<div class="play-source">\s*<h3>([^<]*)</h3>\s*'
     r'<div class="episode-list">([\s\S]*?)</div>\s*</div>',
@@ -326,7 +328,17 @@ class Spider(Spider):
             def enc(x):
                 return urllib.parse.quote(x) if x else ""
 
-            seg = [t, enc(area), order or "", enc(cls), "", "", enc(year)]
+            # 段位（依据站方真实 URL 反推）:
+            # 1=tid  2=order  3=class  4=area  5=lang  6=letter  7=year
+            seg = [
+                t,                  # 1 tid
+                order or "time",    # 2 排序
+                enc(cls),           # 3 类型
+                enc(area),          # 4 地区
+                "",                 # 5 语言
+                "",                 # 6 字母
+                enc(year),          # 7 年份
+            ]
             url = "%s/vodshow/%s.html" % (self.site_url, "-".join(seg))
             if page > 1:
                 url += "?page=%d" % page
@@ -387,22 +399,26 @@ class Spider(Spider):
             if m2:
                 pic = m2.group(1)
 
-        # 元信息
+        # 元信息: 评分 / 年份 / 地区 / 类型
+        # 真实结构: <p class="detail-meta">
+        #   <span><b>4.0</b> 分</span><span>2026</span>
+        #   <span>大陆</span><span>爱情,古装,剧情,国产</span></p>
         score = ""
         year = area = type_name = ""
         m = _RE_META.search(html)
         if m:
-            raw = self._clean(m.group(1))
-            parts = [p.strip() for p in raw.split() if p.strip()]
-            for p in parts:
-                if "分" in p and re.match(r"^[\d.]+分?$", p.replace("分", "分")):
-                    score = p.replace("分", "")
-                elif re.match(r"^(19|20)\d{2}$", p):
-                    year = p
-                elif not area:
-                    area = p
-                elif not type_name:
-                    type_name = p
+            spans = re.findall(r'<span[^>]*>([\s\S]*?)</span>',
+                               m.group(1), re.I)
+            vals = [self._clean(s) for s in spans]
+            vals = [v for v in vals if v]
+            if len(vals) >= 1:
+                score = re.sub(r"[^\d.]", "", vals[0]) or ""
+            if len(vals) >= 2:
+                year = vals[1]
+            if len(vals) >= 3:
+                area = vals[2]
+            if len(vals) >= 4:
+                type_name = vals[3]
 
         # 简介
         content = ""
@@ -422,15 +438,22 @@ class Spider(Spider):
             content = INTRO_PREFIX
 
         # 导演 / 主演
+        # 真实结构: <p class="cast cast-links">
+        #   <span>导演：</span><span>黄颖湘</span> <span>陈丹</span></p>
         director = actor = ""
-        for label, val in _RE_CAST.findall(html):
-            v = self._clean(val)
-            if v in ("未知", "演员资料待补充"):
-                v = ""
+        for cast_block in _RE_CAST.findall(html):
+            spans = re.findall(r'<span[^>]*>([\s\S]*?)</span>',
+                               cast_block, re.I)
+            if not spans:
+                continue
+            label = self._clean(spans[0])
+            names = [self._clean(s) for s in spans[1:]]
+            names = [n for n in names
+                     if n and n not in ("未知", "演员资料待补充")]
             if "导演" in label:
-                director = v
+                director = " ".join(names)
             elif "主演" in label:
-                actor = re.sub(r"\s*,\s*", ", ", v)
+                actor = ", ".join(names)
 
         # 选集
         groups = []
@@ -502,7 +525,6 @@ class Spider(Spider):
             from_flag = info.get("from", "") or ""
             encrypt = info.get("encrypt", 0)
 
-            # 与 player.js 的 encrypt 处理保持一致
             if encrypt == 1:
                 play_url = urllib.parse.unquote(play_url)
             elif encrypt == 2:
@@ -513,7 +535,7 @@ class Spider(Spider):
                 except Exception as e:
                     self.log("encrypt=2 decode fail: %s" % e)
 
-        # 走直链：直接把 m3u8 地址交给 TVBox 播放
+        # 走直链
         if play_url:
             self.log("  direct: %s" % play_url[:200])
             res = {
