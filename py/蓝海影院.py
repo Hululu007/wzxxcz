@@ -1,13 +1,14 @@
 # coding=utf-8
 """
-蓝海影院 desouk.net | TVBox Python 爬虫
-架构: 苹果CMS V10 (maccms) + m4-red 模板
+新新影院 xvjtnl.woosa.cn | TVBox Python 爬虫
+架构: 苹果CMS V10 + MyTheme (six 模板)
 关键:
-  - 分类: /tv/{id}.html
-  - 分页+筛选: /tv/{id}[/page/{n}][/class/{c}][/area/{a}][/year/{y}][/by/{b}].html
-  - 详情: /video/{id}.html
-  - 播放: /play/{id}/{sid}/{nid}.html, player_aaaa.url 即 m3u8 直链
-  - 搜索: /search.html?wd={kw}
+  - 首页: /
+  - 分类: /genre/{id}.html, 分页 /genre/{id}/page/{n}.html
+  - 更多: /filter/id/{id}.html
+  - 详情: /film/g{id}.html
+  - 播放: /watch/g{id}/{sid}/{nid}.html, player_aaaa.url 即 m3u8
+  - 搜索: /lookup.html?wd={kw}
 """
 import re
 import sys
@@ -50,142 +51,45 @@ except ImportError:
 
         def log(self, *a, **kw):
             try:
-                print("[desouk]", *a)
+                print("[woosa]", *a)
             except Exception:
                 pass
 
     Spider = _BaseSpider
 
 
-HOST = "https://www.desouk.net"
+HOST = "https://xvjtnl.woosa.cn"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-DEFAULT_PIC = HOST + "/template/m4-red/img/favicon.ico"
+DEFAULT_PIC = HOST + "/template/six/statics/img/favicon.ico"
 
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
+# 顶级分类（从首页确认）
 CLASSES = [
     {"type_id": "1",  "type_name": "电影"},
     {"type_id": "2",  "type_name": "电视剧"},
-    {"type_id": "3",  "type_name": "短剧"},
+    {"type_id": "3",  "type_name": "综艺片"},
     {"type_id": "4",  "type_name": "动漫"},
-    {"type_id": "5",  "type_name": "综艺"},
-    {"type_id": "48", "type_name": "网飞新剧"},
-    {"type_id": "47", "type_name": "AI漫剧"},
+    {"type_id": "24", "type_name": "短剧"},
 ]
 
+# 电影子分类（从首页/分类页提取）
 _SUB_CLASS = {
-    "1":  [("6", "剧情片"), ("7", "动作片"), ("8", "冒险片"), ("9", "喜剧片"),
-           ("10", "奇幻片"), ("11", "恐怖片"), ("16", "悬疑片"), ("17", "惊悚片"),
-           ("18", "灾难片"), ("19", "爱情片"), ("20", "犯罪片"), ("21", "科幻片"),
-           ("22", "动画电影"), ("28", "战争片"), ("29", "经典片")],
-    "2":  [("12", "国产剧"), ("13", "港剧"), ("14", "韩剧"), ("15", "日剧"),
-           ("23", "泰剧"), ("24", "台剧"), ("25", "欧美剧"), ("26", "新马剧"),
-           ("27", "纪录片")],
-    "3":  [("35", "总裁短剧"), ("36", "神豪短剧"), ("37", "穿越重生短剧"),
-           ("38", "都市短剧"), ("39", "年代短剧"), ("40", "长篇剧场")],
-    "4":  [("41", "国产动漫"), ("42", "日本动漫"), ("43", "韩国动漫"),
-           ("44", "欧美动漫"), ("45", "港台动漫"), ("46", "AI漫剧")],
-    "5":  [("49", "国产综艺"), ("50", "港台综艺"), ("51", "韩国综艺"),
-           ("52", "日本综艺"), ("53", "欧美综艺")],
-    "48": [("54", "网飞电影"), ("55", "网飞自制剧")],
-    "47": [("47", "AI漫剧")],
+    "1":  [("6", "动作片"), ("7", "喜剧片"), ("8", "爱情片"), ("9", "科幻片"),
+           ("10", "剧情片"), ("11", "战争片"), ("12", "纪录片"), ("39", "恐怖片"),
+           ("41", "动画片")],
+    "2":  [],
+    "3":  [],
+    "4":  [],
+    "24": [],
 }
-
-_SORTS = [{"n": "按时间", "v": ""},
-          {"n": "按人气", "v": "hits"},
-          {"n": "按评分", "v": "score"}]
-
-_YEARS = [{"n": "全部", "v": ""}] + \
-         [{"n": str(y), "v": str(y)} for y in range(2026, 2011, -1)]
-
-_AREAS = [
-    {"n": "全部", "v": ""},
-    {"n": "大陆", "v": "大陆"}, {"n": "香港", "v": "香港"},
-    {"n": "台湾", "v": "台湾"}, {"n": "美国", "v": "美国"},
-    {"n": "韩国", "v": "韩国"}, {"n": "日本", "v": "日本"},
-    {"n": "欧美", "v": "欧美"}, {"n": "英国", "v": "英国"},
-    {"n": "法国", "v": "法国"}, {"n": "泰国", "v": "泰国"},
-    {"n": "印度", "v": "印度"}, {"n": "加拿大", "v": "加拿大"},
-    {"n": "西班牙", "v": "西班牙"}, {"n": "德国", "v": "德国"},
-    {"n": "俄罗斯", "v": "俄罗斯"}, {"n": "新加坡", "v": "新加坡"},
-]
-
-FILTERS = {}
-for c in CLASSES:
-    tid = c["type_id"]
-    sub = [{"n": "全部", "v": ""}] + \
-          [{"n": n, "v": sid} for sid, n in _SUB_CLASS.get(tid, [])]
-    FILTERS[tid] = [
-        {"key": "class", "name": "分类", "value": sub},
-        {"key": "area",  "name": "地区", "value": _AREAS},
-        {"key": "year",  "name": "年份", "value": _YEARS},
-        {"key": "by",    "name": "排序", "value": _SORTS},
-    ]
-
-
-# ===================== 正则 =====================
-
-# 修正：允许跨标签，但限定长度 500，防止串卡
-_RE_CARD = re.compile(
-    r'href="(/video/[^"]+?\.html)"'
-    r'[\s\S]{0,500}?'
-    r'title="([^"]*)"'
-    r'[\s\S]{0,500}?'
-    r'data-original="([^"]*)"',
-    re.S | re.I)
-
-_RE_PIC_TEXT = re.compile(
-    r'<span[^>]*class="pic-text[^"]*"[^>]*>([^<]*)</span>', re.I)
-
-_RE_H1 = re.compile(r'<h1[^>]*class="title"[^>]*>([\s\S]*?)</h1>', re.I)
-_RE_TITLE_TAG = re.compile(r'<title>(.*?)</title>', re.S | re.I)
-_RE_OG_IMG = re.compile(
-    r'<meta[^>]*property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']', re.I)
-_RE_SCORE = re.compile(
-    r'<span[^>]*class="branch"[^>]*>([\d.]+)</span>', re.I)
-_RE_ACTOR = re.compile(
-    r'<p[^>]*class="data"[^>]*>\s*<span[^>]*class="text-muted"[^>]*>主演：</span>([\s\S]*?)</p>',
-    re.S | re.I)
-_RE_DIRECTOR = re.compile(
-    r'<p[^>]*class="data"[^>]*>\s*<span[^>]*class="text-muted"[^>]*>导演：</span>([\s\S]*?)</p>',
-    re.S | re.I)
-_RE_STATUS = re.compile(
-    r'<p[^>]*class="data"[^>]*>\s*<span[^>]*class="text-muted"[^>]*>状态：</span>([\s\S]*?)</p>',
-    re.S | re.I)
-
-# 修正：兼容 moive / movie
-_RE_DESC = re.compile(
-    r'<div[^>]*class="[^"]*(?:moive|movie)-pannel_bd[^"]*"[^>]*>[\s\S]*?<p[^>]*class="col-pd"[^>]*>([\s\S]*?)</p>',
-    re.S | re.I)
-
-_RE_META_DESC = re.compile(
-    r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', re.I)
-
-# 修正：线路名放宽，任意 <h3 class="title">xxx</h3>
-_RE_PLAYLIST_BLOCK = re.compile(
-    r'<h3[^>]*class="title"[^>]*>([\s\S]*?)</h3>'
-    r'[\s\S]*?'
-    r'<ul[^>]*class="moive-content__playlist[^"]*"[^>]*>([\s\S]*?)</ul>',
-    re.S | re.I)
-
-_RE_EP = re.compile(
-    r'<li[^>]*>\s*<a[^>]*href="(/play/[^"]+\.html)"[^>]*>([^<]+)</a>',
-    re.S | re.I)
-
-_RE_PLAYER = re.compile(
-    r'var\s+player_aaaa\s*=\s*(\{.*?\})\s*</script>', re.S)
-
-_RE_PAGE_INFO = re.compile(
-    r'<span[^>]*class="num"[^>]*>\s*\d+\s*/\s*(\d+)\s*</span>', re.I)
-_RE_PAGE_TAIL = re.compile(
-    r'href="/tv/[^"]*?/page/(\d+)[^"]*\.html"[^>]*>\s*尾页', re.I)
 
 
 class Spider(Spider):
 
     def getName(self):
-        return "蓝海影院"
+        return "新新影院"
 
     def init(self, extend=""):
         try:
@@ -204,6 +108,8 @@ class Spider(Spider):
         self._play_cache = {}
         self.log("init: site=%s" % self.site_url)
 
+    # ---------------- 基础工具 ----------------
+
     def _fetch(self, url, timeout=15, headers=None):
         try:
             h = dict(self.headers)
@@ -211,13 +117,10 @@ class Spider(Spider):
                 h.update(headers)
             rsp = self.fetch(url, headers=h, timeout=timeout)
             if hasattr(rsp, "text"):
-                text = rsp.text or ""
-            elif hasattr(rsp, "content"):
-                text = rsp.content.decode("utf-8", "ignore")
-            else:
-                text = str(rsp)
-            self.log("fetch OK %s -> len=%d" % (url, len(text)))
-            return text
+                return rsp.text or ""
+            if hasattr(rsp, "content"):
+                return rsp.content.decode("utf-8", "ignore")
+            return str(rsp)
         except Exception as e:
             self.log("fetch FAIL %s -> %s" % (url, e))
             return ""
@@ -246,35 +149,30 @@ class Spider(Spider):
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
 
+    # ---------------- 列表解析 ----------------
+
     def _extract_videos(self, html):
         """
-        从分类页/搜索页/详情页提取影片卡片。
-        强制走「手动切段」方案：找到每个 <a 含 moive-vodlist__thumb 的位置，
-        从该位置切到下一个 <a class="moive-vodlist__thumb 或 </li>，窗口最多 1000 字符。
-        在片段内分别用 3 个独立小正则提取 href / title / data-original。
+        从首页/分类页/搜索页提取影片卡片。
+        真实卡片结构（首页/分类/搜索通用）：
+        <a class="iqy-vodlist__thumb ..." href="/film/g{id}.html" title="片名"
+           data-original="图片">
         """
         videos = []
         seen = set()
         if not html:
-            self.log("  HTML 为空")
             return videos
 
-        self.log("  HTML 长度: %d" % len(html))
-
-        start_re = re.compile(r'<a[^>]*moive-vodlist__thumb', re.I)
-        href_re = re.compile(r'href="(/video/[^"]+?\.html)"', re.I)
+        start_re = re.compile(r'<a[^>]*iqy-vodlist__thumb', re.I)
+        href_re = re.compile(r'href="(/film/g[^"]+?\.html)"', re.I)
         title_re = re.compile(r'title="([^"]*)"', re.I)
         pic_re = re.compile(r'data-original="([^"]*)"', re.I)
-        next_re = re.compile(r'<a[^>]*moive-vodlist__thumb|</li>', re.I)
+        next_re = re.compile(r'<a[^>]*iqy-vodlist__thumb|</li>', re.I)
 
         starts = [m.start() for m in start_re.finditer(html)]
-        self.log("  卡片起点: %d 个" % len(starts))
-
         for s in starts:
-            # 找下一个卡片起点或 </li> 作为切段终点
             next_m = next_re.search(html, s + 10)
             e = next_m.start() if next_m else s + 1000
-            # 窗口最多 1000 字符
             if e - s > 1000:
                 e = s + 1000
             seg = html[s:e]
@@ -297,30 +195,27 @@ class Spider(Spider):
                 "vod_remarks": "",
             })
 
-        self.log("  最终视频数: %d" % len(videos))
         return videos
 
     def _page_count(self, html):
         if not html:
             return 1
-        m = _RE_PAGE_INFO.search(html)
-        if m:
-            try:
-                return int(m.group(1))
-            except Exception:
-                pass
-        m = _RE_PAGE_TAIL.search(html)
-        if m:
-            try:
-                return int(m.group(1))
-            except Exception:
-                pass
         pages = [int(x) for x in re.findall(r'/page/(\d+)', html)]
         if pages:
             return max(pages)
         return 1
 
+    # ---------------- 首页 / 分类 / 搜索 ----------------
+
     def homeContent(self, filter=False):
+        FILTERS = {}
+        for c in CLASSES:
+            tid = c["type_id"]
+            sub = [{"n": "全部", "v": ""}] + \
+                  [{"n": n, "v": sid} for sid, n in _SUB_CLASS.get(tid, [])]
+            FILTERS[tid] = [
+                {"key": "class", "name": "分类", "value": sub},
+            ]
         return {"class": CLASSES, "filters": FILTERS}
 
     def homeVideoContent(self):
@@ -342,26 +237,18 @@ class Spider(Spider):
                 del extend[k]
 
         cid = extend.pop("class", "") or tid
-        area = extend.pop("area", "")
-        year = extend.pop("year", "")
-        by = extend.pop("by", "")
 
-        by_map = {
-            "按时间": "", "按人气": "hits", "按评分": "score",
-            "time": "", "hits": "hits", "score": "score",
-        }
-        by = by_map.get(by, by)
-
-        path = "/tv/%s" % cid
-        if page and page > 1:
-            path += "/page/%d" % page
-        if area:
-            path += "/area/" + urllib.parse.quote(area)
-        if year:
-            path += "/year/" + year
-        if by:
-            path += "/by/" + by
-        path += ".html"
+        # 若 cid 是子分类 id（6~41 等），用 /filter/id/{cid}.html
+        # 否则用 /genre/{cid}.html
+        # 分页：/filter/id/{cid}/page/{n}.html 或 /genre/{cid}/page/{n}.html
+        if cid in ("1", "2", "3", "4", "24"):
+            path = "/genre/%s.html" % cid
+            if page and page > 1:
+                path = "/genre/%s/page/%d.html" % (cid, page)
+        else:
+            path = "/filter/id/%s.html" % cid
+            if page and page > 1:
+                path = "/filter/id/%s/page/%d.html" % (cid, page)
 
         url = self.site_url + path
         self.log("category: %s" % url)
@@ -376,19 +263,20 @@ class Spider(Spider):
 
     def searchContent(self, key, quick, pg="1"):
         page = int(pg) if pg else 1
-        url = "%s/search.html?wd=%s" % (self.site_url, urllib.parse.quote(key))
+        url = "%s/lookup.html?wd=%s" % (self.site_url, urllib.parse.quote(key))
         if page > 1:
-            url += "&page=%d" % page
+            url = "%s/lookup/wd/%s/page/%d.html" % (
+                self.site_url, urllib.parse.quote(key), page)
         self.log("search: %s" % url)
         html = self._fetch(url)
         videos = self._extract_videos(html)
-        self.log("  got %d videos" % len(videos))
-        return {"list": videos, "page": page,
-                "pagecount": self._page_count(html),
+        return {"list": videos, "page": page, "pagecount": 1,
                 "limit": 24, "total": len(videos)}
 
     def searchContentPage(self, key, quick, pg="1"):
         return self.searchContent(key, quick, pg)
+
+    # ---------------- 详情 ----------------
 
     def detailContent(self, ids):
         if not ids:
@@ -401,77 +289,82 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
+        # 标题：<h1 class="title">老舅</h1>
         name = ""
-        m = _RE_H1.search(html)
+        m = re.search(r'<h1[^>]*class="title"[^>]*>([\s\S]*?)</h1>', html, re.I)
         if m:
             name = self._clean(m.group(1))
         if not name:
-            m = _RE_TITLE_TAG.search(html)
+            m = re.search(r'<title>(.*?)</title>', html, re.S)
             if m:
-                name = self._clean(m.group(1).split("_")[0].split("-")[0])
+                name = self._clean(m.group(1).split("-")[0].split("_")[0])
         name = name.strip() or vod_id
 
+        # 封面：og:image
         pic = self.default_pic
-        m = _RE_OG_IMG.search(html)
+        m = re.search(
+            r'<meta[^>]*property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']',
+            html, re.I)
         if m:
             pic = self._fix_url(m.group(1))
 
+        # 简介：优先 <span class="data" style="display: none;"><p>...</p></span>
         content = ""
-        m = _RE_DESC.search(html)
+        m = re.search(
+            r'<span[^>]*class="data"[^>]*>\s*<p>([\s\S]*?)</p>\s*</span>',
+            html, re.I)
         if m:
             content = self._clean(m.group(1))
         if not content:
-            m = _RE_META_DESC.search(html)
+            m = re.search(r'<span[^>]*class="sketch[^"]*"[^>]*>([\s\S]*?)</span>',
+                          html, re.I)
+            if m:
+                content = self._clean(m.group(1))
+        if not content:
+            m = re.search(
+                r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']',
+                html, re.I)
             if m:
                 content = self._clean(m.group(1))
         content = INTRO_PREFIX + "\n" + content if content else INTRO_PREFIX
 
-        score = ""
-        m = _RE_SCORE.search(html)
-        if m:
-            score = m.group(1)
-
-        actor = ""
-        m = _RE_ACTOR.search(html)
-        if m:
-            actor = re.sub(r"\s*,\s*", ", ", self._clean(m.group(1)))
-
-        director = ""
-        m = _RE_DIRECTOR.search(html)
-        if m:
-            director = re.sub(r"\s*,\s*", ", ", self._clean(m.group(1)))
-
-        remarks = ""
-        m = _RE_STATUS.search(html)
-        if m:
-            remarks = self._clean(m.group(1))
-
+        # 播放源线路：<li><a href="#playlist1" data-toggle="tab">lz线路</a></li>
+        # 每个 playlist 对应 <div id="playlist1"> <ul class="iqy-content__list ..."> <li>...<a href="/watch/...">第01集</a></li>...</ul></div>
         play_from = []
         play_url = []
 
-        for m in _RE_PLAYLIST_BLOCK.finditer(html):
-            line_name = self._clean(m.group(1)).strip()   # 放宽线路名
-            block = m.group(2)
+        # 先抓 tab 列表（线路名 + #playlistN）
+        tabs = re.findall(
+            r'<li[^>]*>\s*<a[^>]*href="(#playlist\d+)"[^>]*data-toggle="tab"[^>]*>([^<]+)</a>',
+            html, re.I)
+
+        # 对每个 playlistN，抓它下面的 <ul> ... </ul> 区块
+        for tab_id, tab_name in tabs:
+            # tab_id = "#playlist1"
+            pid = tab_id.lstrip("#")
+            # 匹配 <div id="playlist1" ...> ... </div>
+            m = re.search(
+                r'<div[^>]*id="%s"[^>]*>([\s\S]*?)</div>' % re.escape(pid),
+                html, re.I)
+            if not m:
+                continue
+            block = m.group(1)
+
             eps = []
-            for em in _RE_EP.finditer(block):
+            for em in re.finditer(
+                    r'<a[^>]*href="(/watch/[^"]+?\.html)"[^>]*>([^<]+)</a>',
+                    block, re.S | re.I):
                 ep_url, ep_name = em.group(1), em.group(2).strip()
                 if not ep_url.startswith("http"):
                     ep_url = self.site_url + ep_url
                 eps.append((ep_name, ep_url))
+
             if eps:
-                play_from.append(line_name or "线路%d" % (len(play_from) + 1))
+                play_from.append(self._clean(tab_name))
                 play_url.append("#".join("%s$%s" % (n, u) for n, u in eps))
 
-        seen_lines = set()
-        final_from, final_url = [], []
-        for f, u in zip(play_from, play_url):
-            if f in seen_lines:
-                continue
-            seen_lines.add(f)
-            final_from.append(f)
-            final_url.append(u)
-
-        if not final_from:
+        if not play_from:
+            self.log("  no play lines found")
             return {"list": []}
 
         return {"list": [{
@@ -479,13 +372,12 @@ class Spider(Spider):
             "vod_name":     name,
             "vod_pic":      pic,
             "vod_content":  content,
-            "vod_actor":    actor,
-            "vod_director": director,
-            "vod_score":    score,
-            "vod_remarks":  remarks or ("%d条线路" % len(final_from)),
-            "vod_play_from": "$$$".join(final_from),
-            "vod_play_url":  "$$$".join(final_url),
+            "vod_remarks":  "%d条线路" % len(play_from),
+            "vod_play_from": "$$$".join(play_from),
+            "vod_play_url":  "$$$".join(play_url),
         }]}
+
+    # ---------------- 播放 ----------------
 
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
@@ -501,7 +393,8 @@ class Spider(Spider):
         m3u8 = ""
 
         if html:
-            m = _RE_PLAYER.search(html)
+            m = re.search(r'var\s+player_aaaa\s*=\s*(\{.*?\})\s*</script>',
+                          html, re.S)
             if m:
                 try:
                     obj = json.loads(m.group(1))
@@ -529,6 +422,8 @@ class Spider(Spider):
         }
         self._play_cache[play_page] = (now, res)
         return res
+
+    # ---------------- 其他 ----------------
 
     def localProxy(self, param):
         return [200, "image/jpeg", b"", ""]
