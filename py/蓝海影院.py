@@ -186,13 +186,6 @@ class Spider(Spider):
     def _extract_videos(self, html):
         """
         从首页/分类页/搜索页提取影片卡片。
-        真实卡片结构：
-        <a class="iqy-vodlist__thumb ..." href="/film/g{id}.html" title="片名"
-           data-original="图片">
-           <span class="play ..."></span>
-           <span class="pic-tag pic-tag-top">1.0分</span>
-           <span class="pic-text text-right">更新至第12集</span>
-        </a>
         """
         videos = []
         seen = set()
@@ -203,10 +196,8 @@ class Spider(Spider):
         href_re = re.compile(r'href="(/film/g[^"]+?\.html)"', re.I)
         title_re = re.compile(r'title="([^"]*)"', re.I)
         pic_re = re.compile(r'data-original="([^"]*)"', re.I)
-        # ↓↓↓ 新增：备注（"更新至第12集""已完结"等）↓↓↓
         remark_re = re.compile(
             r'<span[^>]*class="pic-text[^"]*"[^>]*>([^<]*)</span>', re.I)
-        # ↑↑↑ 新增 ↑↑↑
         next_re = re.compile(r'<a[^>]*iqy-vodlist__thumb|</li>', re.I)
 
         starts = [m.start() for m in start_re.finditer(html)]
@@ -222,7 +213,7 @@ class Spider(Spider):
                 continue
             tm = title_re.search(seg)
             pm = pic_re.search(seg)
-            rm = remark_re.search(seg)   # ← 新增
+            rm = remark_re.search(seg)
 
             href = hm.group(1).replace("&amp;", "&")
             if href in seen:
@@ -233,7 +224,7 @@ class Spider(Spider):
                 "vod_id":      href,
                 "vod_name":    self._clean(tm.group(1))[:100] if tm else href,
                 "vod_pic":     self._fix_url(pm.group(1)) if pm else self.default_pic,
-                "vod_remarks": self._clean(rm.group(1)) if rm else "",  # ← 改
+                "vod_remarks": self._clean(rm.group(1)) if rm else "",
             })
 
         return videos
@@ -249,7 +240,6 @@ class Spider(Spider):
     # ---------------- 首页 / 分类 / 搜索 ----------------
 
     def homeContent(self, filter=False):
-        # ↓↓↓ 改动：补全筛选面板 ↓↓↓
         FILTERS = {}
         for c in CLASSES:
             tid = c["type_id"]
@@ -266,7 +256,6 @@ class Spider(Spider):
                 {"key": "by",    "name": "排序", "value": _SORTS},
             ]
         return {"class": CLASSES, "filters": FILTERS}
-        # ↑↑↑ 改动 ↑↑↑
 
     def homeVideoContent(self):
         html = self._fetch(self.site_url + "/")
@@ -288,9 +277,6 @@ class Spider(Spider):
 
         cid = extend.pop("class", "") or tid
 
-        # 若 cid 是子分类 id（6~41 等），用 /filter/id/{cid}.html
-        # 否则用 /genre/{cid}.html
-        # 分页：/filter/id/{cid}/page/{n}.html 或 /genre/{cid}/page/{n}.html
         if cid in ("1", "2", "3", "4", "24"):
             path = "/genre/%s.html" % cid
             if page and page > 1:
@@ -358,7 +344,7 @@ class Spider(Spider):
         if m:
             pic = self._fix_url(m.group(1))
 
-        # 简介：优先 <span class="data" style="display: none;"><p>...</p></span>
+        # 简介
         content = ""
         m = re.search(
             r'<span[^>]*class="data"[^>]*>\s*<p>([\s\S]*?)</p>\s*</span>',
@@ -378,7 +364,31 @@ class Spider(Spider):
                 content = self._clean(m.group(1))
         content = INTRO_PREFIX + "\n" + content if content else INTRO_PREFIX
 
-        # ↓↓↓ 新增：抓"更新：xxx"作为 vod_remarks ↓↓↓
+        # 主演：<p class="data"><span class="text-muted">主演：</span><a>史彭元</a>&nbsp;<a>杨烁</a>...</p>
+        actor = ""
+        m = re.search(
+            r'<p[^>]*class="data"[^>]*>\s*<span[^>]*class="text-muted"[^>]*>主演：</span>([\s\S]*?)</p>',
+            html, re.I)
+        if m:
+            names = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
+            if names:
+                actor = ", ".join(n.strip() for n in names if n.strip())
+            else:
+                actor = self._clean(m.group(1))
+
+        # 导演：<p class="data"><span class="text-muted">导演：</span><a>五百</a>&nbsp;<a>陈泳旭</a>...</p>
+        director = ""
+        m = re.search(
+            r'<p[^>]*class="data"[^>]*>\s*<span[^>]*class="text-muted"[^>]*>导演：</span>([\s\S]*?)</p>',
+            html, re.I)
+        if m:
+            names = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
+            if names:
+                director = ", ".join(n.strip() for n in names if n.strip())
+            else:
+                director = self._clean(m.group(1))
+
+        # 备注："更新：全30集/2026-07-20"
         remarks = ""
         m = re.search(
             r'<p[^>]*class="data"[^>]*>\s*<span[^>]*class="text-muted"[^>]*>更新：</span>'
@@ -392,9 +402,8 @@ class Spider(Spider):
                 html, re.I)
             if m:
                 remarks = self._clean(m.group(1))
-        # ↑↑↑ 新增 ↑↑↑
 
-        # 播放源线路：<li><a href="#playlist1" data-toggle="tab">lz线路</a></li>
+        # 播放源线路
         play_from = []
         play_url = []
 
@@ -433,7 +442,9 @@ class Spider(Spider):
             "vod_name":     name,
             "vod_pic":      pic,
             "vod_content":  content,
-            "vod_remarks":  remarks or ("%d条线路" % len(play_from)),  # ← 改
+            "vod_actor":    actor,      # ← 新增
+            "vod_director": director,   # ← 新增
+            "vod_remarks":  remarks or ("%d条线路" % len(play_from)),
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url":  "$$$".join(play_url),
         }]}
