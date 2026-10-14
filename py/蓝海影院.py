@@ -130,17 +130,6 @@ for c in CLASSES:
 
 # ===================== 正则 =====================
 
-# 每个影片卡片 <li>：用 <li> 分块，防止跨条目匹配
-_RE_LI_BLOCK = re.compile(r'<li[^>]*>([\s\S]*?)</li>', re.I)
-
-# 卡片内的 <a class="moive-vodlist__thumb" href="/video/xxx.html" title="片名" data-original="图片">
-# 属性顺序不固定，所以用独立的三个正则提取
-_RE_A_HREF = re.compile(r'href="(/video/[^"]+?\.html)"', re.I)
-_RE_A_TITLE = re.compile(r'title="([^"]*)"', re.I)
-_RE_A_PIC = re.compile(r'data-original="([^"]*)"', re.I)
-_RE_A_THUMB = re.compile(
-    r'<a[^>]*class="[^"]*moive-vodlist__thumb[^"]*"[^>]*>', re.I)
-
 # 播放状态
 _RE_PIC_TEXT = re.compile(
     r'<span[^>]*class="pic-text[^"]*"[^>]*>([^<]*)</span>', re.I)
@@ -167,19 +156,17 @@ _RE_DESC = re.compile(
 _RE_META_DESC = re.compile(
     r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', re.I)
 
-# 播放线路区块：<h3 class="title">...线路X...</h3> ... <ul class="moive-content__playlist clearfix">
+# 播放线路
 _RE_PLAYLIST_BLOCK = re.compile(
     r'<h3[^>]*class="title"[^>]*>[\s\S]*?'
     r'(线路[0-9]+)[\s\S]*?</h3>[\s\S]*?'
     r'<ul[^>]*class="moive-content__playlist[^"]*"[^>]*>([\s\S]*?)</ul>',
     re.S | re.I)
 
-# 剧集条目
 _RE_EP = re.compile(
     r'<li[^>]*>\s*<a[^>]*href="(/play/[^"]+\.html)"[^>]*>([^<]+)</a>',
     re.S | re.I)
 
-# player_aaaa
 _RE_PLAYER = re.compile(
     r'var\s+player_aaaa\s*=\s*(\{.*?\})\s*</script>', re.S)
 
@@ -258,43 +245,33 @@ class Spider(Spider):
     def _extract_videos(self, html):
         """
         从分类页/搜索页/详情页提取影片卡片。
-        核心思路：先按 <li>...</li> 切块，每块内部再提取 <a class="moive-vodlist__thumb"> 的信息，
-        避免跨条目匹配。
+        直接匹配 <a class="moive-vodlist__thumb" href="/video/xxx.html" title="片名" data-original="图片">
         """
         videos = []
         seen = set()
         if not html:
             return videos
 
-        # 方法1: 按 li 分块（分类页/搜索页/详情页的推荐）
-        for li_m in _RE_LI_BLOCK.finditer(html):
-            block = li_m.group(1)
+        pattern = re.compile(
+            r'<a[^>]*class="[^"]*moive-vodlist__thumb[^"]*"[^>]*?'
+            r'href="(/video/[^"]+?\.html)"[^>]*?'
+            r'title="([^"]*)"[^>]*?'
+            r'data-original="([^"]*)"',
+            re.S | re.I)
 
-            # 必须有 moive-vodlist__thumb 的 a 标签
-            a_m = _RE_A_THUMB.search(block)
-            if not a_m:
-                continue
-            a_tag = a_m.group(0)
-
-            href_m = _RE_A_HREF.search(a_tag)
-            title_m = _RE_A_TITLE.search(a_tag)
-            pic_m = _RE_A_PIC.search(a_tag)
-            if not href_m:
-                continue
-
-            href = href_m.group(1).replace("&amp;", "&")
+        for m in pattern.finditer(html):
+            href, title, pic = m.group(1), m.group(2), m.group(3)
+            href = href.replace("&amp;", "&")
             if href in seen:
                 continue
             seen.add(href)
 
-            title = title_m.group(1) if title_m else ""
-            pic = pic_m.group(1) if pic_m else ""
-
-            # 备注：从 block 里找 pic-text
+            # 备注：从该卡片往后 300 字符内找 pic-text
             remarks = ""
-            pt_m = _RE_PIC_TEXT.search(block)
-            if pt_m:
-                remarks = self._clean(pt_m.group(1))
+            tail = html[m.end(): m.end() + 300]
+            pt = _RE_PIC_TEXT.search(tail)
+            if pt:
+                remarks = self._clean(pt.group(1))
 
             videos.append({
                 "vod_id":      href,
@@ -365,13 +342,8 @@ class Spider(Spider):
         }
         by = by_map.get(by, by)
 
-        # 拼路径: /tv/{cid}[/class/{class}][/area/{area}][/year/{year}][/by/{by}][/page/{n}].html
-        # 注意：这里的 class 是"剧情"分类（中文），与上面 cid 的"分类"不同。
-        # 真实源码里"剧情"分类的链接是 /tv/2/class/喜剧.html，
-        # 所以如果 extend 里有 class 且不是数字，就是"剧情"。
+        # 拼路径: /tv/{cid}[/area/{area}][/year/{year}][/by/{by}][/page/{n}].html
         path = "/tv/%s" % cid
-        # 注意：extend["class"] 已被 pop 出去并用作 cid 了，
-        # 但是如果有"剧情"分类，需要用另一个字段（一般 TVBox 不会传）。
         if area:
             path += "/area/" + urllib.parse.quote(area)
         if year:
