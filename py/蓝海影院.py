@@ -125,10 +125,7 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
-# 仿参考代码 dhvideo.cc 的思路：
-#   以 href="/video/xxx.html" 为入口锚点，向后跨属性抓 title 和 data-original。
-#   不使用 class 作为入口，不依赖 class 存在与否。
-#   三个属性均在同一个 <a ...> 标签内。
+# 入口锚点：href="/video/xxx.html"，向后跨属性抓 title 和 data-original。
 _RE_CARD = re.compile(
     r'href="(/video/[^"]+?\.html)"'
     r'[^>]*?'
@@ -209,10 +206,13 @@ class Spider(Spider):
                 h.update(headers)
             rsp = self.fetch(url, headers=h, timeout=timeout)
             if hasattr(rsp, "text"):
-                return rsp.text or ""
-            if hasattr(rsp, "content"):
-                return rsp.content.decode("utf-8", "ignore")
-            return str(rsp)
+                text = rsp.text or ""
+            elif hasattr(rsp, "content"):
+                text = rsp.content.decode("utf-8", "ignore")
+            else:
+                text = str(rsp)
+            self.log("fetch OK %s -> len=%d" % (url, len(text)))
+            return text
         except Exception as e:
             self.log("fetch FAIL %s -> %s" % (url, e))
             return ""
@@ -243,16 +243,53 @@ class Spider(Spider):
 
     def _extract_videos(self, html):
         """
-        仿 dhvideo.cc：以 href="/video/xxx.html" 为入口，findall 拿所有卡片。
-        desouk.net 卡片的 href/title/data-original 均在同一个 <a ...> 标签内。
+        从分类页/搜索页/详情页提取影片卡片。
+        真实卡片格式（三个属性在同一 <a> 标签内）：
+        <a class="moive-vodlist__thumb lazyload" href="/video/xxx.html" title="片名" data-original="图片">
+        这里用两套方案：A 用组合正则 findall；B 用最原始的手动切段解析。
         """
         videos = []
         seen = set()
         if not html:
+            self.log("  HTML 为空")
             return videos
 
-        matches = _RE_CARD.findall(html)
-        for href, title, pic in matches:
+        self.log("  HTML 长度: %d" % len(html))
+
+        # ---------- 方案 A：组合正则 ----------
+        matches_a = _RE_CARD.findall(html)
+        self.log("  方案A 命中: %d 条" % len(matches_a))
+
+        matched = list(matches_a)
+
+        # ---------- 方案 B：手动切段 ----------
+        if not matched:
+            # 找出所有 <a 且含 moive-vodlist__thumb 的位置，作为切片起点
+            start_re = re.compile(r'<a[^>]*moive-vodlist__thumb', re.I)
+            href_re = re.compile(r'href="(/video/[^"]+?\.html)"', re.I)
+            title_re = re.compile(r'title="([^"]*)"', re.I)
+            pic_re = re.compile(r'data-original="([^"]*)"', re.I)
+
+            for sm in start_re.finditer(html):
+                s = sm.start()
+                seg = html[s:s + 400]           # 最多往后 400 字符
+
+                hm = href_re.search(seg)
+                if not hm:
+                    continue
+                tm = title_re.search(seg)
+                pm = pic_re.search(seg)
+
+                matched.append((
+                    hm.group(1),
+                    tm.group(1) if tm else "",
+                    pm.group(1) if pm else "",
+                ))
+
+            self.log("  方案B 命中: %d 条" % len(matched))
+
+        # ---------- 组装 ----------
+        for href, title, pic in matched:
             href = href.replace("&amp;", "&")
             if href in seen:
                 continue
@@ -264,6 +301,7 @@ class Spider(Spider):
                 "vod_remarks": "",
             })
 
+        self.log("  最终视频数: %d" % len(videos))
         return videos
 
     def _page_count(self, html):
