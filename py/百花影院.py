@@ -10,12 +10,17 @@
   - 分类筛选: /vodshow/{tid}-{area}-{order}-{class}-{lang}-{letter}-{year}.html
               段位固定 7 段，空段用空串占位
   - 搜索: /search.html?wd=关键词  (+ &page=N 翻页)
-  - 播放: <script>var player_aaaa={...,"url":"m3u8直链",...}</script>
+  - 播放: <script>var player_aaaa={...,"url":"m3u8直链","from":"1080zyk",...}</script>
+          player.js 依据 playerconfig.js 的 player_list 判定：
+            ps=1 -> 加载 /static/player/parse.js
+                    iframe src = MacPlayer.Parse + MacPlayer.PlayUrl (字符串直拼, 不编码)
+            ps=0 -> 直接播放 MacPlayer.PlayUrl
 """
 import re
 import sys
 import json
 import time
+import base64
 import urllib.parse
 
 sys.path.append('..')
@@ -64,6 +69,8 @@ HOST = "https://yctd.cc"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 DEFAULT_PIC = HOST + "/template/frost/asset/img/placeholder.svg"
+
+INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
 # ============ 分类（依据 nav 真实结构，含子类 id） ============
 CLASSES = [
@@ -140,8 +147,6 @@ _RE_CARD_IMG = re.compile(
     r'<img[^>]*?(?:data-src|src)="([^"]+)"[^>]*?>', re.S | re.I)
 _RE_CARD_SCORE = re.compile(r'<span class="score-tag">([^<]*)</span>', re.I)
 _RE_CARD_DUR = re.compile(r'<span class="duration">([^<]*)</span>', re.I)
-_RE_CARD_META = re.compile(r'<p class="card-meta">([^<]*)</p>', re.I)
-_RE_CARD_ACTOR = re.compile(r'<p class="card-actor">([^<]*)</p>', re.I)
 
 # 详情
 _RE_H1 = re.compile(r'<h1[^>]*>([\s\S]*?)</h1>', re.I)
@@ -173,6 +178,14 @@ _RE_PLAYER = re.compile(
 
 
 class Spider(Spider):
+
+    # 与 /static/js/playerconfig.js 的 MacPlayerConfig.player_list 对应
+    # 只有 ps == "1" 的线路才走 parse 接口
+    # 键 = player_aaaa.from 字段值, 值 = parse 前缀
+    _PARSE_MAP = {
+        "1080zyk": "/ali.html?url=",
+        # 以后站方新增 ps=1 的线路, 加到这里即可
+    }
 
     def getName(self):
         return "百花影院"
@@ -325,8 +338,10 @@ class Spider(Spider):
             # /vodshow/{tid}-{area}-{order}-{class}-{lang}-{letter}-{year}.html
             # 空段保留占位
             t = sub or tid
+
             def enc(x):
                 return urllib.parse.quote(x) if x else ""
+
             seg = [t, enc(area), order or "", enc(cls), "", "", enc(year)]
             url = "%s/vodshow/%s.html" % (self.site_url, "-".join(seg))
             if page > 1:
@@ -418,6 +433,12 @@ class Spider(Spider):
             if md:
                 content = self._clean(md.group(1))
 
+        # 简介加前缀（保持和原站点简介拼接方式一致）
+        if content:
+            content = INTRO_PREFIX + "\n" + content
+        else:
+            content = INTRO_PREFIX
+
         # 导演 / 主演
         director = actor = ""
         for label, val in _RE_CAST.findall(html):
@@ -473,35 +494,74 @@ class Spider(Spider):
                 return res
 
         html = self._fetch(play_page)
-        url = ""
 
-        # 优先抓 player_aaaa.url
+        play_url = ""
+        from_flag = ""
+
         m = _RE_PLAYER.search(html)
         if m:
+            raw = m.group(1)
             try:
-                info = json.loads(m.group(1))
-                url = info.get("url", "") or ""
-            except Exception as e:
-                self.log("player_aaaa json fail: %s" % e)
-                # 兜底：正则抓 url 字段
-                m2 = re.search(r'"url"\s*:\s*"([^"]+)"', m.group(1))
+                info = json.loads(raw)
+            except Exception:
+                # 兜底：正则抓取 url / from / encrypt
+                info = {}
+                m2 = re.search(r'"url"\s*:\s*"([^"]+)"', raw)
                 if m2:
-                    url = m2.group(1).replace("\\/", "/")
+                    info["url"] = m2.group(1)
+                m2 = re.search(r'"from"\s*:\s*"([^"]+)"', raw)
+                if m2:
+                    info["from"] = m2.group(1)
+                m2 = re.search(r'"encrypt"\s*:\s*"?(\d+)"?', raw)
+                if m2:
+                    info["encrypt"] = int(m2.group(1))
 
-        url = url.replace("\\/", "/").replace("&amp;", "&")
+            play_url = (info.get("url", "") or "").replace("\\/", "/")
+            play_url = play_url.replace("&amp;", "&")
+            from_flag = info.get("from", "") or ""
+            encrypt = info.get("encrypt", 0)
 
-        if url:
+            # 与 player.js 的 encrypt 处理保持一致
+            if encrypt == 1:
+                play_url = urllib.parse.unquote(play_url)
+            elif encrypt == 2:
+                try:
+                    play_url = base64.b64decode(play_url).decode(
+                        "utf-8", "ignore")
+                    play_url = urllib.parse.unquote(play_url)
+                except Exception as e:
+                    self.log("encrypt=2 decode fail: %s" % e)
+
+        # ps=1 的线路：与 parse.js 中 MacPlayer.Parse + MacPlayer.PlayUrl 一致
+        # 字符串直拼，不做 URL 编码，也不加其它参数
+        if play_url and from_flag in self._PARSE_MAP:
+            parse_url = self.site_url + self._PARSE_MAP[from_flag] + play_url
+            self.log("  parse(ps=1): %s" % parse_url[:220])
             res = {
-                "parse": 0,
+                "parse": 1,
                 "playUrl": "",
-                "url": url,
+                "url": parse_url,
                 "header": {
                     "User-Agent": UA,
                     "Referer": play_page,
                 },
             }
             self._play_cache[play_page] = (now, res)
-            self.log("  => m3u8: %s" % url[:160])
+            return res
+
+        # ps=0 的线路：直接返回 m3u8 直链
+        if play_url:
+            self.log("  direct(ps=0): %s" % play_url[:180])
+            res = {
+                "parse": 0,
+                "playUrl": "",
+                "url": play_url,
+                "header": {
+                    "User-Agent": UA,
+                    "Referer": play_page,
+                },
+            }
+            self._play_cache[play_page] = (now, res)
             return res
 
         # 兜底：交给 TVBox 嗅探
