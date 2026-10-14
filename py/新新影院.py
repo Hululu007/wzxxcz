@@ -364,7 +364,7 @@ class Spider(Spider):
                 content = self._clean(m.group(1))
         content = INTRO_PREFIX + "\n" + content if content else INTRO_PREFIX
 
-        # 主演
+        # 主演：<p class="data"><span class="text-muted">主演：</span><a>史彭元</a>&nbsp;<a>杨烁</a>...</p>
         actor = ""
         m = re.search(
             r'<p[^>]*class="data"[^>]*>\s*<span[^>]*class="text-muted"[^>]*>主演：</span>([\s\S]*?)</p>',
@@ -376,7 +376,7 @@ class Spider(Spider):
             else:
                 actor = self._clean(m.group(1))
 
-        # 导演
+        # 导演：<p class="data"><span class="text-muted">导演：</span><a>五百</a>&nbsp;<a>陈泳旭</a>...</p>
         director = ""
         m = re.search(
             r'<p[^>]*class="data"[^>]*>\s*<span[^>]*class="text-muted"[^>]*>导演：</span>([\s\S]*?)</p>',
@@ -387,29 +387,6 @@ class Spider(Spider):
                 director = ", ".join(n.strip() for n in names if n.strip())
             else:
                 director = self._clean(m.group(1))
-
-        # ↓↓↓ 新增：分类 / 地区 / 年份 ↓↓↓
-        vod_class = ""
-        m = re.search(
-            r'<span[^>]*class="text-muted[^"]*"[^>]*>分类：</span>\s*<a[^>]*>([^<]+)</a>',
-            html, re.I)
-        if m:
-            vod_class = self._clean(m.group(1))
-
-        vod_area = ""
-        m = re.search(
-            r'<span[^>]*class="text-muted[^"]*"[^>]*>地区：</span>\s*<a[^>]*>([^<]+)</a>',
-            html, re.I)
-        if m:
-            vod_area = self._clean(m.group(1))
-
-        vod_year = ""
-        m = re.search(
-            r'<span[^>]*class="text-muted[^"]*"[^>]*>年份：</span>\s*<a[^>]*>([^<]+)</a>',
-            html, re.I)
-        if m:
-            vod_year = self._clean(m.group(1))
-        # ↑↑↑ 新增 ↑↑↑
 
         # 备注："更新：全30集/2026-07-20"
         remarks = ""
@@ -425,14 +402,6 @@ class Spider(Spider):
                 html, re.I)
             if m:
                 remarks = self._clean(m.group(1))
-
-        # ↓↓↓ 新增：把"分类/地区/年份"拼到 vod_remarks 前面 ↓↓↓
-        head = " / ".join(x for x in [vod_class, vod_area, vod_year] if x)
-        if head and remarks:
-            remarks = head + " / " + remarks
-        elif head:
-            remarks = head
-        # ↑↑↑ 新增 ↑↑↑
 
         # 播放源线路
         play_from = []
@@ -473,11 +442,8 @@ class Spider(Spider):
             "vod_name":     name,
             "vod_pic":      pic,
             "vod_content":  content,
-            "vod_actor":    actor,
-            "vod_director": director,
-            "vod_area":     vod_area,
-            "vod_year":     vod_year,
-            "vod_class":    vod_class,
+            "vod_actor":    actor,      # ← 新增
+            "vod_director": director,   # ← 新增
             "vod_remarks":  remarks or ("%d条线路" % len(play_from)),
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url":  "$$$".join(play_url),
