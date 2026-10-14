@@ -125,12 +125,13 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
-# 入口锚点：href="/video/xxx.html"，向后跨属性抓 title 和 data-original。
+
+# 修正：允许跨标签，但限定长度 500，防止串卡
 _RE_CARD = re.compile(
     r'href="(/video/[^"]+?\.html)"'
-    r'[^>]*?'
+    r'[\s\S]{0,500}?'
     r'title="([^"]*)"'
-    r'[^>]*?'
+    r'[\s\S]{0,500}?'
     r'data-original="([^"]*)"',
     re.S | re.I)
 
@@ -152,15 +153,19 @@ _RE_DIRECTOR = re.compile(
 _RE_STATUS = re.compile(
     r'<p[^>]*class="data"[^>]*>\s*<span[^>]*class="text-muted"[^>]*>状态：</span>([\s\S]*?)</p>',
     re.S | re.I)
+
+# 修正：兼容 moive / movie
 _RE_DESC = re.compile(
-    r'<div[^>]*class="[^"]*moive-pannel_bd[^"]*"[^>]*>[\s\S]*?<p[^>]*class="col-pd"[^>]*>([\s\S]*?)</p>',
+    r'<div[^>]*class="[^"]*(?:moive|movie)-pannel_bd[^"]*"[^>]*>[\s\S]*?<p[^>]*class="col-pd"[^>]*>([\s\S]*?)</p>',
     re.S | re.I)
+
 _RE_META_DESC = re.compile(
     r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', re.I)
 
+# 修正：线路名放宽，任意 <h3 class="title">xxx</h3>
 _RE_PLAYLIST_BLOCK = re.compile(
-    r'<h3[^>]*class="title"[^>]*>[\s\S]*?'
-    r'(线路[0-9]+)[\s\S]*?</h3>[\s\S]*?'
+    r'<h3[^>]*class="title"[^>]*>([\s\S]*?)</h3>'
+    r'[\s\S]*?'
     r'<ul[^>]*class="moive-content__playlist[^"]*"[^>]*>([\s\S]*?)</ul>',
     re.S | re.I)
 
@@ -244,9 +249,9 @@ class Spider(Spider):
     def _extract_videos(self, html):
         """
         从分类页/搜索页/详情页提取影片卡片。
-        真实卡片格式（三个属性在同一 <a> 标签内）：
-        <a class="moive-vodlist__thumb lazyload" href="/video/xxx.html" title="片名" data-original="图片">
-        这里用两套方案：A 用组合正则 findall；B 用最原始的手动切段解析。
+        强制走「手动切段」方案：找到每个 <a 含 moive-vodlist__thumb 的位置，
+        从该位置切到下一个 <a class="moive-vodlist__thumb 或 </li>，窗口最多 1000 字符。
+        在片段内分别用 3 个独立小正则提取 href / title / data-original。
         """
         videos = []
         seen = set()
@@ -256,48 +261,39 @@ class Spider(Spider):
 
         self.log("  HTML 长度: %d" % len(html))
 
-        # ---------- 方案 A：组合正则 ----------
-        matches_a = _RE_CARD.findall(html)
-        self.log("  方案A 命中: %d 条" % len(matches_a))
+        start_re = re.compile(r'<a[^>]*moive-vodlist__thumb', re.I)
+        href_re = re.compile(r'href="(/video/[^"]+?\.html)"', re.I)
+        title_re = re.compile(r'title="([^"]*)"', re.I)
+        pic_re = re.compile(r'data-original="([^"]*)"', re.I)
+        next_re = re.compile(r'<a[^>]*moive-vodlist__thumb|</li>', re.I)
 
-        matched = list(matches_a)
+        starts = [m.start() for m in start_re.finditer(html)]
+        self.log("  卡片起点: %d 个" % len(starts))
 
-        # ---------- 方案 B：手动切段 ----------
-        if not matched:
-            # 找出所有 <a 且含 moive-vodlist__thumb 的位置，作为切片起点
-            start_re = re.compile(r'<a[^>]*moive-vodlist__thumb', re.I)
-            href_re = re.compile(r'href="(/video/[^"]+?\.html)"', re.I)
-            title_re = re.compile(r'title="([^"]*)"', re.I)
-            pic_re = re.compile(r'data-original="([^"]*)"', re.I)
+        for s in starts:
+            # 找下一个卡片起点或 </li> 作为切段终点
+            next_m = next_re.search(html, s + 10)
+            e = next_m.start() if next_m else s + 1000
+            # 窗口最多 1000 字符
+            if e - s > 1000:
+                e = s + 1000
+            seg = html[s:e]
 
-            for sm in start_re.finditer(html):
-                s = sm.start()
-                seg = html[s:s + 400]           # 最多往后 400 字符
+            hm = href_re.search(seg)
+            if not hm:
+                continue
+            tm = title_re.search(seg)
+            pm = pic_re.search(seg)
 
-                hm = href_re.search(seg)
-                if not hm:
-                    continue
-                tm = title_re.search(seg)
-                pm = pic_re.search(seg)
-
-                matched.append((
-                    hm.group(1),
-                    tm.group(1) if tm else "",
-                    pm.group(1) if pm else "",
-                ))
-
-            self.log("  方案B 命中: %d 条" % len(matched))
-
-        # ---------- 组装 ----------
-        for href, title, pic in matched:
-            href = href.replace("&amp;", "&")
+            href = hm.group(1).replace("&amp;", "&")
             if href in seen:
                 continue
             seen.add(href)
+
             videos.append({
                 "vod_id":      href,
-                "vod_name":    self._clean(title)[:100] or href,
-                "vod_pic":     self._fix_url(pic) or self.default_pic,
+                "vod_name":    self._clean(tm.group(1))[:100] if tm else href,
+                "vod_pic":     self._fix_url(pm.group(1)) if pm else self.default_pic,
                 "vod_remarks": "",
             })
 
@@ -387,7 +383,8 @@ class Spider(Spider):
         html = self._fetch(url)
         videos = self._extract_videos(html)
         self.log("  got %d videos" % len(videos))
-        return {"list": videos, "page": page, "pagecount": 1,
+        return {"list": videos, "page": page,
+                "pagecount": self._page_count(html),
                 "limit": 24, "total": len(videos)}
 
     def searchContentPage(self, key, quick, pg="1"):
@@ -453,7 +450,7 @@ class Spider(Spider):
         play_url = []
 
         for m in _RE_PLAYLIST_BLOCK.finditer(html):
-            line_name = m.group(1).strip()
+            line_name = self._clean(m.group(1)).strip()   # 放宽线路名
             block = m.group(2)
             eps = []
             for em in _RE_EP.finditer(block):
@@ -462,7 +459,7 @@ class Spider(Spider):
                     ep_url = self.site_url + ep_url
                 eps.append((ep_name, ep_url))
             if eps:
-                play_from.append(line_name)
+                play_from.append(line_name or "线路%d" % (len(play_from) + 1))
                 play_url.append("#".join("%s$%s" % (n, u) for n, u in eps))
 
         seen_lines = set()
