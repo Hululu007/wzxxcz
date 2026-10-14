@@ -197,12 +197,13 @@ class Spider(Spider):
             "Referer": self.site_url + "/",
         }
         self._play_cache = {}
+        self._html_cache = {}
         self.log("init: site=%s" % self.site_url)
 
     # ---------- 基础 ----------
-    def _fetch(self, url, timeout=30, headers=None, retry=2):
-        """带重试的 GET。默认超时 30s，重试 2 次（共 3 次请求）。
-        源站偶发抖动时能显著降低超时概率。"""
+    def _fetch(self, url, timeout=40, headers=None, retry=3):
+        """带重试的 GET。默认超时 40s，重试 3 次（共 4 次请求）。
+        短剧详情页/播放页 HTML 较大、服务器响应慢，重试能显著降低超时概率。"""
         for attempt in range(retry + 1):
             try:
                 h = dict(self.headers)
@@ -510,7 +511,17 @@ class Spider(Spider):
             if now - ts < 600:
                 return res
 
-        html = self._fetch(play_page)
+        # 播放页 HTML 缓存 5 分钟，避免短剧切集时反复拉同一页
+        if play_page in self._html_cache:
+            ts, html = self._html_cache[play_page]
+            if now - ts >= 300:
+                html = self._fetch(play_page)
+                self._html_cache[play_page] = (now, html)
+            else:
+                self.log("  html cache hit")
+        else:
+            html = self._fetch(play_page)
+            self._html_cache[play_page] = (now, html)
 
         play_url = ""
         from_flag = ""
