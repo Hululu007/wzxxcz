@@ -109,7 +109,12 @@ SORT_OPTIONS = [
     {"n": "最热", "v": "3"},
 ]
 
-LINE_ALIAS = {100: "标清", 110: "高清", 120: "超清"}
+# 简介前缀（与需求一致）
+INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
+
+# 清晰度：接口 type 取值 → 线路名（数值越大越清晰）
+# 实测：100=标清 / 110=高清 / 120=超清(1080P)
+QUALITY_ALIAS = {100: "标清", 110: "高清", 120: "超清", 130: "蓝光"}
 
 
 class Spider(Spider):
@@ -379,36 +384,68 @@ class Spider(Spider):
         director = self._clean(data.get("director") or "")
         score = str(data.get("score") or "")
 
-        # 剧集/线路
+        # 剧集/线路：每集可能含多个清晰度（fileList），按清晰度拆成多条线路
         vod_list = data.get("vodList") or []
-        episodes = []
+
+        # 收集所有出现过的清晰度 type，按数值降序（越清晰越靠前）
+        quality_types = set()
         for v in vod_list:
             if not isinstance(v, dict):
                 continue
-            ep_name = self._clean(v.get("title")) or ("第%s集" % v.get("episode"))
-            file_list = v.get("fileList") or []
-            if not file_list:
-                continue
-            # 用第一个清晰度的 playUrl 作为该集标识（播放时再换 auth_key）
-            play = file_list[0].get("playUrl") or ""
-            if play:
-                episodes.append((ep_name, play))
+            for f in (v.get("fileList") or []):
+                if isinstance(f, dict) and f.get("playUrl"):
+                    quality_types.add(int(f.get("type") or 0))
+        # 稳定的清晰度顺序：已知的按 100<110<120<130，未知的排后
+        quality_order = sorted(quality_types, key=lambda t: (t not in QUALITY_ALIAS, -t))
 
-        if not episodes:
+        # 每条线路：{线路名: [ "集名$playUrl", ... ]}
+        lines = {}
+        for qt in quality_order:
+            qname = QUALITY_ALIAS.get(qt, "线路%s" % qt)
+            eps = []
+            for v in vod_list:
+                if not isinstance(v, dict):
+                    continue
+                ep_name = self._clean(v.get("title")) or ("第%s集" % v.get("episode"))
+                play = ""
+                for f in (v.get("fileList") or []):
+                    if isinstance(f, dict) and int(f.get("type") or 0) == qt and f.get("playUrl"):
+                        play = f["playUrl"]
+                        break
+                # 该集缺失此清晰度时，用该集任意一个可用地址兜底，避免断集
+                if not play:
+                    allf = v.get("fileList") or []
+                    if allf and isinstance(allf[0], dict):
+                        play = allf[0].get("playUrl") or ""
+                if play:
+                    eps.append("%s$%s" % (ep_name, play))
+            if eps:
+                lines[qname] = eps
+
+        # 兜底：极端情况下用原有单线路
+        if not lines:
+            eps = []
+            for v in vod_list:
+                if not isinstance(v, dict):
+                    continue
+                fl = v.get("fileList") or []
+                if fl and isinstance(fl[0], dict) and fl[0].get("playUrl"):
+                    ep_name = self._clean(v.get("title")) or ("第%s集" % v.get("episode"))
+                    eps.append("%s$%s" % (ep_name, fl[0]["playUrl"]))
+            if eps:
+                lines["华数TV"] = eps
+
+        if not lines:
             return {"list": []}
 
-        play_url = "#".join("%s$%s" % (n, u) for n, u in episodes)
+        play_from = "$$$".join(lines.keys())
+        play_url = "$$$".join("#".join(eps) for eps in lines.values())
 
-        # 简介加来源前缀（与前端一致风格）
+        # 简介加来源前缀（与需求一致）
         remarks = self._clean(data.get("subTitle")) or data.get("newsTypeStr") or ""
-        meta = []
-        if score:
-            meta.append("评分%s" % score)
-        if director:
-            meta.append("导演:%s" % director)
-        if actor:
-            meta.append("主演:%s" % actor)
-        vod_content = "　　" + content if content else ""
+        vod_content = INTRO_PREFIX
+        if content:
+            vod_content = INTRO_PREFIX + "\n" + content
 
         return {"list": [{
             "vod_id": vod_id,
@@ -421,7 +458,7 @@ class Spider(Spider):
             "vod_year": str(data.get("yearTag") or ""),
             "vod_area": self._clean(data.get("countryTag") or ""),
             "vod_remarks": remarks,
-            "vod_play_from": "华数TV",
+            "vod_play_from": play_from,
             "vod_play_url": play_url,
         }]}
 
@@ -518,11 +555,16 @@ if __name__ == "__main__":
         dc = sp.detailContent([vid])
         if dc["list"]:
             d = dc["list"][0]
-            print("  名称:", d["vod_name"], "| 简介:", d["vod_content"][:60])
-            eps = d["vod_play_url"].split("#")
-            print("  集数:", len(eps))
-            if eps:
-                first = eps[0].split("$", 1)[-1]
-                print("=== playerContent ===")
-                pc = sp.playerContent("华数TV", first, {})
-                print("  url:", pc.get("url", "")[:140])
+            print("  名称:", d["vod_name"])
+            print("  简介:", d["vod_content"][:80])
+            froms = d["vod_play_from"].split("$$$")
+            urls = d["vod_play_url"].split("$$$")
+            print("  线路:", froms)
+            for i, fn in enumerate(froms):
+                eps = urls[i].split("#")
+                print("    [%s] 集数=%d 首集=%s" % (fn, len(eps), eps[0].split("$")[0]))
+            # 播放最高清线路的第1集
+            first = urls[0].split("#")[0].split("$", 1)[-1]
+            print("=== playerContent (线路=%s) ===" % froms[0])
+            pc = sp.playerContent(froms[0], first, {})
+            print("  url:", pc.get("url", "")[:150])
