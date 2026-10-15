@@ -758,17 +758,28 @@ class Spider(Spider):
                 raw_file = target.get("file") or ""
                 real = self._decode_file(raw_file)
                 if real:
+                    # ★ 关键（解决"一卡一卡"）：
+                    #   实测本站每集返回的都是【主播放列表(master playlist)】：
+                    #     #EXTM3U
+                    #     #EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=800000,RESOLUTION=1920x1080
+                    #     3000k/hls/mixed.m3u8
+                    #   网站用 AliPlayer（会自动选流）所以秒播；
+                    #   而 TVBox 部分内核处理 master 列表时会反复探测/切码率 → 一卡一卡。
+                    #   对策：在服务端先解析出【最终子列表】直接返回，
+                    #        TVBox 拿到纯分片列表即可秒播（无需代理）。
+                    sub_url = self._resolve_master(real)
+                    final_url = sub_url or real
                     res = {
                         "parse": 0,
                         "playUrl": "",
-                        "url": real,
+                        "url": final_url,
                         "header": {
                             "User-Agent": UA,
                             "Referer": self.site_url + "/",
                         },
                     }
                     self._play_cache[play_page] = res
-                    self.log("  => m3u8: %s" % real[:160])
+                    self.log("  => m3u8: %s" % final_url[:160])
                     return res
 
         # 兜底：交给 TVBox 嗅探
@@ -796,31 +807,121 @@ class Spider(Spider):
             self.log("  解密失败: %s" % e)
             return ""
 
-    # ------------------ 图片代理 ------------------
+    def _resolve_master(self, m3u8_url):
+        """
+        若 m3u8_url 是【主播放列表(master)】，返回其首个子列表的绝对地址；
+        否则原样返回。这样交给 TVBox 的就是纯分片列表，避免选流卡顿。
+        """
+        if not m3u8_url or ".m3u8" not in m3u8_url.lower():
+            return ""
+        try:
+            rsp = self.fetch(m3u8_url, headers={
+                "User-Agent": UA, "Referer": self.site_url + "/"}, timeout=15)
+            txt = rsp.content.decode("utf-8", "ignore")
+            if "EXT-X-STREAM-INF" not in txt:
+                return ""                            # 已是子列表，无需处理
+            for ln in txt.splitlines():
+                s = ln.strip()
+                if not s or s.startswith("#"):
+                    continue
+                return urllib.parse.urljoin(m3u8_url, s)
+        except Exception as e:
+            self.log("  resolve_master 失败: %s" % e)
+        return ""
+
+    # ------------------ 本地代理（图片 + m3u8 视频流） ------------------
     def localProxy(self, param):
+        """
+        统一本地代理：
+          - 图片: 直接转发 image/*
+          - m3u8: 关键优化 —— 把【主播放列表】在服务端扁平化：
+              · 若是 master playlist（含 EXT-X-STREAM-INF），
+                则继续抓取其首个子列表（如 3000k/hls/mixed.m3u8），
+                并把最终列表里的分片路径全部转成【绝对 URL】。
+              · 所有下游请求（子 m3u8 / .ts 分片）都带上站点 Referer，
+                避免 CDN 冷启动限速 → 解决"一卡一卡"。
+        """
         try:
             url = ""
             if isinstance(param, dict):
-                url = param.get("url", "")
+                url = param.get("url", "") or param.get("path", "")
             else:
                 for pair in str(param).split("&"):
                     if "=" in pair:
                         k, v = pair.split("=", 1)
-                        if k == "url":
+                        if k in ("url", "path"):
                             url = v
             if not url:
-                return [200, "image/jpeg", b"", ""]
+                return [200, "text/plain", b"", ""]
             url = urllib.parse.unquote(url) if "%" in url else url
             url = self._fix_url(url)
-            rsp = self.fetch(url, headers={
-                "User-Agent": UA, "Referer": self.site_url + "/"}, timeout=15)
+
+            headers = {
+                "User-Agent": UA,
+                "Referer": self.site_url + "/",
+                "Accept": "*/*",
+            }
+
+            # 带 Referer 拉取
+            rsp = self.fetch(url, headers=headers, timeout=20)
             content = rsp.content
-            ctype = rsp.headers.get("Content-Type", "image/jpeg")
-            if not ctype.startswith("image/"):
-                ctype = "image/jpeg"
+            ctype = rsp.headers.get("Content-Type", "") or ""
+
+            # 判断是否 m3u8（扩展名 或 内容特征）
+            low = url.lower()
+            head_txt = content[:2000].decode("utf-8", "ignore") if content else ""
+            is_m3u8 = (
+                ".m3u8" in low
+                or "mpegurl" in ctype.lower()
+                or head_txt.lstrip().startswith("#EXTM3U")
+            )
+
+            if is_m3u8:
+                txt = content.decode("utf-8", "ignore")
+
+                # ---- ① 若为 master playlist，追取首个子列表 ----
+                if "EXT-X-STREAM-INF" in txt:
+                    sub = ""
+                    for ln in txt.splitlines():
+                        ln = ln.strip()
+                        if not ln or ln.startswith("#"):
+                            continue
+                        sub = ln
+                        break
+                    if sub:
+                        sub_url = urllib.parse.urljoin(url, sub)
+                        self.log("  proxy: master -> 子列表 %s" % sub_url)
+                        try:
+                            r2 = self.fetch(sub_url, headers=headers, timeout=20)
+                            txt = r2.content.decode("utf-8", "ignore")
+                            url = sub_url          # 后续分片基于子列表基准解析
+                        except Exception as e:
+                            self.log("  proxy: 取子列表失败 %s" % e)
+
+                # ---- ② 分片/子列表路径 -> 绝对 URL ----
+                out_lines = []
+                for ln in txt.splitlines():
+                    s = ln.strip()
+                    if not s or s.startswith("#"):
+                        out_lines.append(ln)
+                        continue
+                    # 相对/绝对地址统一转成绝对
+                    out_lines.append(urllib.parse.urljoin(url, s))
+                new_txt = "\n".join(out_lines)
+
+                return [200, "application/vnd.apple.mpegurl",
+                        new_txt.encode("utf-8"), ""]
+
+            # ---- 普通资源（图片/ts 等）直接转发 ----
+            if not ctype:
+                ctype = "application/octet-stream"
             return [200, ctype, content, ""]
-        except Exception:
-            return [200, "image/jpeg", b"", ""]
+        except Exception as e:
+            self.log("localProxy error: %s" % e)
+            try:
+                return [200, "text/plain", b"", ""]
+            except Exception:
+                return [200, "text/plain", b"", ""]
 
     def isVideoFormat(self, url):
         return ".m3u8" in url or ".mp4" in url or url.startswith("http")
