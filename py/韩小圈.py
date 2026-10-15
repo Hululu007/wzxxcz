@@ -85,8 +85,6 @@ TID_ALIAS = {
     "23": "/hxq/4.html", "4": "/hxq/4.html",
 }
 
-FILTERS = {}
-
 
 # ===================== 正则 =====================
 _RE_H1 = re.compile(r'<h1[^>]*>([\s\S]*?)</h1>', re.I)
@@ -241,8 +239,9 @@ class Spider(Spider):
             return page
 
     # ---------- 首页 ----------
+    # ⭐ 修复：去掉 filters 字段，避免空 filters 导致分类不显示
     def homeContent(self, filter=False):
-        return {"class": CLASSES, "filters": FILTERS}
+        return {"class": CLASSES}
 
     def homeVideoContent(self):
         html = self._fetch(self.site_url + "/")
@@ -250,7 +249,8 @@ class Spider(Spider):
         return {"list": self._extract_videos(html)}
 
     # ---------- 分类 ----------
-    def categoryContent(self, tid, pg, filter, extend):
+    # ⭐ 修复：加默认值，兼容只传部分参数的前端
+    def categoryContent(self, tid, pg=1, filter=False, extend=None):
         page = int(pg) if pg else 1
         tid = TID_ALIAS.get(str(tid), str(tid))
 
@@ -273,7 +273,8 @@ class Spider(Spider):
         }
 
     # ---------- 搜索 ----------
-    def searchContent(self, key, quick, pg="1"):
+    # ⭐ 修复：加默认值
+    def searchContent(self, key, quick=False, pg=1):
         page = int(pg) if pg else 1
         kw = urllib.parse.quote(key, safe='')
         url = "%s/vodsearch/%s----------%d---.html" % (self.site_url, kw, page)
@@ -288,7 +289,7 @@ class Spider(Spider):
             "limit": 24, "total": pagecount * 24,
         }
 
-    def searchContentPage(self, key, quick, pg="1"):
+    def searchContentPage(self, key, quick=False, pg=1):
         return self.searchContent(key, quick, pg)
 
     # ---------- 详情 ----------
