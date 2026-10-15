@@ -111,7 +111,7 @@ _FILTERS_MAP = {
         ("全部", 1), ("动作片", 9), ("喜剧片", 10), ("爱情片", 11),
         ("恐怖片", 12), ("剧情片", 13), ("科幻片", 14), ("惊悚片", 15),
         ("奇幻片", 16), ("动画片", 17), ("悬疑片", 18), ("冒险片", 19),
-        ("体育", 20), ("战争片", 21), ("倫理片", 460),
+("体育", 20), ("战争片", 21),
     ],
     # 电视剧（tid=2）
     "2": [
@@ -156,6 +156,13 @@ for c in CLASSES:
 
 
 # ===================== 正则（全部依据真实源码） =====================
+# ---- 伦理片拦截（用户要求：不显示、不可播放） ----
+# 分类 460 = 倫理片（已从筛选列表移除，这里兜底拦截直接请求）
+ETHIC_CLASS_ID = "460"
+# 标题/标签含 伦理/倫理 即过滤（用于列表与搜索结果）
+_RE_ETHIC_WORD = re.compile(r"伦理|倫理")
+# 详情/播放页出现 伦理片/倫理片 类型特征即拦截
+_RE_ETHIC_TYPE = re.compile(r"伦理\s*片|倫理\s*片")
 # 卡片块：<div class="moon-list-item"> ... </div>（用非贪婪跨行）
 _RE_CARD_BLOCK = re.compile(
     r'<div[^>]*class="[^"]*moon-list-item[^"]*"[^>]*>(.*?)</div>\s*</div>\s*(?=<div[^>]*class="[^"]*moon-list-item|</div>\s*</div>|$)',
@@ -343,6 +350,11 @@ class Spider(Spider):
             if watch:
                 remarks = ("%s %s人在看" % (remarks, watch)).strip()
 
+            # 伦理片不显示
+            if _RE_ETHIC_WORD.search(name):
+                self.log("  过滤伦理片: %s" % name)
+                continue
+
             videos.append({
                 "vod_id": href,
                 "vod_name": name or href.rsplit("/", 1)[-1],
@@ -380,6 +392,12 @@ class Spider(Spider):
         # 真实格式: /vod/list/{页码}/{顶层tid}/{子分类id}
         #   子分类 id=0 表示全部；国产剧=22 等（extend["class"] 传入）
         type_id = sub_id if sub_id else 0
+
+        # 伦理片分类（460）直接返回空：不显示也不播放
+        if str(sub_id) == ETHIC_CLASS_ID:
+            self.log("blocked category: 伦理片")
+            return {"list": [], "page": page, "pagecount": 1,
+                    "limit": 10, "total": 0}
 
         url = "%s/vod/list/%d/%s/%d" % (self.site_url, page, tid, type_id)
         self.log("category: %s" % url)
@@ -480,6 +498,11 @@ class Spider(Spider):
                 if labs:
                     remarks = " ".join(labs)
 
+            # 伦理片不显示（标签或标题含 伦理/倫理 即过滤）
+            if _RE_ETHIC_WORD.search(remarks) or _RE_ETHIC_WORD.search(name):
+                self.log("  过滤搜索伦理片: %s" % name)
+                continue
+
             videos.append({
                 "vod_id": href,
                 "vod_name": name,
@@ -499,6 +522,11 @@ class Spider(Spider):
         html = self._fetch(url)
         self.log("  HTML: %d" % len(html))
         if not html:
+            return {"list": []}
+
+        # 伦理片直接拦截：不显示详情也不可播放
+        if _RE_ETHIC_TYPE.search(html):
+            self.log("blocked detail: 伦理片 %s" % vod_id)
             return {"list": []}
 
         # 标题
@@ -722,6 +750,14 @@ class Spider(Spider):
 
         html = self._fetch(play_page)
         raw_json = self._extract_linelist_json(html)
+
+        # 伦理片不可播放
+        if _RE_ETHIC_TYPE.search(html):
+            self.log("blocked player: 伦理片 %s" % play_page)
+            res = {"parse": 1, "playUrl": "", "url": "",
+                   "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
+            self._play_cache[play_page] = res
+            return res
 
         if raw_json:
             data = []
