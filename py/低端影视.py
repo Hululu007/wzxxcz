@@ -259,42 +259,46 @@ class Spider(Spider):
     # ---------------------------------------------------------- 首页
     def homeContent(self, filter=True):
         """
-        分类/筛选为纯静态数据，不依赖任何网络请求 ——
-        保证即使网络抖动，分类列表也一定能出来（影视仓分类不显示的常见原因
-        就是 homeContent 里网络请求异常导致整个 class 丢失）。
+        分类只保留网站导航的 5 个大类：电影 / 电视剧 / 综艺 / 动漫 / 豆瓣Top250。
+        二级分类（动作片、喜剧片…）不单独占分类位，而是放进各分类的“分类”筛选项里。
+        分类/筛选为纯静态数据，不依赖网络。
         """
         result = {"class": [], "filters": {}}
-        # 分类：一级 + 其下二级（二级直接平铺为独立分类，方便电视端选择）
         for c in CLASSES:
             result["class"].append({
                 "type_id": c["type_id"],
                 "type_name": c["type_name"],
             })
-            for s in SUB_CLASSES.get(c["type_id"], []):
-                result["class"].append({
-                    "type_id": s["type_id"],
-                    "type_name": s["type_name"],
-                })
 
-        # 筛选（每个分类都可筛选）
         if filter:
-            filt = self._build_filters()
             for c in CLASSES:
                 tid = c["type_id"]
-                result["filters"][tid] = filt
-                for s in SUB_CLASSES.get(tid, []):
-                    result["filters"][s["type_id"]] = filt
+                result["filters"][tid] = self._build_filters(tid)
         return result
 
-    def _build_filters(self):
-        """按真实分段结构构造筛选：{剧情}-{地区}-{语言}-{年份}-{字母}-{排序}"""
+    def _build_filters(self, tid=None):
+        """
+        筛选维度（真实取自分类页筛选栏）：
+          分类：该大类下的二级分类（选中后替换 URL 首段 tid）
+          剧情 / 地区 / 语言 / 年份 / 字母 / 排序
+        真实 URL 分段：{tid}-{剧情}-{地区}-{语言}-{年份}-{字母}-{排序}-{页}...
+        """
         def group(name, values):
             opts = [{"n": "全部", "v": ""}]
             for v in values:
                 opts.append({"n": v, "v": v})
             return {"key": name, "name": name, "value": opts}
 
-        return [
+        filters = []
+        # 分类（二级分类；仅当该大类有二级时显示）
+        subs = SUB_CLASSES.get(str(tid), [])
+        if subs:
+            opts = [{"n": "全部", "v": ""}]
+            for s in subs:
+                opts.append({"n": s["type_name"], "v": s["type_id"]})
+            filters.append({"key": "分类", "name": "分类", "value": opts})
+
+        filters += [
             group("剧情", FILTER_OPTIONS["剧情"]),
             group("地区", FILTER_OPTIONS["地区"]),
             group("语言", FILTER_OPTIONS["语言"]),
@@ -309,6 +313,7 @@ class Spider(Spider):
                 ]
             },
         ]
+        return filters
 
     # ---------------------------------------------------------- 分类
     def categoryContent(self, tid, pg, filter, extend):
@@ -327,12 +332,16 @@ class Spider(Spider):
             if not isinstance(extend, dict):
                 extend = {}
 
+            # “分类”筛选：选中二级分类时，替换 URL 首段的 tid
+            sub_tid = extend.get("分类", "") or ""
+            if sub_tid:
+                tid = str(sub_tid)
+
             # 真实分段结构（实测归纳，tid 后固定 12 段，用 '-' 连接）：
             #   索引: 0(空) 1(地区) 2(排序) 3(剧情) 4(语言) 5(字母) 6(空) 7(空)
             #         8(页) 9(空) 10(空) 11(年份)
             # 例：/ddvodshow/6--------2---.html  -> 第2页
             #     /ddvodshow/6---喜剧--------.html -> 剧情=喜剧
-            plot = area = lang = letter = year = order = ""
             plot = extend.get("剧情", "") or ""
             area = extend.get("地区", "") or ""
             lang = extend.get("语言", "") or ""
@@ -353,7 +362,7 @@ class Spider(Spider):
             result["pagecount"] = self._total_page(html)
             result["page"] = pg
         except Exception as e:
-            print("categoryContent error:", e)
+            self.log("categoryContent error: %s" % e)
         return result
 
     # ---------------------------------------------------------- 搜索
