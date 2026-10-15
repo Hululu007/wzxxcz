@@ -303,6 +303,18 @@ class Spider(Spider):
             if mn:
                 name = self._clean(mn.group(1))
             if not name:
+                # 首页轮播图 banner: <h2 class="bannertxex">片名</h2>
+                mb = re.search(
+                    r'<h2[^>]*class="[^"]*(?:bannertxex|banner)[^"]*"[^>]*>\s*([\s\S]*?)\s*</h2>',
+                    blk, re.I)
+                if mb:
+                    name = self._clean(mb.group(1))
+            if not name:
+                # 其它 h2/h3 标题
+                mh = re.search(r'<h[23][^>]*>\s*([\s\S]*?)\s*</h[23]>', blk, re.I)
+                if mh:
+                    name = self._clean(mh.group(1))
+            if not name:
                 # 兜底：img 的 alt 或 title 属性
                 ma = re.search(r'<img[^>]*alt="([^"]+)"', blk, re.I)
                 if ma:
@@ -390,23 +402,91 @@ class Spider(Spider):
 
     # ------------------ 搜索 ------------------
     def searchContent(self, key, quick, pg="1"):
+        """
+        真实搜索接口（已实测，参数名必须是 keyword，不是 name！）
+          GET /public/auto/search1.html?keyword={关键词}
+            必需的请求头: X-Requested-With: XMLHttpRequest
+            Referer      : {site}/search/index.html?keyword={关键词}
+          返回 HTML 片段，结果卡片结构（与本站列表页不同！）：
+            <a href="/vod/player/0/{id}" class="moon-item seachlist ...">
+              <img data-src="封面" src="封面" ... alt="片名海报">
+              <h2 class="ohv-ellipsis">片名</h2>
+              <div class="label-list"><span>2026</span><span>国产剧</span><span>日本</span></div>
+              <p class="intro ohv-ellipsis">简介...</p>
+          实测: keyword=妈妈 → 10 条;  keyword=蒸蒸日上 → 1 条;  乱码词 → 0 条
+        """
         page = int(pg) if pg else 1
-        kw = urllib.parse.quote(key)
-        # 真实搜索页: /search/index.html（结果由前端渲染）
-        url = "%s/search/index.html?name=%s&page=%d" % (self.site_url, kw, page)
+        kw = urllib.parse.quote(key or "")
+        url = "%s/public/auto/search1.html?keyword=%s" % (self.site_url, kw)
         self.log("search: %s" % url)
-        html = self._fetch(url)
-        videos = self._extract_videos(html)
-        # 部分搜索走 /vod/search 兼容
-        if not videos:
-            alt = "%s/search/%s----------%d---.html" % (self.site_url, kw, page)
-            html2 = self._fetch(alt)
-            videos = self._extract_videos(html2)
-        return {"list": videos, "page": page, "pagecount": 9999,
-                "limit": 24, "total": 999999}
+        html = self._fetch(url, headers={
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": "%s/search/index.html?keyword=%s" % (self.site_url, kw),
+        })
+        videos = self._extract_search_videos(html)
+        self.log("  搜索结果: %d" % len(videos))
+        return {"list": videos, "page": page, "pagecount": 1,
+                "limit": 30, "total": len(videos)}
 
-    def searchContentPage(self, key, quick, pg="1"):
-        return self.searchContent(key, quick, pg)
+    def _extract_search_videos(self, html):
+        """解析 /public/auto/search1.html 的结果（结构与列表页不同，独立处理）"""
+        videos = []
+        seen = set()
+        if not html:
+            return videos
+        anchors = list(re.finditer(
+            r'<a\s+[^>]*href="(/vod/player/0/\d+)"[^>]*class="[^"]*seachlist[^"]*"[^>]*>',
+            html, re.I))
+        if not anchors:
+            anchors = list(re.finditer(
+                r'<a\s+[^>]*class="[^"]*seachlist[^"]*"[^>]*href="(/vod/player/0/\d+)"[^>]*>',
+                html, re.I))
+        for idx, m in enumerate(anchors):
+            href = m.group(1)
+            if href in seen:
+                continue
+            seen.add(href)
+            start = m.start()
+            end = anchors[idx + 1].start() if idx + 1 < len(anchors) else len(html)
+            blk = html[start:end]
+
+            pic = self.default_pic
+            mp = re.search(r'(?:data-src|data-original|src)="([^"]+)"', blk, re.I)
+            if mp and mp.group(1):
+                pic = self._fix_url(mp.group(1))
+
+            name = ""
+            mn = re.search(r'<h2[^>]*class="[^"]*ohv-ellipsis[^"]*"[^>]*>\s*([\s\S]*?)\s*</h2>',
+                           blk, re.I)
+            if not mn:
+                mn = re.search(r'<h2[^>]*>\s*([\s\S]*?)\s*</h2>', blk, re.I)
+            if mn:
+                name = self._clean(mn.group(1))
+            if not name:
+                ma = re.search(r'<img[^>]*alt="([^"]+?)海报"', blk, re.I)
+                if ma:
+                    name = self._clean(ma.group(1))
+            if not name:
+                name = href.rsplit("/", 1)[-1]
+
+            # 标签：年份 / 类型 / 地区（label-list）
+            remarks = ""
+            ml = re.search(r'<div[^>]*class="[^"]*label-list[^"]*"[^>]*>([\s\S]*?)</div>',
+                           blk, re.I)
+            if ml:
+                labs = [self._clean(x) for x in
+                        re.findall(r'<span[^>]*>([\s\S]*?)</span>', ml.group(1))]
+                labs = [x for x in labs if x]
+                if labs:
+                    remarks = " ".join(labs)
+
+            videos.append({
+                "vod_id": href,
+                "vod_name": name,
+                "vod_pic": pic or self.default_pic,
+                "vod_remarks": remarks,
+            })
+        return videos
 
     # ------------------ 详情 ------------------
     def detailContent(self, ids):
@@ -434,19 +514,91 @@ class Spider(Spider):
 
         # 封面
         pic = self.default_pic
-        m = re.search(r'<img[^>]*?(?:data-original|src)="(https?://[^"]+\.(?:jpg|jpeg|png|webp))"',
+        m = re.search(r'<img[^>]*?(?:data-original|data-src|src)="(https?://[^"]+\.(?:jpg|jpeg|png|webp))"',
                       html, re.I)
         if m:
             pic = self._fix_url(m.group(1))
 
-        # 简介（优先 meta description）
+        # 简介：优先页面正文 div.text-main-info（纯剧情简介）
+        #      meta description 兜底（含站名杂物，需清洗）
         content = ""
         m = re.search(
-            r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']',
+            r'<div[^>]*class="[^"]*text-main-info[^"]*"[^>]*>\s*([\s\S]*?)\s*</div>',
             html, re.I)
         if m:
             content = self._clean(m.group(1))
+        if not content:
+            m = re.search(
+                r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']',
+                html, re.I)
+            if m:
+                content = self._clean(m.group(1))
+                # 清洗 meta 杂物：去掉 "站名...片名类型年份" 前缀（正文中首次出现的剧情起点难以定位，
+                # 但 meta 里片名后的"电视剧/国产剧/2026"等属于标题拼接，尽量截掉站名+片名前缀）
+                mn = re.search(r'<h1[^>]*>([\s\S]*?)</h1>', html, re.I)
+                if mn:
+                    h1 = self._clean(mn.group(1))
+                    if h1 and h1 in content:
+                        content = content[content.index(h1) + len(h1):]
+                content = re.sub(r'^(?:电影|电视剧|国产剧|综艺|动漫|短剧|体育)+',
+                                 '', content)
+                content = re.sub(r'^(?:19|20)\d{2}(?=[\u4e00-\u9fff])', '', content)
         content = INTRO_PREFIX + ("\n" + content if content else "")
+
+        # 年份/地区/评分：取 label-list 区域，真实源码形如：
+        #   <div class="label-list">
+        #     <span class="din-condensed">6.1分</span>
+        #     <span style="">2026</span></span>   ← 注意此处有 bug 多余的 </span>
+        #     <span>大陆</span>
+        #   </div>
+        # 所以先取 label-list 整块（用 h3/后续 div 作为截断锚点，避免误吞），
+        # 再分别匹配： 评分=含"分"的 span，年份=4位数字，地区=纯中文 span
+        year, area, score = "", "", ""
+        m = re.search(r'<div[^>]*class="[^"]*label-list[^"]*"[^>]*>([\s\S]*?)</div>',
+                      html, re.I)
+        if m:
+            seg = m.group(1)
+            # 评分
+            ms = re.search(r'>\s*([\d.]+)\s*分\s*<', seg)
+            if ms:
+                score = ms.group(1)
+            # 年份（4位数字）
+            my = re.search(r'>\s*((?:19|20)\d{2})\s*(?:-\d{2}-\d{2})?\s*<', seg)
+            if not my:
+                my = re.search(r'((?:19|20)\d{2})', seg)
+            if my:
+                year = my.group(1)
+            # 地区（纯中文 span，排除含"分"/纯数字）
+            for sv in re.findall(r'<span[^>]*>\s*([^<>]{1,12}?)\s*</span>', seg):
+                sv = sv.strip()
+                if not sv or '分' in sv or re.match(r'^\d', sv):
+                    continue
+                if re.match(r'^[\u4e00-\u9fff\-]+$', sv) and sv != year:
+                    area = sv
+                    break
+
+        # 导演/演员：演员表区域，真实源码形如：
+        #   <div class="actor-list ...">
+        #     <a class="worker-name">导演</a>
+        #     <div class="flex-r-s-s"> 姚婷婷 </div>
+        #   </div>
+        #   <div class="actor-list ...">
+        #     <a class="worker-name">演员</a>
+        #     <div class="flex-r-s-s"> 高叶 韩东君 </div>
+        #   </div>
+        director, actor = "", ""
+        for am in re.finditer(
+                r'class="[^"]*worker-name[^"]*"[^>]*>\s*([^<]{1,6})\s*</a>'
+                r'([\s\S]{0,400}?)</div>\s*</div>',
+                html, re.I):
+            role = self._clean(am.group(1))
+            who = re.sub(r'\s+', ' ', self._clean(am.group(2))).strip()
+            if not who:
+                continue
+            if '导演' in role:
+                director = who
+            elif '演员' in role or '主演' in role:
+                actor = who
 
         # 剧集：核心 temLineList
         lines = self._parse_lines(html)
@@ -456,7 +608,10 @@ class Spider(Spider):
             # 无剧集数据时，至少返回单集=当前页
             return {"list": [{
                 "vod_id": vod_id, "vod_name": name, "vod_pic": pic,
-                "vod_content": content, "vod_remarks": "单集",
+                "vod_content": content,
+                "vod_actor": actor, "vod_director": director,
+                "vod_year": year, "vod_area": area, "vod_score": score,
+                "vod_remarks": "单集",
                 "vod_play_from": "默认",
                 "vod_play_url": "%s$%s" % (name, url),
             }]}
@@ -479,8 +634,11 @@ class Spider(Spider):
             "vod_name": name,
             "vod_pic": pic,
             "vod_content": content,
-            "vod_actor": "",
-            "vod_director": "",
+            "vod_actor": actor,
+            "vod_director": director,
+            "vod_year": year,
+            "vod_area": area,
+            "vod_score": score,
             "vod_remarks": "%d条线路" % len(play_from),
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url": "$$$".join(play_url),
