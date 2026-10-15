@@ -258,41 +258,73 @@ class Spider(Spider):
 
     # ------------------ 列表解析 ------------------
     def _extract_videos(self, html):
-        """从 SSR HTML 中解析卡片列表（严格按真实 class 结构）"""
+        """
+        从 SSR HTML 中解析卡片列表。
+        采用【锚点法】：以 <a href="/vod/player/0/{id}"> 为锚，
+        每个锚点到下一个锚点之间即为一张卡片，取其中的 图/名/分。
+        该法不依赖 card 外层 div 的确切闭合方式，最稳健。
+        """
         videos = []
         seen = set()
         if not html:
             return videos
 
-        # 按 moon-list-item 卡片块切分
-        blocks = re.findall(
-            r'<div[^>]*class="[^"]*moon-list-item[^"]*"[^>]*>([\s\S]*?)</a>\s*</div>',
-            html, re.I)
-        self.log("  卡片块: %d 个" % len(blocks))
+        # 找到所有卡片锚点位置
+        anchors = list(re.finditer(r'<a\s+[^>]*href="(/vod/player/0/\d+)"[^>]*>',
+                                   html, re.I))
+        self.log("  锚点: %d 个" % len(anchors))
+        if not anchors:
+            return videos
 
-        for blk in blocks:
-            ma = _RE_CARD_A.search(blk)
-            if not ma:
-                continue
-            href = ma.group(1)
+        for idx, m in enumerate(anchors):
+            href = m.group(1)
             if href in seen:
                 continue
             seen.add(href)
+            start = m.start()
+            end = anchors[idx + 1].start() if idx + 1 < len(anchors) else len(html)
+            blk = html[start:end]
 
-            mp = _RE_CARD_PIC.search(blk)
-            pic = self._fix_url(mp.group(1)) if mp else self.default_pic
+            # 封面图：data-original 优先，其次 src
+            pic = self.default_pic
+            mp = re.search(r'(?:data-original|data-src)="([^"]+)"', blk, re.I)
+            if not mp:
+                mp = re.search(r'<img[^>]*src="([^"]+)"', blk, re.I)
+            if mp and mp.group(1):
+                pic = self._fix_url(mp.group(1))
 
-            mn = _RE_CARD_NAME.search(blk)
-            name = self._clean(mn.group(1)) if mn else ""
+            # 标题：p.item-title 优先
+            name = ""
+            mn = re.search(
+                r'<p[^>]*class="[^"]*item-title[^"]*"[^>]*>\s*([\s\S]*?)\s*</p>',
+                blk, re.I)
+            if mn:
+                name = self._clean(mn.group(1))
+            if not name:
+                # 兜底：img 的 alt 或 title 属性
+                ma = re.search(r'<img[^>]*alt="([^"]+)"', blk, re.I)
+                if ma:
+                    name = self._clean(ma.group(1))
+            if not name:
+                mt = re.search(r'<a[^>]*title="([^"]+)"', blk, re.I)
+                if mt:
+                    name = self._clean(mt.group(1))
 
-            mr = _RE_CARD_RATE.search(blk)
-            rate = mr.group(1) if mr else ""
+            # 评分
+            rate = ""
+            mr = re.search(r'<label[^>]*class="[^"]*rate[^"]*"[^>]*>\s*([\d.]+)\s*</label>',
+                           blk, re.I)
+            if mr:
+                rate = mr.group(1)
 
-            mw = _RE_CARD_WATCH.search(blk)
-            watch = mw.group(1) if mw else ""
+            # 在看人数
+            watch = ""
+            mw = re.search(r'>\s*([\d,]+)\s*人次在看', blk)
+            if mw:
+                watch = mw.group(1)
 
             remarks = ""
-            if rate:
+            if rate and rate != "0.0":
                 remarks = "评分%s" % rate
             if watch:
                 remarks = ("%s %s人在看" % (remarks, watch)).strip()
