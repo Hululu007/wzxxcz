@@ -2,9 +2,8 @@
 """
 蝶卡影视网 www.diekawang.com | TVBox Python 爬虫
 ================================================================
-本爬虫严格依据网站真实源码编写，所有结构均已实测验证：
 
-【已验证的真实结构】
+【网站结构】
   1. 首页/分类聚合页为 SSR 渲染：curl 直接可取到卡片
      - 卡片容器: <div class="moon-list-item">
      - 卡片链接: <a href="/vod/player/0/{影片ID}" class="item goLinklist">
@@ -13,7 +12,7 @@
      - 评分    : <label class="rate ml-20">5.2</label>
      - 在看人数: <span>39135人次在看</span>
 
-  2. 分类/筛选（已验证，关键！）：
+  2. 分类/筛选：
      - 真实分类列表 URL : /vod/list/{页码}/{顶层tid}/{子分类id}
        第1位=页码(从1开始)，第2位=顶层分类ID，第3位=子分类ID(0=全部)
        例: /vod/list/1/1/0    → 电影第1页
@@ -25,7 +24,7 @@
      - 子分类 typeId 来自筛选栏 <a class="btn">，完整映射见 _FILTERS_MAP
      - 分类聚合入口(菜单): /vod/1/{顶层tid}/0
 
-  3. 播放页解密（核心，已实测通过）：
+  3. 播放页解密：
      - 页面内 JS 变量: var temLineList = [ {...}, {...} ]
      - 每集字段: {"file":"j8UaHR0cHM6...", "name":"第01集", "tag":"1080zyk", "id":990024}
      - 解密算法:
@@ -34,8 +33,6 @@
          url   = urldecode(url)              # URL 解码 → 真实 m3u8
        实测: j8UaHR0cHM6JTJGJTJGY2RuLnZ2dmlwLXBsYXlzMzMuY2MlMkY...
              → https://cdn.vvvip-plays33.cc/20251215/2142_2a34abd6/index.m3u8
-
-作者注: 如网站改版，需按上述真实字段重新对照源码调整正则。
 """
 
 import re
