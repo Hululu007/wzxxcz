@@ -24,13 +24,10 @@ import re
 import json
 import base64
 import time
+import urllib.parse
 from urllib.parse import urljoin, quote, unquote
 
 sys.path.append('..')
-try:
-    import requests
-except Exception:
-    requests = None
 try:
     from base.spider import Spider
 except Exception:
@@ -128,18 +125,32 @@ def _clean(t):
     return re.sub(r'\s+', ' ', t).strip()
 
 
-class Spider(object):
+class Spider(Spider):
 
     # ---------------------------------------------------------- 基础
     def getName(self):
         return "低端影视"
 
     def init(self, extend=""):
-        self.site_url = HOST
-        self.session = requests.Session()
-        self.session.headers.update(HEADERS)
+        # 读取配置（影视仓里可在接口末尾追加 {"site":"..."} 覆盖域名）
         try:
-            self.session.get(self.site_url, timeout=10)
+            self.extend = json.loads(extend) if extend else {}
+        except Exception:
+            self.extend = {}
+
+        self.site_url = (self.extend.get("site") or HOST).rstrip("/")
+        self.headers = {
+            "User-Agent": UA,
+            "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+                       "image/avif,image/webp,*/*;q=0.8"),
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Referer": self.site_url + "/",
+        }
+        self.log("init: site=%s" % self.site_url)
+
+    def log(self, msg):
+        try:
+            print("[ddys24] %s" % msg)
         except Exception:
             pass
 
@@ -150,31 +161,41 @@ class Spider(object):
         return False
 
     def homeVideoContent(self):
-        return self.homeContent(False)
+        """首页推荐列表（最近更新板块），独立于 homeContent，避免互相拖垮"""
+        result = {"list": []}
+        try:
+            html = self._get(self.site_url + "/")
+            result["list"] = self._extract_videos(html)
+        except Exception as e:
+            print("homeVideoContent error:", e)
+        return result
 
     def localProxy(self, param):
         return None
 
     def destroy(self):
-        try:
-            self.session.close()
-        except Exception:
-            pass
+        pass
 
     # ---------------------------------------------------------- 通用请求
     def _get(self, url, referer=None, timeout=15):
-        headers = {}
+        """
+        统一请求：优先使用 TVBox 注入的 self.fetch（影视仓/FongMi 标准做法）；
+        若环境无 fetch（本地调试），回退到 urllib。
+        """
+        h = dict(getattr(self, "headers", {}))
         if referer:
-            headers["Referer"] = referer
-        for i in range(3):
+            h["Referer"] = referer
+        for _ in range(3):
             try:
-                r = self.session.get(url, headers=headers, timeout=timeout,
-                                     allow_redirects=True)
-                if r.status_code == 200:
-                    r.encoding = 'utf-8'
-                    return r.text
-            except Exception:
-                time.sleep(0.5)
+                rsp = self.fetch(url, headers=h, timeout=timeout)
+                if hasattr(rsp, "text"):
+                    return rsp.text or ""
+                if hasattr(rsp, "content"):
+                    return (rsp.content or b"").decode("utf-8", "ignore")
+                return str(rsp)
+            except Exception as e:
+                self.log("fetch FAIL %s -> %s" % (url, e))
+                time.sleep(0.4)
         return ""
 
     # ---------------------------------------------------------- 解析卡片
@@ -237,37 +258,32 @@ class Spider(object):
 
     # ---------------------------------------------------------- 首页
     def homeContent(self, filter=True):
-        result = {"class": [], "filters": {}, "list": []}
-        try:
-            html = self._get(self.site_url + "/")
-            # 分类：一级 + 其下二级（二级直接平铺为独立分类，方便电视端选择）
-            for c in CLASSES:
+        """
+        分类/筛选为纯静态数据，不依赖任何网络请求 ——
+        保证即使网络抖动，分类列表也一定能出来（影视仓分类不显示的常见原因
+        就是 homeContent 里网络请求异常导致整个 class 丢失）。
+        """
+        result = {"class": [], "filters": {}}
+        # 分类：一级 + 其下二级（二级直接平铺为独立分类，方便电视端选择）
+        for c in CLASSES:
+            result["class"].append({
+                "type_id": c["type_id"],
+                "type_name": c["type_name"],
+            })
+            for s in SUB_CLASSES.get(c["type_id"], []):
                 result["class"].append({
-                    "type_id": c["type_id"],
-                    "type_name": c["type_name"],
+                    "type_id": s["type_id"],
+                    "type_name": s["type_name"],
                 })
-                for s in SUB_CLASSES.get(c["type_id"], []):
-                    result["class"].append({
-                        "type_id": s["type_id"],
-                        "type_name": s["type_name"],
-                    })
 
-            # 筛选（每个分类都可筛选）
-            if filter:
-                filt = self._build_filters()
-                for c in CLASSES:
-                    tid = c["type_id"]
-                    result["filters"][tid] = filt
-                    for s in SUB_CLASSES.get(tid, []):
-                        result["filters"][s["type_id"]] = filt
-
-            # 首页推荐（最近更新 板块）
-            result["list"] = self._extract_videos(html)
-            if not result["list"]:
-                # 兜底，取内容里所有卡片
-                result["list"] = self._extract_videos(html)
-        except Exception as e:
-            print("homeContent error:", e)
+        # 筛选（每个分类都可筛选）
+        if filter:
+            filt = self._build_filters()
+            for c in CLASSES:
+                tid = c["type_id"]
+                result["filters"][tid] = filt
+                for s in SUB_CLASSES.get(tid, []):
+                    result["filters"][s["type_id"]] = filt
         return result
 
     def _build_filters(self):
@@ -302,19 +318,27 @@ class Spider(object):
             pg = int(pg) if str(pg).isdigit() else 1
             tid = str(tid)
 
+            # extend 可能是 dict，也可能是 JSON 字符串（影视仓/FongMi 实际传字符串）
+            if isinstance(extend, str):
+                try:
+                    extend = json.loads(extend) if extend.strip() else {}
+                except Exception:
+                    extend = {}
+            if not isinstance(extend, dict):
+                extend = {}
+
             # 真实分段结构（实测归纳，tid 后固定 12 段，用 '-' 连接）：
             #   索引: 0(空) 1(地区) 2(排序) 3(剧情) 4(语言) 5(字母) 6(空) 7(空)
             #         8(页) 9(空) 10(空) 11(年份)
             # 例：/ddvodshow/6--------2---.html  -> 第2页
             #     /ddvodshow/6---喜剧--------.html -> 剧情=喜剧
             plot = area = lang = letter = year = order = ""
-            if isinstance(extend, dict):
-                plot = extend.get("剧情", "") or ""
-                area = extend.get("地区", "") or ""
-                lang = extend.get("语言", "") or ""
-                year = extend.get("年份", "") or ""
-                letter = extend.get("字母", "") or ""
-                order = extend.get("排序", "") or ""
+            plot = extend.get("剧情", "") or ""
+            area = extend.get("地区", "") or ""
+            lang = extend.get("语言", "") or ""
+            year = extend.get("年份", "") or ""
+            letter = extend.get("字母", "") or ""
+            order = extend.get("排序", "") or ""
 
             def seg(x):
                 return quote(x, safe='') if x else ""
@@ -592,4 +616,4 @@ class Spider(object):
         return {}
 
     def close(self):
-        pass
+        self.destroy()
