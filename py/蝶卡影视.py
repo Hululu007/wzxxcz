@@ -177,6 +177,8 @@ _RE_CARD_WATCH = re.compile(r'>\s*([\d,]+)人次在看\s*<', re.I)
 
 # 播放页核心数据
 _RE_LINELIST = re.compile(r'var\s+temLineList\s*=\s*(\[[\s\S]*?\])\s*;', re.S)
+# 当前集对象 Iyplayer（含 id）
+_RE_IYPLAYER = re.compile(r'Iyplayer\s*=\s*\{[^}]*?id\s*:\s*(\d+)', re.S)
 
 # 详情页标题
 _RE_H1 = re.compile(r'<h1[^>]*>([\s\S]*?)</h1>', re.I)
@@ -484,15 +486,48 @@ class Spider(Spider):
             "vod_play_url": "$$$".join(play_url),
         }]}
 
-    def _parse_lines(self, html):
-        """解析 var temLineList，按 tag 分组，返回 {(tag,): [(集名, 播放页url), ...]}"""
-        result = {}
-        m = _RE_LINELIST.search(html)
+    def _extract_linelist_json(self, html):
+        """
+        稳健提取 temLineList 的 JSON 文本。
+        不用非贪婪正则（数组内 "# LineList":[] 等嵌套会出错），
+        改用【括号配对】从起始 '[' 扫描到匹配的 ']'。
+        """
+        m = re.search(r'var\s+temLineList\s*=\s*\[', html)
         if not m:
+            return ""
+        start = html.index('[', m.start())
+        depth = 0
+        in_str = False
+        esc = False
+        for i in range(start, len(html)):
+            ch = html[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == '\\':
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch == '[':
+                    depth += 1
+                elif ch == ']':
+                    depth -= 1
+                    if depth == 0:
+                        return html[start:i + 1]
+        return ""
+
+    def _parse_lines(self, html):
+        """解析 temLineList，按 tag 分组，返回 {(tag,): [(集名, 播放页url), ...]}"""
+        result = {}
+        raw = self._extract_linelist_json(html)
+        if not raw:
             self.log("  未找到 temLineList")
             return result
         try:
-            data = json.loads(m.group(1))
+            data = json.loads(raw)
         except Exception as e:
             self.log("  temLineList JSON 解析失败: %s" % e)
             return result
@@ -509,7 +544,18 @@ class Spider(Spider):
 
     # ------------------ 播放 ------------------
     def playerContent(self, flag, id, vipFlags):
-        play_page = id if id.startswith("http") else self._fix_url(id)
+        """TVBox 传入的 id 可能是完整URL/相对路径，做全面兼容"""
+        raw = (id or "").strip()
+        if raw.startswith("http"):
+            play_page = raw
+        elif raw.startswith("/"):
+            play_page = self.site_url + raw
+        elif raw.isdigit():
+            # 兜底：纯数字按 vod/player/0/{id} 处理
+            play_page = "%s/vod/player/0/%s" % (self.site_url, raw)
+        else:
+            play_page = self._fix_url(raw)
+
         self.log("player: %s" % play_page)
 
         # 命中缓存
@@ -517,25 +563,38 @@ class Spider(Spider):
             return self._play_cache[play_page]
 
         html = self._fetch(play_page)
-        m = _RE_LINELIST.search(html)
+        raw_json = self._extract_linelist_json(html)
 
-        if m:
+        if raw_json:
+            data = []
             try:
-                data = json.loads(m.group(1))
-            except Exception:
-                data = []
-            # 精确定位当前集：用 URL 中的 line_id (/vod/player/{line_id}/{vid})
+                data = json.loads(raw_json)
+            except Exception as e:
+                self.log("  temLineList 解析失败: %s" % e)
+
             target = None
-            mm = re.search(r'/vod/player/(\d+)/', play_page)
-            if mm:
-                cur_id = mm.group(1)
-                for it in data:
-                    if str(it.get("id")) == cur_id:
-                        target = it
-                        break
-            # 兜底：取第一条（播放页通常把当前集排在首位）
-            if target is None and data:
-                target = data[0]
+            if data:
+                # 1) 优先匹配 URL 中的 line_id（/vod/player/{line_id}/{vid}）
+                mm = re.search(r'/vod/player/(\d+)/', play_page)
+                if mm:
+                    cur_id = mm.group(1)
+                    if cur_id != "0":
+                        for it in data:
+                            if str(it.get("id")) == cur_id:
+                                target = it
+                                break
+                # 2) 匹配 Iyplayer.id（页面内嵌当前集对象）
+                if target is None:
+                    mi = re.search(r'Iyplayer\s*=\s*\{[^}]*?id\s*:\s*(\d+)', html)
+                    if mi:
+                        cur_id = mi.group(1)
+                        for it in data:
+                            if str(it.get("id")) == cur_id:
+                                target = it
+                                break
+                # 3) 兜底取第一条
+                if target is None:
+                    target = data[0]
 
             if target:
                 raw_file = target.get("file") or ""
