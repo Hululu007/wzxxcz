@@ -14,14 +14,16 @@
      - 在看人数: <span>39135人次在看</span>
 
   2. 分类/筛选（已验证，关键！）：
-     - 真实分类页 URL : /vod/list/{页码}/{typeId}/0
-       注意: 第2位是【页码】，第3位是【类型ID】，末位固定为 0
-       例: /vod/list/1/1/0   → 电影第1页
-           /vod/list/2/1/0   → 电影第2页
-           /vod/list/1/9/0   → 动作片第1页(9=动作片)
-           /vod/list/1/2/0   → 电视剧第1页
+     - 真实分类列表 URL : /vod/list/{页码}/{顶层tid}/{子分类id}
+       第1位=页码(从1开始)，第2位=顶层分类ID，第3位=子分类ID(0=全部)
+       例: /vod/list/1/1/0    → 电影第1页
+           /vod/list/3/1/0    → 电影第3页
+           /vod/list/1/1/9    → 电影-动作片第1页(9=动作片)
+           /vod/list/2/2/22   → 电视剧-国产剧第2页(22=国产剧)
+           /vod/list/1/457/541 → 短剧-玄幻第1页(541=玄幻)
      - SSR 渲染，每页固定 10 个卡片，curl 直接可取
-     - typeId 来自筛选栏 <a class="btn">，完整映射见 _FILTERS_MAP
+     - 子分类 typeId 来自筛选栏 <a class="btn">，完整映射见 _FILTERS_MAP
+     - 分类聚合入口(菜单): /vod/1/{顶层tid}/0
 
   3. 播放页解密（核心，已实测通过）：
      - 页面内 JS 变量: var temLineList = [ {...}, {...} ]
@@ -329,24 +331,27 @@ class Spider(Spider):
         except Exception:
             sub_id = 0
 
-        # 真实格式: /vod/list/{groupId}/{typeId}/{page}
-        url = "%s/vod/list/1/%s/%d" % (self.site_url, tid, page)
-        self.log("category: %s (子分类=%s)" % (url, sub_id))
-        html = self._fetch(url)
+        # 真实格式: /vod/list/{页码}/{顶层tid}/{子分类id}
+        #   子分类 id=0 表示全部；国产剧=22 等（extend["class"] 传入）
+        type_id = sub_id if sub_id else 0
 
+        url = "%s/vod/list/%d/%s/%d" % (self.site_url, page, tid, type_id)
+        self.log("category: %s" % url)
+        html = self._fetch(url)
         videos = self._extract_videos(html)
 
-        # 子分类本地过滤（若页面未直接返回对应子类，则从聚合页取全部）
-        if sub_id and not videos:
-            # 回退：用子分类页
-            url2 = "%s/vod/list/1/%d/%d" % (self.site_url, sub_id, page)
-            self.log("  回退子分类: %s" % url2)
-            html = self._fetch(url2)
-            videos = self._extract_videos(html)
+        # 从分页条解析真实总页数（/vod/list/{页}/{tid}/0）
+        pagecount = 9999
+        pages = re.findall(r'/vod/list/(\d+)/\d+/\d+', html or "")
+        if pages:
+            try:
+                pagecount = max(int(p) for p in pages)
+            except Exception:
+                pass
 
         return {
-            "list": videos, "page": page, "pagecount": 9999,
-            "limit": 24, "total": 999999,
+            "list": videos, "page": page, "pagecount": pagecount,
+            "limit": 10, "total": pagecount * 10,
         }
 
     # ------------------ 搜索 ------------------
