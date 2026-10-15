@@ -758,28 +758,28 @@ class Spider(Spider):
                 raw_file = target.get("file") or ""
                 real = self._decode_file(raw_file)
                 if real:
-                    # ★ 关键（解决"一卡一卡"）：
-                    #   实测本站每集返回的都是【主播放列表(master playlist)】：
-                    #     #EXTM3U
-                    #     #EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=800000,RESOLUTION=1920x1080
-                    #     3000k/hls/mixed.m3u8
-                    #   网站用 AliPlayer（会自动选流）所以秒播；
-                    #   而 TVBox 部分内核处理 master 列表时会反复探测/切码率 → 一卡一卡。
-                    #   对策：在服务端先解析出【最终子列表】直接返回，
-                    #        TVBox 拿到纯分片列表即可秒播（无需代理）。
-                    sub_url = self._resolve_master(real)
-                    final_url = sub_url or real
+                    # ★ 解决"一卡一卡"的最终方案：走【本地代理】播放。
+                    #   实测本站只有 HLS 分片流（无 mp4 直链）：
+                    #     · 每集真实地址是【主播放列表(master)】，如需可再降一级
+                    #     · 分片是 video/mp2t，CDN 支持 Range，但【依赖 Referer】
+                    #   直接给 TVBox 裸地址时，很多内核不会把 Referer 带给 .ts 分片，
+                    #   导致分片被 CDN 冷启限速 → 一卡一卡。
+                    #   → 用 TVBox 标准代理前缀 proxy://，让服务端 localProxy：
+                    #       1) 抓 m3u8，把主列表扁平化为纯分片列表
+                    #       2) 把每个分片写成【经代理的绝对地址】并统一带 Referer
+                    #     TVBox 只访问本地代理，彻底绕开 header/相对路径问题。
+                    proxy_url = "proxy://do=py&url=%s" % urllib.parse.quote(real, safe="")
                     res = {
                         "parse": 0,
                         "playUrl": "",
-                        "url": final_url,
+                        "url": proxy_url,
                         "header": {
                             "User-Agent": UA,
                             "Referer": self.site_url + "/",
                         },
                     }
                     self._play_cache[play_page] = res
-                    self.log("  => m3u8: %s" % final_url[:160])
+                    self.log("  => m3u8(proxy): %s" % real[:160])
                     return res
 
         # 兜底：交给 TVBox 嗅探
@@ -830,30 +830,32 @@ class Spider(Spider):
         return ""
 
     # ------------------ 本地代理（图片 + m3u8 视频流） ------------------
+    def _proxy_pref(self):
+        """本地代理前缀（TVBox 收到后回调 localProxy）"""
+        return "proxy://do=py&url="
+
     def localProxy(self, param):
         """
-        统一本地代理：
-          - 图片: 直接转发 image/*
-          - m3u8: 关键优化 —— 把【主播放列表】在服务端扁平化：
-              · 若是 master playlist（含 EXT-X-STREAM-INF），
-                则继续抓取其首个子列表（如 3000k/hls/mixed.m3u8），
-                并把最终列表里的分片路径全部转成【绝对 URL】。
-              · 所有下游请求（子 m3u8 / .ts 分片）都带上站点 Referer，
-                避免 CDN 冷启动限速 → 解决"一卡一卡"。
+        统一本地代理（由 playerContent 返回的 proxy:// 触发）：
+          · m3u8: 抓取后把【主列表扁平化为纯分片列表】，
+                  并把列表里每个分片/子列表地址都改写成【再次经本代理】的地址，
+                  这样每个 .ts 请求都会经过服务端 → 统一带上站点 Referer，
+                  彻底解决 TVBox 分片不带 Referer 导致的限速/卡顿。
+          · 其它（图片/二进制等）: 直接转发，保留原始 Content-Type。
         """
         try:
             url = ""
             if isinstance(param, dict):
-                url = param.get("url", "") or param.get("path", "")
+                url = param.get("url", "") or param.get("path", "") or ""
             else:
                 for pair in str(param).split("&"):
                     if "=" in pair:
                         k, v = pair.split("=", 1)
                         if k in ("url", "path"):
                             url = v
+            url = urllib.parse.unquote(url) if "%" in url else url
             if not url:
                 return [200, "text/plain", b"", ""]
-            url = urllib.parse.unquote(url) if "%" in url else url
             url = self._fix_url(url)
 
             headers = {
@@ -861,13 +863,10 @@ class Spider(Spider):
                 "Referer": self.site_url + "/",
                 "Accept": "*/*",
             }
-
-            # 带 Referer 拉取
             rsp = self.fetch(url, headers=headers, timeout=20)
             content = rsp.content
-            ctype = rsp.headers.get("Content-Type", "") or ""
+            ctype = (rsp.headers.get("Content-Type", "") or "")
 
-            # 判断是否 m3u8（扩展名 或 内容特征）
             low = url.lower()
             head_txt = content[:2000].decode("utf-8", "ignore") if content else ""
             is_m3u8 = (
@@ -879,49 +878,43 @@ class Spider(Spider):
             if is_m3u8:
                 txt = content.decode("utf-8", "ignore")
 
-                # ---- ① 若为 master playlist，追取首个子列表 ----
+                # ① master playlist → 追取首个子列表
                 if "EXT-X-STREAM-INF" in txt:
                     sub = ""
                     for ln in txt.splitlines():
-                        ln = ln.strip()
-                        if not ln or ln.startswith("#"):
-                            continue
-                        sub = ln
-                        break
+                        s = ln.strip()
+                        if s and not s.startswith("#"):
+                            sub = s
+                            break
                     if sub:
                         sub_url = urllib.parse.urljoin(url, sub)
-                        self.log("  proxy: master -> 子列表 %s" % sub_url)
                         try:
                             r2 = self.fetch(sub_url, headers=headers, timeout=20)
                             txt = r2.content.decode("utf-8", "ignore")
-                            url = sub_url          # 后续分片基于子列表基准解析
+                            url = sub_url
                         except Exception as e:
                             self.log("  proxy: 取子列表失败 %s" % e)
 
-                # ---- ② 分片/子列表路径 -> 绝对 URL ----
-                out_lines = []
+                # ② 分片/子列表地址 → 经本代理的绝对地址（带 Referer）
+                pref = self._proxy_pref()
+                out = []
                 for ln in txt.splitlines():
                     s = ln.strip()
                     if not s or s.startswith("#"):
-                        out_lines.append(ln)
+                        out.append(ln)
                         continue
-                    # 相对/绝对地址统一转成绝对
-                    out_lines.append(urllib.parse.urljoin(url, s))
-                new_txt = "\n".join(out_lines)
-
+                    absu = urllib.parse.urljoin(url, s)
+                    out.append(pref + urllib.parse.quote(absu, safe=""))
+                new_txt = "\n".join(out)
                 return [200, "application/vnd.apple.mpegurl",
                         new_txt.encode("utf-8"), ""]
 
-            # ---- 普通资源（图片/ts 等）直接转发 ----
             if not ctype:
                 ctype = "application/octet-stream"
             return [200, ctype, content, ""]
         except Exception as e:
             self.log("localProxy error: %s" % e)
-            try:
-                return [200, "text/plain", b"", ""]
-            except Exception:
-                return [200, "text/plain", b"", ""]
+            return [200, "text/plain", b"", ""]
 
     def isVideoFormat(self, url):
         return ".m3u8" in url or ".mp4" in url or url.startswith("http")
