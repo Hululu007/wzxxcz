@@ -594,19 +594,20 @@ class Spider(Spider):
             if encrypt != 0:
                 real = self._decode(real)
 
-            # 处理主播放列表：解析出子 m3u8（更利于 TVBox 秒播）
-            final_url = self._resolve_master(real) or real
+            # 直接使用网页 player_aaaa 里给出的原始地址（与网页播放完全一致）。
+            # 注意：不要再把 master 主列表降级为子列表——本站多条 CDN 线路的
+            #       子列表分片位于不同域名，降级后播放器可能因跨域/Referer 问题黑屏。
+            #       网页播放器也是直接播这个地址，故保持一致最稳。
+            final_url = real
 
             result["parse"] = 0
             result["playUrl"] = ""
             result["url"] = final_url
-            # header 用站点 Referer（实测该 CDN 不校验防盗链，带上更贴近真实浏览器）
-            result["header"] = {
-                "User-Agent": UA,
-                "Referer": self.site_url + "/",
-            }
+            # header：默认不带 Referer（CDN 实测不校验防盗链；
+            #         带站点 Referer 反而可能在跨域分片时被拒，导致黑屏）。
+            result["header"] = {"User-Agent": UA}
         except Exception as e:
-            print("playerContent error:", e)
+            self.log("playerContent error: %s" % e)
         return result
 
     def _decode(self, s):
