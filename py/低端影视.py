@@ -27,12 +27,47 @@ import time
 import urllib.parse
 from urllib.parse import urljoin, quote, unquote
 
-sys.path.append('..')
+# 双保险引入 Spider 基类：
+#   1) 优先使用影视仓/FongMi 注入的 base.spider.Spider（提供 self.fetch / self.log）
+#   2) 导入失败时，用自带兜底基类（内部用 requests 实现 fetch），
+#      避免因基类 import 失败导致整个爬虫不可用（分类显示不出来的重要原因）。
 try:
     from base.spider import Spider
 except Exception:
-    class Spider(object):
+    import requests as _rq
+    try:
+        _rq.packages.urllib3.disable_warnings()
+    except Exception:
         pass
+
+    class _BaseSpider(object):
+        def __init__(self):
+            self._session = None
+
+        @property
+        def _sess(self):
+            if self._session is None:
+                self._session = _rq.Session()
+                self._session.verify = False
+                adapter = _rq.adapters.HTTPAdapter(
+                    pool_connections=10, pool_maxsize=10, max_retries=0)
+                self._session.mount('https://', adapter)
+                self._session.mount('http://', adapter)
+            return self._session
+
+        def fetch(self, url, headers=None, **kw):
+            timeout = kw.pop('timeout', 15)
+            r = self._sess.get(url, headers=headers, timeout=timeout, **kw)
+            r.encoding = 'utf-8'
+            return r
+
+        def log(self, *a, **kw):
+            try:
+                print("[ddys24]", *a)
+            except Exception:
+                pass
+
+    Spider = _BaseSpider
 
 
 # ============================== 常量配置 ==============================
