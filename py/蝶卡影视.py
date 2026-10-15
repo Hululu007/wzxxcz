@@ -758,28 +758,27 @@ class Spider(Spider):
                 raw_file = target.get("file") or ""
                 real = self._decode_file(raw_file)
                 if real:
-                    # ★ 解决"一卡一卡"的最终方案：走【本地代理】播放。
-                    #   实测本站只有 HLS 分片流（无 mp4 直链）：
-                    #     · 每集真实地址是【主播放列表(master)】，如需可再降一级
-                    #     · 分片是 video/mp2t，CDN 支持 Range，但【依赖 Referer】
-                    #   直接给 TVBox 裸地址时，很多内核不会把 Referer 带给 .ts 分片，
-                    #   导致分片被 CDN 冷启限速 → 一卡一卡。
-                    #   → 用 TVBox 标准代理前缀 proxy://，让服务端 localProxy：
-                    #       1) 抓 m3u8，把主列表扁平化为纯分片列表
-                    #       2) 把每个分片写成【经代理的绝对地址】并统一带 Referer
-                    #     TVBox 只访问本地代理，彻底绕开 header/相对路径问题。
-                    proxy_url = "proxy://do=py&url=%s" % urllib.parse.quote(real, safe="")
+                    # ★ 解决"一卡一卡"（参照豆花思路：解析出真实子 m3u8 直链）：
+                    #   实测本站每集真实地址是【主播放列表(master)】：
+                    #     #EXTM3U
+                    #     #EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1920x1080
+                    #     3000k/hls/mixed.m3u8
+                    #   CDN 本身不校验 Referer、速度正常（已实测），
+                    #   卡顿根因是 TVBox 处理 master 主列表时反复选流/重载。
+                    #   → 在服务端把 master 解析为【真实子 m3u8 直链】(mixed.m3u8)
+                    #     直接返回给 TVBox（parse=0 + 直链），秒播。
+                    final_url = self._resolve_master(real) or real
                     res = {
                         "parse": 0,
                         "playUrl": "",
-                        "url": proxy_url,
+                        "url": final_url,
                         "header": {
                             "User-Agent": UA,
                             "Referer": self.site_url + "/",
                         },
                     }
                     self._play_cache[play_page] = res
-                    self.log("  => m3u8(proxy): %s" % real[:160])
+                    self.log("  => m3u8: %s" % final_url[:160])
                     return res
 
         # 兜底：交给 TVBox 嗅探
@@ -809,8 +808,12 @@ class Spider(Spider):
 
     def _resolve_master(self, m3u8_url):
         """
-        若 m3u8_url 是【主播放列表(master)】，返回其首个子列表的绝对地址；
-        否则原样返回。这样交给 TVBox 的就是纯分片列表，避免选流卡顿。
+        若 m3u8_url 是【主播放列表(master)】，返回其【子列表的绝对地址】；
+        否则原样返回 ""。
+
+        注：本站实测 master 只含一个码率子流（3000k/hls/mixed.m3u8），
+        但为稳妥起见，若存在多个 BANDWIDTH，优先取 bandwididth 最小的子流
+        （低码率更不易卡），无 BANDWIDTH 时取第一个。
         """
         if not m3u8_url or ".m3u8" not in m3u8_url.lower():
             return ""
@@ -820,11 +823,30 @@ class Spider(Spider):
             txt = rsp.content.decode("utf-8", "ignore")
             if "EXT-X-STREAM-INF" not in txt:
                 return ""                            # 已是子列表，无需处理
+
+            # 逐块解析：记录每个 #EXT-X-STREAM-INF 的带宽 + 紧随其后的地址
+            cands = []          # [(bandwidth, url)]
+            last_bw = None
             for ln in txt.splitlines():
                 s = ln.strip()
-                if not s or s.startswith("#"):
+                if not s:
                     continue
-                return urllib.parse.urljoin(m3u8_url, s)
+                if s.startswith("#EXT-X-STREAM-INF"):
+                    mb = re.search(r'BANDWIDTH=(\d+)', s)
+                    last_bw = int(mb.group(1)) if mb else 0
+                    continue
+                if s.startswith("#"):
+                    continue
+                # 这是子列表地址
+                cands.append((last_bw if last_bw is not None else 0,
+                              urllib.parse.urljoin(m3u8_url, s)))
+                last_bw = None
+
+            if not cands:
+                return ""
+            # 选码率最小的（更流畅）
+            cands.sort(key=lambda x: x[0])
+            return cands[0][1]
         except Exception as e:
             self.log("  resolve_master 失败: %s" % e)
         return ""
