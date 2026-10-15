@@ -112,7 +112,7 @@ FILTER_OPTIONS = {
     "排序": ["按最新", "按人气", "按评分"],
 }
 
-INTRO_PREFIX = "🍊低端影视为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
+INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
 
 def _clean(t):
@@ -430,27 +430,30 @@ class Spider(Spider):
             if m:
                 vod["vod_remarks"] = _clean(m.group(1))
 
-            # 类型 / 地区 / 年份 / 语言（真实：<p class="data hidden-xs">）
-            m = re.search(r'<p class="data hidden-xs">(.*?)</p>', html, re.S)
-            if m:
-                info = m.group(1)
-                t = re.search(r'类型：</span>\s*(?:<a[^>]*>)?([^<]+)', info)
-                if t:
-                    vod["type_name"] = _clean(t.group(1))
-                a = re.search(r'地区：</span>\s*(?:<a[^>]*>)?([^<]+)', info)
-                if a:
-                    vod["vod_area"] = _clean(a.group(1))
-                y = re.search(r'年份：</span>\s*(?:<a[^>]*>)?([^<]+)', info)
-                if y:
-                    vod["vod_year"] = _clean(y.group(1))
-
-            # 主演 / 导演（真实：<p class="data"><span...>主演：</span>xxx</p>）
-            vm = re.search(r'主演：</span>\s*([^<]*)</p>', html)
-            if vm:
-                vod["vod_actor"] = _clean(vm.group(1))
-            dm = re.search(r'导演：</span>\s*([^<]*)</p>', html)
-            if dm:
-                vod["vod_director"] = _clean(dm.group(1))
+            # 类型 / 地区 / 年份 / 语言 / 主演 / 导演 / 更新
+            # 真实结构（来源网页源码，字段值均为 <a> 链接，可能多个）：
+            #   <p class="data hidden-xs">
+            #     <span class="text-ddy1102-muted">类型：</span>
+            #       <a ...>剧情</a>&nbsp;<a ...>爱情</a>...<span class="split-ddy1102-line"></span>
+            #     <span...>地区：</span><a ...>中国大陆</a>...
+            #   </p>
+            #   <p class="data"><span...>主演：</span><a...>李梦</a>...</p>
+            # 做法：遍历所有 <p class="data..."> 块，按 label 切出内容段再清洗标签
+            _field_map = [("类型：</span>", "type_name"), ("地区：</span>", "vod_area"),
+                          ("年份：</span>", "vod_year"),
+                          ("主演：</span>", "vod_actor"), ("导演：</span>", "vod_director")]
+            for pm in re.finditer(r'<p class="data[^"]*">(.*?)</p>', html, re.S):
+                block = pm.group(1)
+                for label, key in _field_map:
+                    if vod.get(key):
+                        continue
+                    if label not in block:
+                        continue
+                    seg = block.split(label, 1)[1]
+                    # 字段值后面有分隔线，只取分隔线之前的内容
+                    if 'split-ddy1102-line' in seg:
+                        seg = seg.split('<span class="split-ddy1102-line">')[0]
+                    vod[key] = _clean(seg)
 
             # 简介（真实：含 "剧情：" 的 span）
             cm = re.search(r'剧情：</b>\s*([^<]*)</span>', html)
