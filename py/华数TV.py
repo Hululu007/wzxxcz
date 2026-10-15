@@ -1,9 +1,8 @@
 # coding=utf-8
 """
-华数TV (wasu.cn) TVBox Python 爬虫  V1.0
+华数TV (wasu.cn) TVBox Python 爬虫  
 ========================================================
 【重要说明】
-本爬虫严格基于 www.wasu.cn 的真实站点结构逆向分析编写，非猜测：
 
 1. 站点是 Vue3 SPA（<div id="app"></div>），服务端不返回任何影视 HTML，
    所有数据来自 XHR JSON 接口，因此本爬虫不解析 HTML，只调真实接口。
@@ -23,7 +22,7 @@
               Body: {"playUrl": "<.../xxx/playlist.m3u8>", "platform": "web"}
               Headers 必须带 x-sign 签名头（见下）
 
-3. 【播放签名算法】—— 逆向自前端 JS（关键，实测可用）：
+3. 【播放签名算法】—— 逆向自前端 JS：
       x-sign = Base64( HMAC-SHA256( compact_json(body), KEY ) )
       KEY    = b"3ecc90fe-da54-4bd6-8d2e-6e7820fbe76a"   # 直接字符串字节，勿 base64 解码
       compact_json = json.dumps(body, separators=(',', ':'), ensure_ascii=False)
@@ -109,7 +108,7 @@ SORT_OPTIONS = [
     {"n": "最热", "v": "3"},
 ]
 
-# 简介前缀（与需求一致）
+# 简介前缀
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
 # 清晰度：接口 type 取值 → 线路名（数值越大越清晰）
