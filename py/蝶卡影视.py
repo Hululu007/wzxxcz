@@ -759,26 +759,21 @@ class Spider(Spider):
                 raw_file = target.get("file") or ""
                 real = self._decode_file(raw_file)
                 if real:
-                    # ★ 最终方案：本地代理 + 服务端【持续滚动预取】。
-                    #   已确认根因：FongMi/影视仓 对 m3u8 只预加载少量分片，
-                    #   一集 695 片(4秒/片)，只靠播放器自身缓冲，
-                    #   网络任何波动 → "每播几秒转圈"。
-                    #   对策：把该集分片表交给本地代理，代理在服务端
-                    #   用多线程【持续预取】后续分片缓存到内存，
-                    #   播放器每次取片几乎都命中本地缓存（0ms），
-                    #   等于把"大缓冲"从播放器搬到代理，根治转圈。
-                    proxy_url = "proxy://do=py&url=%s" % urllib.parse.quote(real, safe="")
+                    # 直接返回真实 m3u8 直链（最稳，兼容所有播放器/内核）。
+                    #   实测本站每集真实地址是 master 主列表，先降一级到子列表，
+                    #   避免 TVBox 处理 master 时反复选流。
+                    final_url = self._resolve_master(real) or real
                     res = {
                         "parse": 0,
                         "playUrl": "",
-                        "url": proxy_url,
+                        "url": final_url,
                         "header": {
                             "User-Agent": UA,
                             "Referer": self.site_url + "/",
                         },
                     }
                     self._play_cache[play_page] = res
-                    self.log("  => m3u8代理+滚动预取: %s" % real[:160])
+                    self.log("  => m3u8直链: %s" % final_url[:160])
                     return res
 
         # 兜底：交给 TVBox 嗅探
