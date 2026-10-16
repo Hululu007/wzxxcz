@@ -15,6 +15,7 @@
   - 详情页    ：div.this-desc-info  → 评分/年份/地区/状态
                 div.this-info       → 导演 / 演员
                 #height_limit       → 简介正文
+                div.info-parameter ul li em → 片名/状态/主演/导演/年份/地区/类型/频道/上映/语言/更新/简介
                 div.anthology-tab a → 线路名（AA线/A线/B线.../http下载）
                 div.anthology-list-box ul.anthology-list-play li a[href=/vodplay/{id}-{sid}-{nid}.html]
   - 播放页    ：var player_aaaa={"flag":"play","encrypt":0,...,
@@ -133,7 +134,15 @@ _F_SORT = [("time", "按最新"), ("hits", "按最热"), ("score", "按评分")]
 
 
 def _mk_filters():
-    """生成 TVBox filters（key 与 extend 参数一一对应）。"""
+    """生成 TVBox filters（key 与 extend 参数一一对应）。
+    key 全部严格对齐站点 vodshow 12 段式：
+      area   → seg2  地区
+      by     → seg3  排序
+      class  → seg4  类型
+      lang   → seg5  语言
+      letter → seg6  字母
+      year   → seg12 年份
+    """
     def opts(items, all_name="全部"):
         return [{"n": all_name, "v": ""}] + [{"n": x, "v": x} for x in items]
 
@@ -147,11 +156,34 @@ def _mk_filters():
     }
 
 
+# TVBox 的 filters 结构：{ type_id: [ {key, name, value:[{n,v}]}, ... ] }
+# 站点 6 个分类共用同一套筛选项（真实站源码实测：所有 vodshow 页面筛选块一致）
 _ONE_FILTER = _mk_filters()
-# 每个分类一套独立的筛选列表（结构 {"key": [ {n,v}, ... ]}）
-FILTERS = {c["type_id"]: {k: [dict(o) for o in v]
-                          for k, v in _ONE_FILTER.items()}
-           for c in CLASSES}
+
+
+def _mk_one_list():
+    """把 _ONE_FILTER 的 dict 形式，转成 TVBox 要求的 list 形式。"""
+    name_map = {
+        "class":  "类型",
+        "area":   "地区",
+        "year":   "年份",
+        "lang":   "语言",
+        "letter": "字母",
+        "by":     "排序",
+    }
+    # 展示顺序：类型 / 地区 / 年份 / 语言 / 字母 / 排序
+    order = ["class", "area", "year", "lang", "letter", "by"]
+    out = []
+    for k in order:
+        out.append({
+            "key":   k,
+            "name":  name_map[k],
+            "value": _ONE_FILTER[k],
+        })
+    return out
+
+
+FILTERS = {c["type_id"]: _mk_one_list() for c in CLASSES}
 
 
 # ===================== 正则（全部对应真实源码结构） =====================
@@ -529,12 +561,19 @@ class Spider(Spider):
             elif "演员" in label or "主演" in label:
                 actor = ", ".join(names)
 
-        # --- 影片参数区（info-parameter）：类型/上映/语言/更新 等 ---
-        vod_class, publish, lang = "", "", ""
+        # --- 影片参数区（info-parameter）：从真实详情页 <ul><li> 读 ---
+        # 真实结构（来自你贴的详情页源码）：
+        #   <li><em class="cor4">年份：</em>2026</li>
+        #   <li><em class="cor4">地区：</em>美国</li>
+        #   <li><em class="cor4">类型：</em><a>剧情</a> <a>喜剧</a>...</li>
+        #   <li><em class="cor4">状态：</em><span>已完结</span></li>
+        #   <li><em class="cor4">上映：</em>2026-10-15(美国)</li>
+        #   <li><em class="cor4">语言：</em>英语</li>
+        vod_class, publish, lang, status_param = "", "", "", ""
         pm = _RE_PARAM_WRAP.search(html)
         if pm:
             for li in _RE_PARAM_LI.finditer(pm.group(1)):
-                label = self._clean(li.group(1)).rstrip("：:")
+                label = self._clean(li.group(1)).rstrip("：:").strip()
                 val = self._clean(li.group(2))
                 if not val:
                     continue
@@ -547,6 +586,8 @@ class Spider(Spider):
                     publish = val
                 elif label == "语言":
                     lang = val
+                elif label == "状态":
+                    status_param = val
 
         # 年份/地区优先取参数区，缺失时回退 this-desc-info
         pm2 = self._param_simple(html, "年份")
@@ -555,17 +596,9 @@ class Spider(Spider):
         pm3 = self._param_simple(html, "地区")
         if pm3:
             area = pm3
-
-        # 上映/语言/类型附加到简介尾部（TVBox 无独立字段，合并展示）
-        extras = []
-        if vod_class:
-            extras.append("类型: " + vod_class)
-        if publish:
-            extras.append("上映: " + publish)
-        if lang:
-            extras.append("语言: " + lang)
-        if extras:
-            content = content + "\n" + " | ".join(extras)
+        # 状态也优先用参数区的
+        if status_param:
+            remarks = status_param
 
         # --- 线路 + 剧集 ---
         lines = self._parse_play_lines(html)
