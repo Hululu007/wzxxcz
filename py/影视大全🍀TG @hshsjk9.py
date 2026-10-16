@@ -648,17 +648,6 @@ class Spider(Spider):
         if pm3:
             area = pm3
 
-        # 上映/语言/类型附加到简介尾部（TVBox 无独立字段，合并展示）
-        extras = []
-        if vod_class:
-            extras.append("类型: " + vod_class)
-        if publish:
-            extras.append("上映: " + publish)
-        if lang:
-            extras.append("语言: " + lang)
-        if extras:
-            content = content + "\n" + " | ".join(extras)
-
         # --- 线路 + 剧集 ---
         lines = self._parse_play_lines(html)
         if not lines:
