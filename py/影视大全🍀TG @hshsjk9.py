@@ -3,22 +3,40 @@
 影视大全 iysdq1.com | TVBox Python 爬虫
 
 严格依据网页真实源码写：
+
   1. 播放页源码里 var player_aaaa = {...}
-  2. 其中 "url" 字段就是最终播放地址：
-       网页里 xiguam3u8.js / dyttm3u8.js 把它直接塞给 iframe 的
-       analysis.php?v=<url>，iframe 里 JXplayer.js 再把它直接赋给
-       video.src，交给 Hls.js。
-  3. 网页端全程不做任何 302 跟随、域名替换、加密——原样使用 url。
-  4. 播放器真实请求头（F12 抓 m3u8 请求的 cURL 得到）：
-       - 有 User-Agent: Mozilla/5.0 ... Chrome/155 ... Edg/155
-       - 有 Referer（空值），等价于"不发 Referer"
-       - 没有 Origin
-     所以 Python 端返回的 header 也照抄这三条事实：只用真实 UA，
-     不加 Referer，不加 Origin。
+     其中 "url" 字段是"入口地址"（xiguam3u8/dyttm3u8 等线路各自的 m3u8 域名）。
+
+  2. 网页里 <from>.js 把这个 url 原样塞给 iframe：
+       <iframe src="analysis.php?v=<url>&next=...&tittle=...">
+
+  3. analysis.php 返回的 HTML 里，JXplayer.js 用到的 config 是这样：
+       var config = {
+           "url": "cmtYPPmuW+sEJGAi8UkSOgkcAgG9yC4/XZzqaldDzJZwHS8gxuOezNMuxKJnKUVVWCTXR0H+pq3fIJTPeRyLRBmS+J+yFUDwE34=",
+           ...
+       }
+     注意：这个 config.url 是加密过的串，不是明文 m3u8。
+
+  4. analysis.php 页面里 YKQ.start() 里这一行才是真正播放：
+       YKQ.play(rc4(config.url, '202306051426239465', 1));
+     rc4 函数的实现（定义在 YKQ 源码最末）：
+       - t == 1 时：data = atob(data)  （即先 Base64 解码）
+       - 标准 RC4 解密（密钥 '202306051426239465'）
+       - 返回 decodeURIComponent(cipher)
+
+  5. 所以 Python 端要做的、也是唯一正确的做法：
+       a) 从播放页拿 player_aaaa.url
+       b) 请求 analysis.php?v=<player_aaaa.url>
+       c) 从返回 HTML 里正则抓出 config 的 "url":"..."
+       d) 对抓到的密文执行 atob → RC4(key='202306051426239465') → urldecode
+       e) 得到的才是真实 m3u8 地址，返回给播放器
+
+  6. 返回 header：照 m3u8 真实请求（F12 cURL）只有真实 UA，无 Referer、无 Origin。
 """
 import re
 import sys
 import json
+import base64
 import urllib.parse
 
 sys.path.append('..')
@@ -70,6 +88,12 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 # 播放器真实 UA（从 F12 抓 m3u8 请求的 cURL 抄来）
 PLAYER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
              "(KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0")
+
+# analysis.php 的地址（从播放页套壳 iframe src 里能看到）
+ANALYSIS_BASE = "https://p.iysdq.com/player/analysis.php"
+
+# RC4 密钥（来自 YKQ 源码：YKQ.play(rc4(config.url,'202306051426239465',1)))
+RC4_KEY = "202306051426239465"
 
 DEFAULT_PIC = HOST + "/template/shoutu45/assets/images/img-bj-k.png"
 
@@ -179,6 +203,9 @@ _RE_TOTAL = re.compile(r"\$\('\.hl-total'\)\.html\('(\d+)'\)", re.I)
 # 播放页源码里的 player_aaaa：var player_aaaa={...}</script>
 _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>', re.I)
 
+# analysis.php 返回的 HTML 里的 config.url（加密串，纯 Base64 字符）
+_RE_CONFIG_URL = re.compile(r'"url"\s*:\s*"([A-Za-z0-9+/=]+)"', re.I)
+
 
 class Spider(Spider):
 
@@ -245,6 +272,102 @@ class Spider(Spider):
         s = re.sub(r"[ \t\r\f\v]+", " ", s)
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
+
+    # ============== RC4 解密（严格照 YKQ 源码里的 rc4(data,key,1) 复刻）==============
+    # YKQ 源码：
+    #   function rc4(data, key, t) {
+    #       var pwd = key || 'bigon';
+    #       if (t == 1) { var data = atob(data); }
+    #       var data_length = data.length;
+    #       for (i = 0; i < 256; i++) {
+    #           key[i] = pwd[i % pwd_length].charCodeAt();
+    #           box[i] = i;
+    #       }
+    #       for (j = i = 0; i < 256; i++) {
+    #           j = (j + box[i] + key[i]) % 256;
+    #           swap(box[i], box[j]);
+    #       }
+    #       for (a = j = i = 0; i < data_length; i++) {
+    #           a = (a + 1) % 256;
+    #           j = (j + box[a]) % 256;
+    #           swap(box[a], box[j]);
+    #           k = box[((box[a] + box[j]) % 256)];
+    #           cipher += chr(data.charCodeAt(i) ^ k);
+    #       }
+    #       if (t == 1) return decodeURIComponent(cipher);
+    #       else return btoa(cipher);
+    #   }
+    def _rc4_decrypt(self, cipher_b64, key=RC4_KEY):
+        """
+        输入：Base64 编码的密文串（analysis.php 里 config.url 的值）
+        输出：RC4 解密 + URL 解码后的明文字符串（真正的 m3u8 地址）
+        """
+        # atob(data)：Base64 解码 → bytes
+        raw = base64.b64decode(cipher_b64)
+
+        # KSA
+        pwd_bytes = key.encode("utf-8")
+        box = list(range(256))
+        k = [pwd_bytes[i % len(pwd_bytes)] for i in range(256)]
+        j = 0
+        for i in range(256):
+            j = (j + box[i] + k[i]) % 256
+            box[i], box[j] = box[j], box[i]
+
+        # PRGA
+        out = bytearray()
+        a = 0
+        j = 0
+        for i in range(len(raw)):
+            a = (a + 1) % 256
+            j = (j + box[a]) % 256
+            box[a], box[j] = box[j], box[a]
+            kk = box[(box[a] + box[j]) % 256]
+            out.append(raw[i] ^ kk)
+
+        # decodeURIComponent(cipher)
+        s = out.decode("utf-8", "ignore")
+        return urllib.parse.unquote(s)
+
+    # ============== 通过 analysis.php 拿到真实 m3u8 ==============
+    def _get_real_m3u8(self, entry_url):
+        """
+        输入：player_aaaa.url（明文入口地址，如 https://vip.dytt-tvs.com/.../index.m3u8）
+        过程：
+          1. 请求 https://p.iysdq.com/player/analysis.php?v=<entry_url>
+          2. 从返回 HTML 里抓 config.url（Base64 密文）
+          3. RC4 解密得到真实 m3u8
+        返回：真实 m3u8 地址，失败返回空串
+        """
+        if not entry_url:
+            return ""
+        try:
+            q = urllib.parse.quote(entry_url, safe="")
+            analysis_url = ANALYSIS_BASE + "?v=" + q
+            self.log("  analysis.php: %s" % analysis_url[:200])
+
+            ana_html = self._fetch_text(analysis_url, headers={
+                "User-Agent": PLAYER_UA,
+                "Referer": "https://p.iysdq.com/player/",
+            })
+            if not ana_html:
+                self.log("  analysis.php 返回为空")
+                return ""
+
+            m = _RE_CONFIG_URL.search(ana_html)
+            if not m:
+                self.log("  analysis.php 里没找到 config.url")
+                return ""
+
+            cipher = m.group(1)
+            self.log("  config.url(密文前 80): %s" % cipher[:80])
+
+            real = self._rc4_decrypt(cipher, RC4_KEY)
+            self.log("  RC4 解密后: %s" % real[:200])
+            return real
+        except Exception as e:
+            self.log("  _get_real_m3u8 异常: %s" % e)
+            return ""
 
     def _extract_videos(self, html):
         videos = []
@@ -440,14 +563,14 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # -------- 播放：照网页真实请求头写（F12 抓 m3u8 的 cURL 事实）--------
-    # 网页里 xiguam3u8.js / dyttm3u8.js 把 player_aaaa.url 原样塞给 iframe
-    # 的 analysis.php?v=<url>，JXplayer.js 再把它原样赋给 video.src。
-    # 播放器真实请求头（cURL 事实）：
-    #   User-Agent: Mozilla/5.0 ... Chrome/155 ... Edg/155
-    #   Referer: 空值（等价于不发）
-    #   无 Origin
-    # 所以 Python 返回的 header 也照抄这三条事实。
+    # -------- 播放：严格照 YKQ 源码里的 RC4 解密流程 --------
+    # 网页真实路径：
+    #   1. player_aaaa.url
+    #   2. → analysis.php?v=<url>
+    #   3. → 返回 HTML 里的 config.url（Base64 密文）
+    #   4. → rc4(config.url, '202306051426239465', 1)
+    #        = atob → RC4 → decodeURIComponent
+    #   5. → 得到真正的 m3u8 地址
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -468,17 +591,33 @@ class Spider(Spider):
                 except Exception as e:
                     self.log("  player_aaaa 解析失败: %s" % e)
 
+        real_url = ""
         if api_url:
+            # 走网页真实路径：analysis.php + RC4
+            real_url = self._get_real_m3u8(api_url)
+
+        if real_url:
             res = {
                 "parse": 0,
                 "playUrl": "",
-                "url": api_url,          # ← 原样，不做任何加工
+                "url": real_url,
                 "header": {
                     # 照 cURL 事实：只用真实 UA，不加 Referer，不加 Origin
                     "User-Agent": PLAYER_UA,
                 },
             }
-            self.log("  => 播放地址: %s" % api_url[:200])
+            self.log("  => 最终播放地址: %s" % real_url[:200])
+        elif api_url:
+            # RC4 解密失败时，退回原来的 player_aaaa.url（保底）
+            res = {
+                "parse": 0,
+                "playUrl": "",
+                "url": api_url,
+                "header": {
+                    "User-Agent": PLAYER_UA,
+                },
+            }
+            self.log("  => RC4 解密失败，退回 player_aaaa.url: %s" % api_url[:200])
         else:
             res = {
                 "parse": 1,
