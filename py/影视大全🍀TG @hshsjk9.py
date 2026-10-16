@@ -178,38 +178,71 @@ _F_SORT = [("time", "按最新"), ("hits", "按最热"), ("score", "按评分")]
 
 
 def _mk_filters(tid):
-    """生成指定分类的 TVBox filters（key 与 extend 参数一一对应）。"""
-    cfg = _CAT_FILTERS.get(str(tid), {})
-    f = {}
+    """生成指定分类的 TVBox filters。
 
-    # 地区（短剧无此项，不生成 key）
+    ★ TVBox 规范要求：filters 里每个分类的值必须是【列表】，
+      列表元素为 {"key":..., "name":..., "value":[{n,v},...]}。
+      之前返回字典会导致筛选菜单完全不渲染。
+    """
+    cfg = _CAT_FILTERS.get(str(tid), {})
+    flist = []
+
+    # 地区（短剧无此项）
     if cfg.get("area"):
-        f["area"] = [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in cfg["area"]]
+        flist.append({
+            "key": "area",
+            "name": "地区",
+            "value": [{"n": "全部", "v": ""}] +
+                     [{"n": x, "v": x} for x in cfg["area"]],
+        })
 
     # 类型
     if cfg.get("class"):
-        f["class"] = [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in cfg["class"]]
+        flist.append({
+            "key": "class",
+            "name": "类型",
+            "value": [{"n": "全部", "v": ""}] +
+                     [{"n": x, "v": x} for x in cfg["class"]],
+        })
 
     # 年份（按分类实际范围，倒序）
     y_max, y_min = cfg.get("year", (2026, 2000))
-    f["year"] = [{"n": "全部", "v": ""}] + [
-        {"n": str(y), "v": str(y)} for y in range(y_max, y_min - 1, -1)
-    ]
+    flist.append({
+        "key": "year",
+        "name": "年份",
+        "value": [{"n": "全部", "v": ""}] +
+                 [{"n": str(y), "v": str(y)}
+                  for y in range(y_max, y_min - 1, -1)],
+    })
 
-    # 语言（短剧无此项，不生成 key）
+    # 语言（短剧无此项）
     if cfg.get("lang"):
-        f["lang"] = [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in cfg["lang"]]
+        flist.append({
+            "key": "lang",
+            "name": "语言",
+            "value": [{"n": "全部", "v": ""}] +
+                     [{"n": x, "v": x} for x in cfg["lang"]],
+        })
 
     # 字母（全部页面一致）
-    f["letter"] = [{"n": "不限", "v": ""}] + [{"n": x, "v": x} for x in _F_LETTER]
+    flist.append({
+        "key": "letter",
+        "name": "字母",
+        "value": [{"n": "不限", "v": ""}] +
+                 [{"n": x, "v": x} for x in _F_LETTER],
+    })
 
     # 排序（全部页面一致）
-    f["by"] = [{"n": n, "v": v} for v, n in _F_SORT]
+    flist.append({
+        "key": "by",
+        "name": "排序",
+        "value": [{"n": n, "v": v} for v, n in _F_SORT],
+    })
 
-    return f
+    return flist
 
 
-# 每个分类一套独立的筛选列表（结构 {"key": [ {n,v}, ... ]}）
+# 每个分类一套独立的筛选列表（结构 {"tid": [ {key,name,value}, ... ]}）
 FILTERS = {c["type_id"]: _mk_filters(c["type_id"]) for c in CLASSES}
 
 
