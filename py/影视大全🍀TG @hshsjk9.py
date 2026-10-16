@@ -4,18 +4,12 @@
 
 严格依据网页真实源码写：
   1. 播放页源码里 var player_aaaa = {...}
-  2. 其中 "url" 字段是播放地址的入口（网页里 <from>.js 把它直接塞给 iframe，
-     iframe 里 JXplayer.js 再把它直接赋给 video.src，交给 Hls.js）
-  3. 不同线路（sid 不同）对应不同的 from、不同的 url 域名：
-        sid=5  from=xiguam3u8   url=svip.xgplay17.com（实测 302 → vip17.jimxtc.com）
-        sid=4  from=dyttm3u8    url=vip.dytt-tvs.com（未实测，可能是直链也可能 302）
-     所以不能针对任何单一线路写死；正确做法是"通用探测"：
-       拿到 player_aaaa.url 后请求一次，按返回决定返回哪个 URL 给播放器。
-  4. 通用探测规则：
-       - Content-Type 含 mpegurl        → 返回最终 URL（已跟完 302）
-       - body 以 #EXTM3U 开头            → 返回最终 URL
-       - 是 302 页面且最终 URL 变了        → 返回最终 URL
-       - 识别不了                        → 原样返回，让播放器自己处理
+  2. 其中 "url" 字段就是最终播放地址：
+       网页里 xiguam3u8.js / dyttm3u8.js 把它直接塞给 iframe 的
+       analysis.php?v=<url>，iframe 里 JXplayer.js 再把它直接赋给
+       video.src，交给 Hls.js。
+  3. 网页端全程不做任何 302 跟随、域名替换、加密——原样使用 url。
+  4. 所以 Python 端也照做：原样把 player_aaaa.url 交给播放器。
 """
 import re
 import sys
@@ -436,63 +430,12 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # -------- 播放：通用探测（不针对任何单一线路）--------
-    def _probe_play_url(self, url, referer=""):
-        """
-        对 player_aaaa.url 做一次轻量探测，返回"最终应该交给播放器的 URL"。
-
-        探测规则（按优先级）：
-          1) Content-Type 含 mpegurl                  → 返回最终 URL
-          2) body 以 #EXTM3U 开头                      → 返回最终 URL
-          3) 是 302 页面且最终 URL 变了                 → 返回最终 URL
-          4) 以上都不满足                               → 原样返回
-
-        不修改 m3u8 内容、不拼接子地址。只是确认"给播放器哪条 URL 最靠谱"。
-        """
-        if not url or not url.startswith("http"):
-            return url
-
-        probe_headers = {
-            "User-Agent": UA,
-            "Accept": "*/*",
-            "Referer": referer or (self.site_url + "/"),
-        }
-        try:
-            rsp = self._fetch(url, timeout=10, headers=probe_headers)
-        except Exception as e:
-            self.log("  probe 失败: %s" % e)
-            return url
-        if rsp is None:
-            return url
-
-        ctype = (rsp.headers.get("Content-Type") or "").lower()
-        final_url = getattr(rsp, "url", "") or url
-
-        # 1) Content-Type 直接告诉我们是 m3u8
-        if "mpegurl" in ctype or "vnd.apple.mpegurl" in ctype:
-            self.log("  probe: m3u8 (ctype=%s) -> %s" % (ctype, final_url[:180]))
-            return final_url
-
-        # 2) body 以 #EXTM3U 开头（有些源 Content-Type 不对）
-        body_head = ""
-        try:
-            if hasattr(rsp, "text") and rsp.text:
-                body_head = rsp.text[:64].lstrip()
-        except Exception:
-            pass
-        if body_head.startswith("#EXTM3U"):
-            self.log("  probe: m3u8 (#EXTM3U) -> %s" % final_url[:180])
-            return final_url
-
-        # 3) 是 302 页面且已跟到新 URL
-        if final_url and final_url != url:
-            self.log("  probe: 302 跳转 %s -> %s" % (url[:100], final_url[:180]))
-            return final_url
-
-        # 4) 识别不了，原样返回，交给播放器自己处理
-        self.log("  probe: 未识别 (ctype=%s)，原样返回" % ctype)
-        return url
-
+    # -------- 播放：严格照网页源码，原样返回 player_aaaa.url --------
+    # 网页里 xiguam3u8.js / dyttm3u8.js 把 player_aaaa.url 直接塞给
+    # iframe 的 analysis.php?v=<url>，iframe 里 JXplayer.js 再把它
+    # 直接赋给 video.src 交给 Hls.js。
+    # 全程没有 302 跟随、没有域名替换、没有加密。
+    # 所以 Python 端也照做：原样返回 player_aaaa.url。
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -502,31 +445,28 @@ class Spider(Spider):
 
         html = self._fetch_text(play_page)
         api_url = ""
-        from_name = ""
         if html:
             m = _RE_PLAYER.search(html)
             if m:
                 try:
                     data = json.loads(m.group(1))
                     api_url = (data.get("url") or "").replace("\\/", "/").replace("&amp;", "&")
-                    from_name = data.get("from") or ""
-                    self.log("  player_aaaa.from=%s url=%s" % (from_name, api_url[:180]))
+                    self.log("  player_aaaa.from=%s" % data.get("from"))
+                    self.log("  player_aaaa.url=%s" % api_url[:200])
                 except Exception as e:
                     self.log("  player_aaaa 解析失败: %s" % e)
 
         if api_url:
-            # 通用探测：不管是 xiguam3u8/dyttm3u8/1080zyk/... 都走同一逻辑
-            final_url = self._probe_play_url(api_url, referer=play_page)
             res = {
                 "parse": 0,
                 "playUrl": "",
-                "url": final_url,
+                "url": api_url,          # ← 原样，不做任何加工
                 "header": {
                     "User-Agent": UA,
-                    "Referer": play_page,
+                    "Referer": play_page,   # ← 就是当前播放页
                 },
             }
-            self.log("  => 最终播放地址: %s" % final_url[:180])
+            self.log("  => 播放地址: %s" % api_url[:200])
         else:
             res = {
                 "parse": 1,
