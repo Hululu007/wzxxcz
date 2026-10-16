@@ -63,10 +63,6 @@ HOST = "https://www.iysdq1.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
-# 播放器 m3u8 请求真实 UA（F12 抓包 cURL 抄来）
-PLAYER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-             "(KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0")
-
 DEFAULT_PIC = HOST + "/template/shoutu45/assets/images/img-bj-k.png"
 
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
@@ -436,12 +432,7 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # -------- 播放：直接返回 player_aaaa.url，header 只带真实 UA --------
-    # 严格按照网页源码：
-    #   1. player_aaaa.url = 网页最终播放的地址（Console 已实测）
-    #   2. MacPlayer.Init() 里 encrypt=0，原样使用
-    #   3. 浏览器地址栏直接打开这条 url 就能播
-    #   4. F12 抓包 m3u8 请求头：只有 UA
+    # -------- 播放：直接返回 player_aaaa.url，header 用站点 UA --------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -463,12 +454,11 @@ class Spider(Spider):
                     self.log("  player_aaaa 解析失败: %s" % e)
 
         if api_url:
-            # 只返回 TVBox 绝对认的字段，去掉 playUrl
             res = {
                 "parse": 0,
                 "url": api_url,
                 "header": {
-                    "User-Agent": PLAYER_UA,
+                    "User-Agent": UA,
                 },
             }
             self.log("  => 播放地址: %s" % api_url[:200])
