@@ -2,58 +2,18 @@
 """
 影视大全 iysdq1.com | TVBox Python 爬虫
 
-严格依据网页真实源码写：
+事实链（全部来自你实测）：
+  1. 播放页 var player_aaaa.url = https://vip.dytt-tvs.com/.../index.m3u8
+  2. player.js 里 MacPlayer.Init()，encrypt=0，原样使用 a.url
+  3. <from>.js 生成 iframe 时，PlayUrl = 该 url
+  4. 你 Console 实测：rc4(config.url, '202306051426239465', 1) = 同一条 url
+  5. F12 抓 m3u8 请求头：只有 UA，Referer 为空，无 Origin
 
-  1. 播放页源码里 var player_aaaa = {...}
-     - "url" 是"入口地址"（各条线路自己的 m3u8 域名）
-     - "from" 是线路 id（如 dyttm3u8 / xiguam3u8）
-     - "link_next" 是下一集的播放页路径
-
-  2. player.js -> MacPlayer.Init() -> MacPlayer.Play()
-     document.write('<script src="/static/player/<from>.js">')
-     然后由 /static/player/<from>.js 生成 iframe。
-
-  3. <from>.js 里的真实源码（你贴的）：
-       MacPlayer.Html = '<iframe border="0" src="https://p.iysdq.com/player/?url='
-           + MacPlayer.PlayUrl
-           + '&next=' + (window.location.protocol + '//' + window.location.host + MacPlayer.PlayLinkNext)
-           + '&tittle=' + document.title.split("-")[0]
-           + '" ...></iframe>';
-       MacPlayer.Show();
-     所以真正加载的页面是：
-       https://p.iysdq.com/player/?url=<player_aaaa.url>&next=<宿主+link_next>&tittle=<标题>
-
-  4. player 页返回的 HTML 里 config 是这样：
-       var config = {
-           "api": "/dmku/",
-           "url": "cmtYPPmuW+sEJGAi8UkSOgkcAgG9yC4/XZzqaldDzJZwHS8gxuOezNMuxKJnKUVVWCTXR0H+pq3fIJTPeRyLRBmS+J+yFUDwE34=",
-           "id":"b6ef8037ca943f4b1d60",
-           ...
-       }
-     其中 config.url 是 Base64 密文，不是明文 m3u8。
-
-  5. player 页里的 YKQ.start() 里这一行才是真正播放：
-       YKQ.play(rc4(config.url, '202306051426239465', 1));
-     rc4 函数的实现（定义在 YKQ 源码最末）：
-       - t == 1 时：data = atob(data)  （即先 Base64 解码）
-       - 标准 RC4 解密（密钥 '202306051426239465'）
-       - 返回 decodeURIComponent(cipher)
-
-  6. 所以 Python 端要做的、也是唯一正确的做法：
-       a) 从播放页拿 player_aaaa.url、player_aaaa.link_next
-       b) 照 MacPlayer.Html 拼接：
-            https://p.iysdq.com/player/?url=<url>&next=<宿主+link_next>&tittle=<标题>
-       c) 请求这个 player 页
-       d) 从返回 HTML 里正则抓出 config 的 "url":"..."
-       e) 对抓到的密文执行 atob → RC4(key='202306051426239465') → urldecode
-       f) 得到的才是真实 m3u8 地址，返回给播放器
-
-  7. 返回 header：照 m3u8 真实请求（F12 cURL）只有真实 UA，无 Referer、无 Origin。
+结论：Python 端直接把 player_aaaa.url 返回给播放器，header 只带 UA。
 """
 import re
 import sys
 import json
-import base64
 import urllib.parse
 
 sys.path.append('..')
@@ -102,15 +62,9 @@ HOST = "https://www.iysdq1.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
-# 播放器真实 UA（从 F12 抓 m3u8 请求的 cURL 抄来）
+# 播放器 m3u8 请求真实 UA（F12 抓包 cURL 抄来）
 PLAYER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
              "(KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0")
-
-# ★ player 页的真正入口（来自 <from>.js 里 MacPlayer.Html 的 src）
-PLAYER_BASE = "https://p.iysdq.com/player/"
-
-# RC4 密钥（来自 YKQ 源码：YKQ.play(rc4(config.url,'202306051426239465',1)))
-RC4_KEY = "202306051426239465"
 
 DEFAULT_PIC = HOST + "/template/shoutu45/assets/images/img-bj-k.png"
 
@@ -220,9 +174,6 @@ _RE_TOTAL = re.compile(r"\$\('\.hl-total'\)\.html\('(\d+)'\)", re.I)
 # 播放页源码里的 player_aaaa：var player_aaaa={...}</script>
 _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>', re.I)
 
-# player 页返回的 HTML 里的 config.url（加密串，纯 Base64 字符）
-_RE_CONFIG_URL = re.compile(r'"url"\s*:\s*"([A-Za-z0-9+/=]+)"', re.I)
-
 
 class Spider(Spider):
 
@@ -289,100 +240,6 @@ class Spider(Spider):
         s = re.sub(r"[ \t\r\f\v]+", " ", s)
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
-
-    # ============== RC4 解密（严格照 YKQ 源码里的 rc4(data,key,1) 复刻）==============
-    # YKQ 源码：
-    #   function rc4(data, key, t) {
-    #       var pwd = key || 'bigon';
-    #       if (t == 1) { var data = atob(data); }
-    #       var data_length = data.length;
-    #       for (i = 0; i < 256; i++) {
-    #           key[i] = pwd[i % pwd_length].charCodeAt();
-    #           box[i] = i;
-    #       }
-    #       for (j = i = 0; i < 256; i++) {
-    #           j = (j + box[i] + key[i]) % 256;
-    #           swap(box[i], box[j]);
-    #       }
-    #       for (a = j = i = 0; i < data_length; i++) {
-    #           a = (a + 1) % 256;
-    #           j = (j + box[a]) % 256;
-    #           swap(box[a], box[j]);
-    #           k = box[((box[a] + box[j]) % 256)];
-    #           cipher += chr(data.charCodeAt(i) ^ k);
-    #       }
-    #       if (t == 1) return decodeURIComponent(cipher);
-    #       else return btoa(cipher);
-    #   }
-    def _rc4_decrypt(self, cipher_b64, key=RC4_KEY):
-        """
-        输入：Base64 编码的密文串（player 页里 config.url 的值）
-        输出：RC4 解密 + URL 解码后的明文字符串（真正的 m3u8 地址）
-        """
-        raw = base64.b64decode(cipher_b64)
-
-        pwd_bytes = key.encode("utf-8")
-        box = list(range(256))
-        k = [pwd_bytes[i % len(pwd_bytes)] for i in range(256)]
-        j = 0
-        for i in range(256):
-            j = (j + box[i] + k[i]) % 256
-            box[i], box[j] = box[j], box[i]
-
-        out = bytearray()
-        a = 0
-        j = 0
-        for i in range(len(raw)):
-            a = (a + 1) % 256
-            j = (j + box[a]) % 256
-            box[a], box[j] = box[j], box[a]
-            kk = box[(box[a] + box[j]) % 256]
-            out.append(raw[i] ^ kk)
-
-        # decodeURIComponent(cipher)
-        # 用 latin-1（每个字节对应一个字符）再 unquote，
-        # 因为 JS 里 String.fromCharCode 是逐字节的，不是按 UTF-8 解。
-        s = out.decode("latin-1", "ignore")
-        return urllib.parse.unquote(s)
-
-    # ============== 走 player 页拿到真实 m3u8 ==============
-    def _get_real_m3u8(self, player_page_url):
-        """
-        输入：<from>.js 里 MacPlayer.Html 生成的 iframe src 完整 URL
-              https://p.iysdq.com/player/?url=<player_aaaa.url>&next=<宿主+link_next>&tittle=<标题>
-        过程：
-          1. 直接请求这个 player 页
-          2. 从返回 HTML 里抓 config.url（Base64 密文）
-          3. RC4 解密得到真实 m3u8
-        返回：真实 m3u8 地址，失败返回空串
-        """
-        if not player_page_url:
-            return ""
-        try:
-            self.log("  player page: %s" % player_page_url[:200])
-
-            ana_html = self._fetch_text(player_page_url, headers={
-                "User-Agent": PLAYER_UA,
-                "Referer": "https://p.iysdq.com/player/",
-            })
-            if not ana_html:
-                self.log("  player 页返回为空")
-                return ""
-
-            m = _RE_CONFIG_URL.search(ana_html)
-            if not m:
-                self.log("  player 页里没找到 config.url")
-                return ""
-
-            cipher = m.group(1)
-            self.log("  config.url(密文前 80): %s" % cipher[:80])
-
-            real = self._rc4_decrypt(cipher, RC4_KEY)
-            self.log("  RC4 解密后: %s" % real[:200])
-            return real
-        except Exception as e:
-            self.log("  _get_real_m3u8 异常: %s" % e)
-            return ""
 
     def _extract_videos(self, html):
         videos = []
@@ -578,20 +435,7 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # -------- 播放：严格照 <from>.js 里的 MacPlayer.Html 拼接 --------
-    # 网页真实路径：
-    #   1. player_aaaa.url、player_aaaa.link_next
-    #   2. <from>.js 里：
-    #        MacPlayer.Html = '<iframe src="https://p.iysdq.com/player/?url='
-    #            + MacPlayer.PlayUrl
-    #            + '&next=' + (window.location.protocol + '//' + window.location.host + MacPlayer.PlayLinkNext)
-    #            + '&tittle=' + document.title.split("-")[0] + '">';
-    #      → 拼接得到 player 页 URL
-    #   3. 请求这个 player 页
-    #   4. 从 HTML 抓 config.url（密文）
-    #   5. rc4(config.url, '202306051426239465', 1)
-    #      = atob → RC4 → decodeURIComponent
-    #   6. 得到真正的 m3u8 地址
+    # -------- 播放：直接返回 player_aaaa.url，header 只带真实 UA --------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -601,53 +445,18 @@ class Spider(Spider):
 
         html = self._fetch_text(play_page)
         api_url = ""
-        link_next = ""
         if html:
             m = _RE_PLAYER.search(html)
             if m:
                 try:
                     data = json.loads(m.group(1))
                     api_url = (data.get("url") or "").replace("\\/", "/").replace("&amp;", "&")
-                    link_next = data.get("link_next") or ""
                     self.log("  player_aaaa.from=%s" % data.get("from"))
                     self.log("  player_aaaa.url=%s" % api_url[:200])
-                    self.log("  player_aaaa.link_next=%s" % link_next)
                 except Exception as e:
                     self.log("  player_aaaa 解析失败: %s" % e)
 
-        real_url = ""
         if api_url:
-            # ★ 严格照 MacPlayer.Html 拼接 player 页 URL
-            # 网页里 next = window.location.protocol + '//' + window.location.host + MacPlayer.PlayLinkNext
-            # 即宿主 + link_next。link_next 形如 "/vodplay/177265-4-2.html"
-            next_full = self.site_url + link_next if link_next else ""
-            # tittle = document.title.split("-")[0]，取播放页标题主名
-            tittle = self._clean((_RE_TITLE.search(html).group(1)
-                                  if html and _RE_TITLE.search(html) else "")) or "video"
-
-            # 照网页一行一行拼：src="https://p.iysdq.com/player/?url=<PlayUrl>&next=<next_full>&tittle=<tittle>"
-            # 注意：网页里是直接字符串拼接，url 参数没有 urlencode，
-            # 这里为了保险起见，只对 tittle 做 urlencode（网页里 split("-")[0] 通常不含特殊字符）。
-            player_page_url = (
-                PLAYER_BASE + "?url=" + api_url
-                + "&next=" + next_full
-                + "&tittle=" + urllib.parse.quote(tittle, safe="")
-            )
-
-            real_url = self._get_real_m3u8(player_page_url)
-
-        if real_url:
-            res = {
-                "parse": 0,
-                "playUrl": "",
-                "url": real_url,
-                "header": {
-                    # 照 cURL 事实：只用真实 UA，不加 Referer，不加 Origin
-                    "User-Agent": PLAYER_UA,
-                },
-            }
-            self.log("  => 最终播放地址: %s" % real_url[:200])
-        elif api_url:
             res = {
                 "parse": 0,
                 "playUrl": "",
@@ -656,7 +465,7 @@ class Spider(Spider):
                     "User-Agent": PLAYER_UA,
                 },
             }
-            self.log("  => RC4 解密失败，退回 player_aaaa.url: %s" % api_url[:200])
+            self.log("  => 播放地址: %s" % api_url[:200])
         else:
             res = {
                 "parse": 1,
