@@ -7,8 +7,8 @@
   - 详情页线路 tab 用 data-form 标识，与 anthology-list-box 按序对应
   - 剧集 URL：/vodplay/{id}-{sid}-{nid}.html
   - 播放：player_aaaa.url = https://svip.xgplay17.com/{path}/index.m3u8
-          真实可播 CDN  = https://vip17.jimxtc.com/{path}/index.m3u8
-          （{path} 完全相同，已用浏览器验证 vip17 可直播）
+          这条会 302 到 https://vipXX.jimxtc.com/{path}/index.m3u8（XX 动态）
+          所以必须真的去请求一次，跟随 302 拿最终地址返回给播放器
 """
 import re
 import sys
@@ -450,7 +450,7 @@ class Spider(Spider):
 
         real_url = ""
         if api_url:
-            real_url = self._get_playable_url(api_url, referer=play_page)
+            real_url = self._resolve_redirect(api_url, referer=play_page)
 
         if real_url:
             res = {
@@ -477,75 +477,33 @@ class Spider(Spider):
         self._play_cache[play_page] = res
         return res
 
-    def _get_playable_url(self, api_url, referer=None):
+    def _resolve_redirect(self, url, referer=None):
         """
-        已知事实（来自 F12 + 浏览器验证）：
+        发请求跟随 302，返回最终 URL。
+        真实链路（来自播放页源码 + F12）：
           player_aaaa.url = https://svip.xgplay17.com/{path}/index.m3u8
-          真实可播直链     = https://vip17.jimxtc.com/{path}/index.m3u8
-          {path} 完全相同，vip17.jimxtc.com 在浏览器里可直接播放。
-        策略：
-          1) 试 302 Location
-          2) 换域名到 vip17.jimxtc.com，实际请求确认响应含 #EXTM3U
-          3) 都失败则返回原 url
+          请求它 → 302 到 https://vipXX.jimxtc.com/{path}/index.m3u8（XX 动态）
+          最终地址浏览器可直接播放。
+        所以必须真请求一次，让 requests 自己跟随 302，拿 rsp.url。
         """
-        headers = {"User-Agent": UA, "Accept": "*/*"}
+        headers = {
+            "User-Agent": UA,
+            "Accept": "*/*",
+        }
         if referer:
             headers["Referer"] = referer
 
-        # 路径1：请求原 url，看能否拿 Location
-        loc = ""
         try:
-            rsp = self.fetch(api_url, headers=headers, timeout=15,
-                             allow_redirects=False)
-            if hasattr(rsp, "headers"):
-                loc = rsp.headers.get("Location", "") or rsp.headers.get("location", "")
-        except TypeError:
-            try:
-                rsp = self.fetch(api_url, headers=headers, timeout=15)
-                final = getattr(rsp, "url", "") or ""
-                if final and final != api_url:
-                    self.log("  fetch 跟随跳转最终: %s" % final[:180])
-                    return final
-            except Exception as e:
-                self.log("  请求 api_url 失败: %s" % e)
+            rsp = self.fetch(url, headers=headers, timeout=15)
+            final = getattr(rsp, "url", "") or ""
+            if final and final != url:
+                self.log("  302 跟随: -> %s" % final[:180])
+                return final
+            self.log("  无跳转, 返回原 url: %s" % url[:180])
+            return url
         except Exception as e:
-            self.log("  请求 api_url 失败: %s" % e)
-
-        if loc:
-            if loc.startswith("//"):
-                loc = "https:" + loc
-            loc = loc.replace("&amp;", "&")
-            self.log("  302 Location: %s" % loc[:180])
-            return loc
-
-        # 路径2：域名替换到 vip17.jimxtc.com，实际请求校验 #EXTM3U
-        try:
-            parsed = urllib.parse.urlparse(api_url)
-            path = parsed.path
-            if parsed.query:
-                path += "?" + parsed.query
-            candidate = "https://vip17.jimxtc.com%s" % path
-            self.log("  尝试直连 CDN: %s" % candidate[:180])
-            try:
-                rsp2 = self.fetch(candidate, headers=headers, timeout=10)
-                text = ""
-                if hasattr(rsp2, "text"):
-                    text = rsp2.text or ""
-                if not text and hasattr(rsp2, "content"):
-                    text = rsp2.content.decode("utf-8", "ignore")
-                if "#EXTM3U" in text:
-                    self.log("  ✓ CDN 返回 #EXTM3U")
-                    return candidate
-                else:
-                    self.log("  ✗ CDN 无 #EXTM3U")
-            except Exception as e:
-                self.log("  ✗ 校验 CDN 失败: %s" % e)
-        except Exception as e:
-            self.log("  域名替换失败: %s" % e)
-
-        # 路径3：兜底
-        self.log("  兜底返回原 api_url")
-        return api_url
+            self.log("  请求失败: %s" % e)
+            return url
 
     def localProxy(self, param):
         try:
