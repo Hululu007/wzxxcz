@@ -170,6 +170,8 @@ _RE_INTRO = re.compile(
 # 元信息（均按真实标签后紧跟内容的模式）
 _RE_YEAR = re.compile(r'年份：</span>\s*(\d{4})')
 _RE_AREA = re.compile(r'国家：</span>\s*([^<\s]+)')
+# 类型: <p class="data"><span class="data2">类型：</span><a href="/show/12-----------.html">国产剧</a></p>
+_RE_CLASS = re.compile(r'类型：</span>\s*<a[^>]*>([^<]+)</a>')
 _RE_DIRECTOR = re.compile(r'导演：</span>([\s\S]*?)</p>')
 _RE_ACTOR = re.compile(r'主演：</span>([\s\S]*?)</p>')
 
@@ -462,6 +464,15 @@ class Spider(Spider):
         except Exception:
             pass
 
+        # 类型: 国产剧
+        class_val = ""
+        try:
+            m = _RE_CLASS.search(html)
+            if m:
+                class_val = self._clean(m.group(1))
+        except Exception:
+            pass
+
         director = ""
         try:
             m = _RE_DIRECTOR.search(html)
@@ -518,6 +529,7 @@ class Spider(Spider):
             "vod_director": director,
             "vod_year": year,
             "vod_area": area_val,
+            "vod_class": class_val,
             "vod_remarks": "%d条线路" % len(groups),
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url":  "$$$".join(play_url),
