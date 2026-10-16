@@ -9,11 +9,12 @@
        analysis.php?v=<url>，iframe 里 JXplayer.js 再把它直接赋给
        video.src，交给 Hls.js。
   3. 网页端全程不做任何 302 跟随、域名替换、加密——原样使用 url。
-  4. 播放器真实请求头（F12 抓 cURL 得到）：
-       - 有 Origin: https://p.iysdq.com
-       - 有 User-Agent: Chrome/155 Edg/155
-       - 没有 Referer（iframe 带 <meta name="referrer" content="no-referrer">）
-     所以 Python 端返回的 header 也照抄这三条事实：带 Origin、用真实 UA、不加 Referer。
+  4. 播放器真实请求头（F12 抓 m3u8 请求的 cURL 得到）：
+       - 有 User-Agent: Mozilla/5.0 ... Chrome/155 ... Edg/155
+       - 有 Referer（空值），等价于"不发 Referer"
+       - 没有 Origin
+     所以 Python 端返回的 header 也照抄这三条事实：只用真实 UA，
+     不加 Referer，不加 Origin。
 """
 import re
 import sys
@@ -66,12 +67,9 @@ HOST = "https://www.iysdq1.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
-# 播放器真实 UA（从 F12 抓包 cURL 抄来，跟上面爬页面用的 UA 不同）
+# 播放器真实 UA（从 F12 抓 m3u8 请求的 cURL 抄来）
 PLAYER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
              "(KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0")
-
-# 播放器真实 Origin（从 cURL 抄来）
-PLAYER_ORIGIN = "https://p.iysdq.com"
 
 DEFAULT_PIC = HOST + "/template/shoutu45/assets/images/img-bj-k.png"
 
@@ -442,13 +440,13 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # -------- 播放：照网页真实请求头写（F12 抓包事实）--------
+    # -------- 播放：照网页真实请求头写（F12 抓 m3u8 的 cURL 事实）--------
     # 网页里 xiguam3u8.js / dyttm3u8.js 把 player_aaaa.url 原样塞给 iframe
     # 的 analysis.php?v=<url>，JXplayer.js 再把它原样赋给 video.src。
     # 播放器真实请求头（cURL 事实）：
-    #   Origin: https://p.iysdq.com
     #   User-Agent: Mozilla/5.0 ... Chrome/155 ... Edg/155
-    #   没有 Referer（iframe 带 <meta name="referrer" content="no-referrer">）
+    #   Referer: 空值（等价于不发）
+    #   无 Origin
     # 所以 Python 返回的 header 也照抄这三条事实。
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
@@ -476,9 +474,8 @@ class Spider(Spider):
                 "playUrl": "",
                 "url": api_url,          # ← 原样，不做任何加工
                 "header": {
-                    # 照 cURL 事实：真实 UA + Origin，不加 Referer
+                    # 照 cURL 事实：只用真实 UA，不加 Referer，不加 Origin
                     "User-Agent": PLAYER_UA,
-                    "Origin": PLAYER_ORIGIN,
                 },
             }
             self.log("  => 播放地址: %s" % api_url[:200])
