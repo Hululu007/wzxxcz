@@ -460,7 +460,6 @@ class Spider(Spider):
 
         if api_url:
             res = {"url": api_url}
-            self.log("  => 播放地址: %s" % api_url[:200])
         else:
             res = {"url": ""}
 
