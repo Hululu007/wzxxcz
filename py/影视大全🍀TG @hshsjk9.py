@@ -10,8 +10,7 @@
   5. F12 抓 m3u8 请求头：只有 UA，Referer 为空，无 Origin
   6. 浏览器地址栏直接打开该 m3u8：能播
 
-结论：Python 端直接把 player_aaaa.url 交给 localProxy 代理拉取，
-      header 只带 UA，不带 Referer、不带 Origin（对齐网页真实请求头）。
+结论：Python 端直接把 player_aaaa.url 返回给播放器，跟 iysdq.tv 那份能播的写法一致。
 """
 import re
 import sys
@@ -435,13 +434,10 @@ class Spider(Spider):
 
     # -------- 播放 --------
     # 网页源码：
-    #   1. player_aaaa.url 是入口地址（如 https://vip.dytt-tvs.com/.../index.m3u8）
-    #   2. <from>.js 把它拼进 player 页的 iframe 里；<meta name="referrer" content="never">
-    #      导致 player 页里的 m3u8 请求 Referer 为空、无 Origin
-    #   3. F12 cURL：m3u8 请求只带 UA，Referer 空，无 Origin
-    # 为让 TVBox 播放器的请求头跟网页完全一致，走 localProxy：
-    #   playerContent 返回 proxy://do=py&url=<真实m3u8>
-    #   TVBox 把 m3u8 / ts 请求交给 localProxy，由 Python 去请求，header 完全由 Python 控制
+    #   1. player_aaaa.url 就是最终播放地址（Console 已实测）
+    #   2. MacPlayer.Init() encrypt=0，原样使用
+    #   3. 浏览器地址栏直接打开这条 url 就能播
+    # 返回：只 {"url": api_url}，跟能播的 iysdq.tv 那份一致
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -463,86 +459,16 @@ class Spider(Spider):
                     self.log("  player_aaaa 解析失败: %s" % e)
 
         if api_url:
-            proxy_url = "proxy://do=py&url=" + urllib.parse.quote(api_url, safe="")
-            res = {
-                "parse": 0,
-                "url": proxy_url,
-                "header": {
-                    "User-Agent": UA,
-                },
-            }
-            self.log("  => 代理地址: %s" % proxy_url[:200])
+            res = {"url": api_url}
+            self.log("  => 播放地址: %s" % api_url[:200])
         else:
-            res = {
-                "parse": 1,
-                "url": play_page,
-                "header": {"User-Agent": UA},
-            }
+            res = {"url": ""}
 
         self._play_cache[play_page] = res
         return res
 
-    # -------- localProxy --------
-    # 照网页真实请求头：只带 UA，不带 Referer，不带 Origin
-    # m3u8 与 ts 分片都通过这里代理
     def localProxy(self, param):
-        try:
-            url = ""
-            if isinstance(param, dict):
-                url = param.get("url", "")
-            else:
-                for pair in str(param).split("&"):
-                    if "=" in pair:
-                        k, v = pair.split("=", 1)
-                        if k == "url":
-                            url = v
-            if not url:
-                return [200, "text/plain", b"", ""]
-
-            url = urllib.parse.unquote(url) if "%" in url else url
-
-            # m3u8 内相对路径的兼容：以 url 自身为基准拼接
-            if not url.startswith("http"):
-                url = urllib.parse.urljoin(self.site_url + "/", url)
-
-            rsp = self.fetch(url, headers={
-                # 严格照 F12 cURL：只带 UA
-                "User-Agent": UA,
-                "Accept": "*/*",
-            }, timeout=15)
-
-            content = rsp.content
-            ctype = rsp.headers.get("Content-Type", "application/octet-stream")
-
-            # m3u8 里出现相对 ts 分片路径时，需要重写成本地代理地址
-            # 判定：内容里出现 #EXTM3U，或 ctype 含 mpegurl
-            if ("mpegurl" in ctype.lower()
-                    or content[:7] == b"#EXTM3U"
-                    or content[:6] == b"#EXT-X"):
-                try:
-                    text = content.decode("utf-8", "ignore")
-                except Exception:
-                    return [200, ctype, content, ""]
-
-                base_url = url
-                new_lines = []
-                for line in text.splitlines():
-                    s = line.strip()
-                    if s and not s.startswith("#"):
-                        # 分片或子 m3u8
-                        if s.startswith("http"):
-                            abs_url = s
-                        else:
-                            abs_url = urllib.parse.urljoin(base_url, s)
-                        s = "proxy://do=py&url=" + urllib.parse.quote(abs_url, safe="")
-                    new_lines.append(s)
-                new_text = "\n".join(new_lines)
-                return [200, "application/vnd.apple.mpegurl",
-                        new_text.encode("utf-8"), ""]
-
-            return [200, ctype, content, ""]
-        except Exception:
-            return [200, "text/plain", b"", ""]
+        pass
 
     def isVideoFormat(self, url):
         return ".m3u8" in url or ".mp4" in url
