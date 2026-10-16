@@ -1,12 +1,13 @@
 # coding=utf-8
 """
 影视大全 iysdq1.com | TVBox Python 爬虫
-严格依据网站真实源码编写：
-  - 播放地址直出 player_aaaa.url（m3u8 直链，无需解析）
+严格依据网站真实源码 + 真实 Network 抓包编写：
   - 详情页线路 tab 用 data-form 标识，与 anthology-list-box 按序对应
   - 剧集 URL：/vodplay/{id}-{sid}-{nid}.html
-  - 分类 URL 结构：/vodshow/{tid}-{area}-{sort}-{cls}-----{pg}---{year}.html
-    （逐字符核对过源码，area/sort/cls 空时用连续 '-' 占位，pg 第1页为空）
+  - 分类 URL：/vodshow/{tid}-{area}-{sort}-{cls}-----{pg}---{year}.html
+  - 播放：player_aaaa.url → 302 → vip17.jimxtc.com → master m3u8
+          → 解析 #EXT-X-STREAM-INF 得子 m3u8（3000k/hls/mixed.m3u8）
+  - 关键请求头：Origin: https://p.iysdq.com（不是 Referer）
 """
 import re
 import sys
@@ -60,6 +61,9 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 DEFAULT_PIC = HOST + "/template/shoutu45/assets/images/img-bj-k.png"
 
+# 从浏览器 F12 Network 抓包读到的真实 Origin（播放器所在域名）
+ORIGIN = "https://p.iysdq.com"
+
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
 CLASSES = [
@@ -70,7 +74,6 @@ CLASSES = [
     {"type_id": "5", "type_name": "短剧"},
 ]
 
-# 年份列表（源码里是 2026 往前到 2000）
 _YEARS = [{"n": "全部", "v": ""}] + \
          [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]
 
@@ -86,7 +89,6 @@ _AREAS = [
     {"n": "泰国", "v": "泰国"}, {"n": "其它", "v": "其它"},
 ]
 
-# 排序：源码 tab 里是 time / hits / score，默认（最新）为空
 _SORTS = [
     {"n": "最新", "v": ""},
     {"n": "最热", "v": "hits"},
@@ -129,58 +131,42 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
-# 卡片：首页/分类/搜索通用
-# <a class="public-list-exp" href="/voddetail/177675.html" title="山妖怪谈">
-#   <img ... data-src="..." ...>
-#   <span class="public-list-prb hide ft2">全12集</span>
 _RE_CARD = re.compile(
     r'<a[^>]*class="public-list-exp"[^>]*href="(/voddetail/\d+\.html)"[^>]*title="([^"]*)"'
     r'[\s\S]{0,400}?<img[^>]*?data-src="([^"]*)"'
     r'[\s\S]{0,400}?<span class="public-list-prb[^"]*">([^<]*)</span>',
     re.S | re.I)
 
-# 详情页标题
 _RE_TITLE = re.compile(r'<div class="this-desc-title">([^<]*)</div>', re.I)
-# 详情页封面（背景图）
 _RE_PIC_BJ = re.compile(
     r'<div class="this-pic-bj"\s+style="background-image:\s*url\(\'([^\']+)\'\)', re.I)
-# 详情页简介：<div id="height_limit" class="text"><strong class="r6">描述:</strong>xxx</div>
 _RE_INTRO = re.compile(
     r'<div id="height_limit"[^>]*>\s*<strong[^>]*>描述:</strong>([\s\S]*?)</div>',
     re.S | re.I)
-# 详情页评分
 _RE_SCORE = re.compile(r'<div class="fraction">([\d.]+)</div>', re.I)
-# 详情页导演/演员
 _RE_DIRECTOR = re.compile(
     r'<div class="this-info"><strong class="r6">导演:</strong>([\s\S]*?)</div>', re.I)
 _RE_ACTOR = re.compile(
     r'<div class="this-info"><strong class="r6">演员:</strong>([\s\S]*?)</div>', re.I)
-# 详情页年份/地区/状态
 _RE_INFO = re.compile(
     r'<div class="this-desc-info">([\s\S]*?)</div>\s*<div class="this-desc-tags"', re.I)
 _RE_A_TAG = re.compile(r'<a[^>]*>([^<]+)</a>', re.I)
 
-# 详情页线路 tab：<a data-form="xxx" class="vod-playerUrl...">线路名<span class="badge">N</span></a>
 _RE_LINE_TAB = re.compile(
     r'<a\s+data-form="([^"]+)"[^>]*class="vod-playerUrl[^"]*"[^>]*>'
     r'[\s\S]*?&nbsp;([^<]+)<span class="badge">(\d+)</span>',
     re.S | re.I)
 
-# 详情页每个线路的剧集列表块
 _RE_ANTHOLOGY_BOX = re.compile(
     r'<div class=[\'"]anthology-list-box[^\'"]*[\'"]>([\s\S]*?)</ul></div></div>',
     re.S | re.I)
-# 单个剧集
 _RE_EPISODE = re.compile(
     r'<a class="hide"[^>]*href="(/vodplay/\d+-\d+-\d+\.html)"[^>]*>\s*<span>([^<]+)</span>',
     re.S | re.I)
 
-# 分页信息：<div class="rg10">2&nbsp;/&nbsp;16页</div>
 _RE_PAGE_INFO = re.compile(r'<div class="rg10">\s*(\d+)\s*&nbsp;/\s*&nbsp;(\d+)\s*页', re.I)
-# 总条数：$('.hl-total').html('626');
 _RE_TOTAL = re.compile(r"\$\('\.hl-total'\)\.html\('(\d+)'\)", re.I)
 
-# 播放页 player_aaaa
 _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>', re.I)
 
 
@@ -206,17 +192,31 @@ class Spider(Spider):
         self._play_cache = {}
         self.log("init: site=%s" % self.site_url)
 
-    def _fetch(self, url, timeout=15):
+    def _fetch(self, url, timeout=15, headers=None, allow_redirects=None):
         try:
-            rsp = self.fetch(url, headers=self.headers, timeout=timeout)
+            h = dict(self.headers)
+            if headers:
+                h.update(headers)
+            kwargs = {"timeout": timeout}
+            if allow_redirects is not None:
+                kwargs["allow_redirects"] = allow_redirects
+            rsp = self.fetch(url, headers=h, **kwargs)
             if hasattr(rsp, "text"):
-                return rsp.text or ""
-            if hasattr(rsp, "content"):
-                return rsp.content.decode("utf-8", "ignore")
-            return str(rsp)
+                return rsp
+            return rsp
         except Exception as e:
             self.log("fetch FAIL %s -> %s" % (url, e))
+            return None
+
+    def _fetch_text(self, url, timeout=15, headers=None):
+        rsp = self._fetch(url, timeout=timeout, headers=headers)
+        if rsp is None:
             return ""
+        if hasattr(rsp, "text"):
+            return rsp.text or ""
+        if hasattr(rsp, "content"):
+            return rsp.content.decode("utf-8", "ignore")
+        return str(rsp)
 
     def _fix_url(self, url):
         if not url:
@@ -276,7 +276,7 @@ class Spider(Spider):
         return {"class": CLASSES, "filters": FILTERS}
 
     def homeVideoContent(self):
-        html = self._fetch(self.site_url + "/")
+        html = self._fetch_text(self.site_url + "/")
         self.log("home HTML 长度: %d" % len(html))
         return {"list": self._extract_videos(html)}
 
@@ -293,21 +293,9 @@ class Spider(Spider):
         area = extend.get("area") or ""
         cls  = extend.get("class") or ""
         year = extend.get("year") or ""
-        sort = extend.get("sort") or ""   # time / hits / score，默认空
+        sort = extend.get("sort") or ""
 
-        # 真实 URL 结构（逐字符核对过源码）：
-        #   /vodshow/{tid}-{area}-{sort}-{cls}-----{pg}---{year}.html
-        # 验证：
-        #   area='' sort='' cls='国产剧' pg=2 year=2026
-        #     → /vodshow/2---国产剧-----2---2026.html          ✅
-        #   area='大陆' sort='' cls='国产剧' pg=2 year=2026
-        #     → /vodshow/2-大陆--国产剧-----2---2026.html       ✅
-        #   area='大陆' sort='' cls='' pg=1 year=2026
-        #     → /vodshow/2-大陆----------2026.html              ✅
-        #   area='大陆' sort='time' cls='国产剧' pg=1 year=2026
-        #     → /vodshow/2-大陆-time-国产剧--------2026.html    ✅
-        #   area='' sort='' cls='' pg=1 year=''
-        #     → /vodshow/2-----------.html                      ✅（源码"重置"）
+        # /vodshow/{tid}-{area}-{sort}-{cls}-----{pg}---{year}.html
         url = "%s/vodshow/%s-%s-%s-%s-----%s---%s.html" % (
             self.site_url, tid, area, sort, cls,
             str(page) if page > 1 else "",
@@ -315,7 +303,7 @@ class Spider(Spider):
         )
 
         self.log("category: %s" % url)
-        html = self._fetch(url)
+        html = self._fetch_text(url)
         self.log("  HTML 长度: %d" % len(html))
         videos = self._extract_videos(html)
         pagecount = self._page_count(html)
@@ -335,12 +323,10 @@ class Spider(Spider):
 
     def searchContent(self, key, quick, pg="1"):
         page = int(pg) if pg else 1
-        # 源码搜索表单 action="/vodsearch/-------------.html"，参数名 wd
-        # URL 形如 /vodsearch/-------------.html?wd=老舅
         keyword = urllib.parse.quote(key)
         url = "%s/vodsearch/-------------.html?wd=%s" % (self.site_url, keyword)
         self.log("search: %s" % url)
-        html = self._fetch(url)
+        html = self._fetch_text(url)
         self.log("  HTML 长度: %d" % len(html))
         videos = self._extract_videos(html)
         return {
@@ -358,12 +344,11 @@ class Spider(Spider):
         url = vod_id if vod_id.startswith("http") else self._fix_url(vod_id)
         self.log("detail: %s" % url)
 
-        html = self._fetch(url)
+        html = self._fetch_text(url)
         self.log("  HTML 长度: %d" % len(html))
         if not html:
             return {"list": []}
 
-        # 标题
         name = ""
         m = _RE_TITLE.search(html)
         if m:
@@ -374,13 +359,11 @@ class Spider(Spider):
                 name = self._clean(m.group(1).split("_")[0].split("-")[0])
         name = name or vod_id
 
-        # 封面
         pic = self.default_pic
         m = _RE_PIC_BJ.search(html)
         if m:
             pic = self._fix_url(m.group(1))
 
-        # 简介
         content = ""
         m = _RE_INTRO.search(html)
         if m:
@@ -391,42 +374,34 @@ class Spider(Spider):
                 content = self._clean(m.group(1))
         content = INTRO_PREFIX + ("\n" + content if content else "")
 
-        # 评分
         score = ""
         m = _RE_SCORE.search(html)
         if m:
             score = m.group(1)
 
-        # 导演
         director = ""
         m = _RE_DIRECTOR.search(html)
         if m:
             names = _RE_A_TAG.findall(m.group(1))
             director = ", ".join(n.strip() for n in names if n.strip())
 
-        # 演员
         actor = ""
         m = _RE_ACTOR.search(html)
         if m:
             names = _RE_A_TAG.findall(m.group(1))
             actor = ", ".join(n.strip() for n in names if n.strip())
 
-        # 年份/地区/状态
         year, area, status = "", "", ""
         m = _RE_INFO.search(html)
         if m:
             spans = re.findall(r"<span[^>]*>([^<]*)</span>", m.group(1))
-            # 结构：[评分span, 年份, 地区, 状态]
             if len(spans) >= 4:
                 year, area, status = spans[1], spans[2], spans[3]
 
-        # ===== 线路与剧集 =====
-        # 1) 收集线路 tab（data-form 与顺序）
-        line_forms = []  # [(data_form, 线路名)]
+        line_forms = []
         for m in _RE_LINE_TAB.finditer(html):
             line_forms.append((m.group(1), self._clean(m.group(2))))
 
-        # 2) 收集剧集块（按出现顺序与 tab 对应）
         boxes = _RE_ANTHOLOGY_BOX.findall(html)
         self.log("  线路 tab: %d, 剧集块: %d" % (len(line_forms), len(boxes)))
 
@@ -470,45 +445,135 @@ class Spider(Spider):
         if play_page in self._play_cache:
             return self._play_cache[play_page]
 
-        html = self._fetch(play_page)
-        real_url = ""
+        html = self._fetch_text(play_page)
+        api_url = ""
         from_flag = ""
         if html:
             m = _RE_PLAYER.search(html)
             if m:
                 try:
                     data = json.loads(m.group(1))
-                    real_url = data.get("url", "") or ""
+                    api_url = data.get("url", "") or ""
                     from_flag = data.get("from", "") or ""
-                    self.log("  player_aaaa: from=%s url=%s" % (from_flag, real_url[:120]))
+                    self.log("  player_aaaa: from=%s url=%s" % (from_flag, api_url[:150]))
                 except Exception as e:
                     self.log("  player_aaaa 解析失败: %s" % e)
 
+        real_url = ""
+        if api_url:
+            api_url = api_url.replace("\\/", "/").replace("&amp;", "&")
+            real_url = self._resolve_m3u8(api_url, referer=play_page)
+
         if real_url:
-            real_url = real_url.replace("\\/", "/").replace("&amp;", "&")
             res = {
                 "parse": 0,
                 "playUrl": "",
                 "url": real_url,
                 "header": {
                     "User-Agent": UA,
-                    "Referer": self.site_url + "/",
+                    "Origin": ORIGIN,
+                    "Referer": play_page,
                 },
             }
+            self.log("  => 播放地址: %s" % real_url[:180])
         else:
-            # 兜底
             res = {
                 "parse": 1,
                 "playUrl": "",
                 "url": play_page,
                 "header": {
                     "User-Agent": UA,
-                    "Referer": self.site_url + "/",
+                    "Origin": ORIGIN,
+                    "Referer": play_page,
                 },
             }
 
         self._play_cache[play_page] = res
         return res
+
+    def _resolve_m3u8(self, url, referer=None):
+        """
+        跟随 302 并把 master m3u8 解析为子 m3u8（可直接播放）
+        真实链路（来自 F12 Network 抓包）：
+          https://svip.xgplay17.com/.../index.m3u8
+            --302--> https://vip17.jimxtc.com/.../index.m3u8  (master)
+            --解析--> https://vip17.jimxtc.com/.../3000k/hls/mixed.m3u8
+        关键请求头：Origin = https://p.iysdq.com
+        """
+        req_headers = {
+            "User-Agent": UA,
+            "Origin": ORIGIN,
+            "Accept": "*/*",
+        }
+        if referer:
+            req_headers["Referer"] = referer
+
+        # 第一步：请求原地址，不跟随跳转，拿 302 Location
+        final_url = url
+        try:
+            rsp = self.fetch(url, headers=req_headers, timeout=15,
+                             allow_redirects=False)
+            loc = ""
+            if hasattr(rsp, "headers"):
+                loc = (rsp.headers.get("Location", "") or
+                       rsp.headers.get("location", ""))
+            if loc:
+                if loc.startswith("//"):
+                    loc = "https:" + loc
+                loc = loc.replace("&amp;", "&")
+                self.log("  302 -> %s" % loc[:180])
+                final_url = loc
+            else:
+                self.log("  无 302, 直接用原地址")
+        except TypeError:
+            # 某些 Spider.fetch 不支持 allow_redirects，就用默认（跟随跳转）
+            self.log("  fetch 不支持 allow_redirects，走默认跟随跳转")
+            try:
+                rsp = self.fetch(url, headers=req_headers, timeout=15)
+                if hasattr(rsp, "url") and rsp.url:
+                    final_url = rsp.url
+                    self.log("  跟随跳转后最终: %s" % final_url[:180])
+            except Exception as e:
+                self.log("  跟随跳转失败: %s" % e)
+        except Exception as e:
+            self.log("  请求 302 失败: %s" % e)
+
+        # 第二步：请求最终地址，读取 master m3u8
+        try:
+            rsp2 = self.fetch(final_url, headers=req_headers, timeout=15)
+            text2 = ""
+            if hasattr(rsp2, "text"):
+                text2 = rsp2.text or ""
+            if not text2 and hasattr(rsp2, "content"):
+                text2 = rsp2.content.decode("utf-8", "ignore")
+        except Exception as e:
+            self.log("  请求最终地址失败: %s" % e)
+            return final_url
+
+        if "#EXTM3U" not in text2:
+            self.log("  最终响应无 #EXTM3U, 直接返回 final_url")
+            return final_url
+
+        # 第三步：从 master 里挑子 m3u8
+        lines = [ln.strip() for ln in text2.split("\n") if ln.strip()]
+        for i, line in enumerate(lines):
+            if line.startswith("#EXT-X-STREAM-INF"):
+                if i + 1 < len(lines):
+                    sub = lines[i + 1].strip()
+                    if sub.startswith("http"):
+                        full = sub
+                    elif sub.startswith("/"):
+                        # 相对根路径
+                        parsed = urllib.parse.urlparse(final_url)
+                        full = "%s://%s%s" % (parsed.scheme, parsed.netloc, sub)
+                    else:
+                        base = final_url.rsplit("/", 1)[0]
+                        full = base + "/" + sub
+                    self.log("  子 m3u8: %s" % full[:180])
+                    return full
+
+        self.log("  无 #EXT-X-STREAM-INF, 返回 master 本身")
+        return final_url
 
     def localProxy(self, param):
         try:
@@ -526,7 +591,9 @@ class Spider(Spider):
             url = urllib.parse.unquote(url) if "%" in url else url
             url = self._fix_url(url)
             rsp = self.fetch(url, headers={
-                "User-Agent": UA, "Referer": self.site_url + "/"}, timeout=15)
+                "User-Agent": UA,
+                "Origin": ORIGIN,
+                "Referer": self.site_url + "/"}, timeout=15)
             content = rsp.content
             ctype = rsp.headers.get("Content-Type", "image/jpeg")
             if not ctype.startswith("image/"):
