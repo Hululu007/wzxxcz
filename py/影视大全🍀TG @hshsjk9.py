@@ -1,14 +1,14 @@
 # coding=utf-8
 """
 影视大全 iysdq1.com | TVBox Python 爬虫
-严格依据网站真实源码 + F12 抓包编写：
-  - 分类 URL：/vodshow/{tid}-{area}-{sort}-{cls}-----{pg}---{year}.html
-  - 搜索 URL：/vodsearch/-------------.html?wd={关键词}
-  - 详情页线路 tab 用 data-form 标识，与 anthology-list-box 按序对应
-  - 剧集 URL：/vodplay/{id}-{sid}-{nid}.html
-  - 播放：player_aaaa.url = https://svip.xgplay17.com/{path}/index.m3u8
-          这条会 302 到 https://vipXX.jimxtc.com/{path}/index.m3u8（XX 动态）
-          所以必须真的去请求一次，跟随 302 拿最终地址返回给播放器
+
+播放链路（已从真实 F12 抓包确认）：
+  1. 播放页源码里有 player_aaaa.url
+  2. 该 url = https://svip.xgplay17.com/{path}/index.m3u8
+  3. 浏览器 HLS.js 请求它（Origin: https://p.iysdq.com）
+  4. 服务器 302 跳到 https://vip17.jimxtc.com/{path}/index.m3u8
+  5. 返回 master m3u8，内含子列表 3000k/hls/mixed.m3u8
+  6. 服务端不校验 Referer，Origin 允许 p.iysdq.com 或 null
 """
 import re
 import sys
@@ -61,6 +61,9 @@ HOST = "https://www.iysdq1.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 DEFAULT_PIC = HOST + "/template/shoutu45/assets/images/img-bj-k.png"
+
+# 从 F12 抓包确认的真实 Origin（播放器所在域名）
+ORIGIN = "https://p.iysdq.com"
 
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
@@ -436,6 +439,7 @@ class Spider(Spider):
         if play_page in self._play_cache:
             return self._play_cache[play_page]
 
+        # 1. 从播放页解析 player_aaaa.url
         html = self._fetch_text(play_page)
         api_url = ""
         if html:
@@ -448,9 +452,10 @@ class Spider(Spider):
                 except Exception as e:
                     self.log("  player_aaaa 解析失败: %s" % e)
 
+        # 2. 发请求跟随 302，拿最终 URL
         real_url = ""
         if api_url:
-            real_url = self._resolve_redirect(api_url, referer=play_page)
+            real_url = self._follow_redirect(api_url)
 
         if real_url:
             res = {
@@ -459,7 +464,7 @@ class Spider(Spider):
                 "url": real_url,
                 "header": {
                     "User-Agent": UA,
-                    "Referer": play_page,
+                    "Origin": ORIGIN,
                 },
             }
             self.log("  => 播放地址: %s" % real_url[:180])
@@ -468,38 +473,31 @@ class Spider(Spider):
                 "parse": 1,
                 "playUrl": "",
                 "url": play_page,
-                "header": {
-                    "User-Agent": UA,
-                    "Referer": play_page,
-                },
+                "header": {"User-Agent": UA},
             }
 
         self._play_cache[play_page] = res
         return res
 
-    def _resolve_redirect(self, url, referer=None):
+    def _follow_redirect(self, url):
         """
         发请求跟随 302，返回最终 URL。
-        真实链路（来自播放页源码 + F12）：
-          player_aaaa.url = https://svip.xgplay17.com/{path}/index.m3u8
-          请求它 → 302 到 https://vipXX.jimxtc.com/{path}/index.m3u8（XX 动态）
-          最终地址浏览器可直接播放。
-        所以必须真请求一次，让 requests 自己跟随 302，拿 rsp.url。
+        真实链路（F12 抓包确认）：
+          svip.xgplay17.com/.../index.m3u8  --302-->  vip17.jimxtc.com/.../index.m3u8
+        服务端不校验 Referer，Origin 允许 p.iysdq.com 或 null。
         """
         headers = {
             "User-Agent": UA,
             "Accept": "*/*",
+            "Origin": ORIGIN,
         }
-        if referer:
-            headers["Referer"] = referer
-
         try:
             rsp = self.fetch(url, headers=headers, timeout=15)
             final = getattr(rsp, "url", "") or ""
             if final and final != url:
                 self.log("  302 跟随: -> %s" % final[:180])
                 return final
-            self.log("  无跳转, 返回原 url: %s" % url[:180])
+            self.log("  无跳转: %s" % url[:180])
             return url
         except Exception as e:
             self.log("  请求失败: %s" % e)
