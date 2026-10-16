@@ -1,17 +1,15 @@
 # coding=utf-8
 """
-一起影视 yiqiys.com | TVBox Python 爬虫 (V1.8)
+一起影视 yiqiys.com | TVBox Python 爬虫 
 关键:
   - MacCMS 标准模板, 结构固定
   - 分类页: /show/{tid}-{area}-{by}-{lang}--{page}---{year}.html
-  - 分类筛选: 类型/地区/年份/语言/排序 (5 组, 均来自源码)
+  - 分类筛选: 类型/地区/年份/语言/排序 
   - 搜索页: /search/{keyword}----------{page}---.html (有页码)
             /search/{keyword}-------------.html    (无页码)
   - 详情页: /detail/{id}.html, 从 player_data 直接提取 m3u8 直链
-  - 简介添加指定前缀
-  - 详情页线路数量/名称/CDN 全由服务端动态决定, 全部动态解析, 不写死
+  - 详情页线路数量/名称/CDN 全由服务端动态决定, 全部动态解析
   - m3u8 全部托管在第三方 CDN, 统一用 m3u8 自身域名做 Referer
-  - 所有正则均来自真实源码, 不猜测
 """
 import re
 import sys
