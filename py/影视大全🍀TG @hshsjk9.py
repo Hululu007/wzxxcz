@@ -2,11 +2,10 @@
 """
 影视大全 iysdq1.com | TVBox Python 爬虫
 
-播放链路（已用浏览器 + F12 + curl 三重确认）：
+播放链路（浏览器直接验证过）：
   播放页 player_aaaa.url = https://svip.xgplay17.com/{path}/index.m3u8
-    ↓ HTTP 请求（跟随 302）
-  最终可播直链 = https://vip17.jimxtc.com/{path}/index.m3u8
-  （这条直链浏览器直接打开就能播，不需要任何特殊 header）
+  真实可播直链            = https://vip17.jimxtc.com/{path}/index.m3u8
+  （两者路径完全相同，svip 会 302 到 vip17）
 """
 import re
 import sys
@@ -434,7 +433,7 @@ class Spider(Spider):
         if play_page in self._play_cache:
             return self._play_cache[play_page]
 
-        # 1. 从播放页解析 player_aaaa.url
+        # 1. 从播放页源码解析 player_aaaa.url（= svip 地址）
         html = self._fetch_text(play_page)
         api_url = ""
         if html:
@@ -447,10 +446,12 @@ class Spider(Spider):
                 except Exception as e:
                     self.log("  player_aaaa 解析失败: %s" % e)
 
-        # 2. 请求 svip 地址，跟随 302，拿 vip17 直链
-        real_url = ""
-        if api_url:
-            real_url = self._follow_302(api_url)
+        # 2. 域名替换：svip.xgplay17.com -> vip17.jimxtc.com（路径完全相同）
+        #    依据：浏览器直接打开 https://vip17.jimxtc.com/{path}/index.m3u8 可播
+        real_url = api_url
+        if real_url and "svip.xgplay17.com" in real_url:
+            real_url = real_url.replace("svip.xgplay17.com", "vip17.jimxtc.com")
+            self.log("  域名替换: %s" % real_url[:180])
 
         if real_url:
             res = {
@@ -473,49 +474,6 @@ class Spider(Spider):
 
         self._play_cache[play_page] = res
         return res
-
-    def _follow_302(self, url):
-        """
-        请求 url，拿 302 Location。
-        已确认：svip.xgplay17.com/{path}/index.m3u8
-              → 302 → vip17.jimxtc.com/{path}/index.m3u8（可直接播放）
-        """
-        headers = {
-            "User-Agent": UA,
-            "Accept": "*/*",
-        }
-        # 优先：allow_redirects=False 手动拿 Location
-        try:
-            rsp = self.fetch(url, headers=headers, timeout=15, allow_redirects=False)
-            loc = ""
-            if hasattr(rsp, "headers"):
-                loc = (rsp.headers.get("Location", "") or
-                       rsp.headers.get("location", ""))
-            if loc:
-                if loc.startswith("//"):
-                    loc = "https:" + loc
-                loc = loc.replace("&amp;", "&")
-                self.log("  302 Location: %s" % loc[:180])
-                return loc
-        except TypeError:
-            # 该环境的 fetch 不支持 allow_redirects
-            pass
-        except Exception as e:
-            self.log("  follow 302 fail: %s" % e)
-
-        # 兜底：跟随跳转，看 rsp.url 是否变化
-        try:
-            rsp = self.fetch(url, headers=headers, timeout=15)
-            final = getattr(rsp, "url", "") or ""
-            if final and final != url:
-                self.log("  follow redirect: %s" % final[:180])
-                return final
-        except Exception as e:
-            self.log("  follow redirect fail: %s" % e)
-
-        # 都没有：返回原 url（有些情况 svip 本身也可播）
-        self.log("  无 302, 返回原 url")
-        return url
 
     def localProxy(self, param):
         try:
