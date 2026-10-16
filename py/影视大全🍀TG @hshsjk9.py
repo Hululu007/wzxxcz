@@ -8,6 +8,7 @@
   3. <from>.js 生成 iframe 时，PlayUrl = 该 url
   4. 你 Console 实测：rc4(config.url, '202306051426239465', 1) = 同一条 url
   5. F12 抓 m3u8 请求头：只有 UA，Referer 为空，无 Origin
+  6. 浏览器地址栏直接打开该 m3u8：能播
 
 结论：Python 端直接把 player_aaaa.url 返回给播放器，header 只带 UA。
 """
@@ -436,6 +437,11 @@ class Spider(Spider):
         }]}
 
     # -------- 播放：直接返回 player_aaaa.url，header 只带真实 UA --------
+    # 严格按照网页源码：
+    #   1. player_aaaa.url = 网页最终播放的地址（Console 已实测）
+    #   2. MacPlayer.Init() 里 encrypt=0，原样使用
+    #   3. 浏览器地址栏直接打开这条 url 就能播
+    #   4. F12 抓包 m3u8 请求头：只有 UA
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -457,9 +463,9 @@ class Spider(Spider):
                     self.log("  player_aaaa 解析失败: %s" % e)
 
         if api_url:
+            # 只返回 TVBox 绝对认的字段，去掉 playUrl
             res = {
                 "parse": 0,
-                "playUrl": "",
                 "url": api_url,
                 "header": {
                     "User-Agent": PLAYER_UA,
@@ -469,7 +475,6 @@ class Spider(Spider):
         else:
             res = {
                 "parse": 1,
-                "playUrl": "",
                 "url": play_page,
                 "header": {"User-Agent": UA},
             }
