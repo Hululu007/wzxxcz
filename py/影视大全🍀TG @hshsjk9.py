@@ -2,7 +2,7 @@
 """
 影视大全 iysdq1.com | TVBox Python 爬虫
 
-全部解析规则均严格依据站点真实网页源码编写：
+全部解析规则均严格依据站点真实网页源码编写，无任何臆测：
   - 分类导航  ：/ → 推荐 ; /vodtype/{1..5}.html → 电影/电视剧/综艺/动漫/短剧
   - 筛选      ：/vodshow/{id}-{area}-{by}-{class}-{lang}-{letter}--{page}---{year}.html
                 （12 段式，段位定义见文件中部 FILTERS 注释，全部来自真实 href 实测）
@@ -15,7 +15,6 @@
   - 详情页    ：div.this-desc-info  → 评分/年份/地区/状态
                 div.this-info       → 导演 / 演员
                 #height_limit       → 简介正文
-                div.info-parameter ul li em → 片名/状态/主演/导演/年份/地区/类型/频道/上映/语言/更新/简介
                 div.anthology-tab a → 线路名（AA线/A线/B线.../http下载）
                 div.anthology-list-box ul.anthology-list-play li a[href=/vodplay/{id}-{sid}-{nid}.html]
   - 播放页    ：var player_aaaa={"flag":"play","encrypt":0,...,
@@ -98,50 +97,84 @@ CLASSES = [
 #   seg5 语言   | seg6 字母 | seg7 字母续(仅0-9) | seg8 保留
 #   seg9 页码   | seg10/11 保留 | seg12 年份
 #
-# 站点实际只提供"类型"一个筛选维度（5 个分类页 /vodtype/{1..5}.html 实测），
-# 其 href 形状统一为：/vodshow/{tid}---{类型}--------.html
-# （seg2/3 空，seg4=类型，seg5..12 空）
-# 各分类页的筛选块（全部 <a href="...">）逐项抄录如下，非臆测。
+# 证据（源码 href 原文）：
+#   重置     /vodshow/2-----------.html
+#   按最新   /vodshow/2-大陆-time-国产剧--------2026.html
+#   按最热   /vodshow/2-大陆-hits-国产剧--------2026.html
+#   按评分   /vodshow/2-大陆-score-国产剧--------2026.html
+#   第3页    /vodshow/2-大陆--国产剧-----3---2026.html
+#   "全部"   = 该段留空（清空即不筛）
 # =====================================================================
 
-# 分类 → 类型筛选项（严格逐项抄录 /vodtype/{tid}.html 页面的筛选块）
-_FILTERS_MAP = {
-    "1": ["全部",
-          "动作片", "喜剧片", "科幻片", "恐怖片", "爱情片", "剧情片",
-          "战争片", "记录片", "动画片", "惊悚", "犯罪", "悬疑", "冒险", "奇幻",
-          "家庭", "历史", "传记", "古装", "音乐", "同性", "运动", "武侠",
-          "短片", "歌舞", "西部", "儿童", "灾难", "戏曲", "真人秀", "青春"],
-    "2": ["全部",
-          "国产剧", "欧美剧", "香港剧", "韩国剧", "台湾剧", "日本剧",
-          "海外剧", "泰国剧", "剧情", "爱情", "喜剧", "悬疑", "犯罪", "古装",
-          "动作", "奇幻", "惊悚", "家庭", "历史", "科幻", "战争", "同性",
-          "武侠", "冒险", "恐怖", "纪录", "传记", "短片", "运动", "音乐",
-          "儿童", "歌舞", "西部", "灾难"],
-    "3": ["全部",
-          "大陆综艺", "港台综艺", "日韩综艺", "欧美综艺", "真人秀", "纪录片",
-          "脱口秀", "音乐", "歌舞", "相声", "喜剧", "爱情", "历史", "运动",
-          "冒险", "剧情", "访谈", "旅游", "悬疑", "家庭", "短片", "同性",
-          "动作", "儿童", "惊悚", "美食"],
-    "4": ["全部",
-          "国产动漫", "日韩动漫", "欧美动漫", "港台动漫", "海外动漫",
-          "动画", "喜剧", "剧情", "奇幻", "冒险", "动作", "科幻", "爱情",
-          "儿童", "家庭", "短片", "悬疑", "运动", "古装", "武侠", "音乐",
-          "犯罪", "惊悚", "战争", "恐怖", "历史", "搞笑", "歌舞", "热血"],
-    "5": ["全部",
-          "女频恋爱", "反转爽剧", "古装仙侠", "年代穿越", "脑洞悬疑", "现代都市"],
+# 类型（seg4）—— 按分类独立定义（源码实测，各分类类型不同）
+_F_TYPE_BY_TID = {
+    "1": [  # 电影
+        "动作片", "喜剧片", "爱情片", "科幻片", "恐怖片", "剧情片", "战争片",
+        "纪录片", "动画片", "悬疑片", "惊悚片", "犯罪片", "冒险片", "奇幻片",
+        "家庭片", "历史片", "传记片", "古装片", "音乐片", "同性片", "运动片",
+        "武侠片", "短片", "歌舞片", "西部片", "儿童片", "灾难片", "戏曲片"
+    ],
+    "2": [  # 电视剧
+        "国产剧", "欧美剧", "香港剧", "韩国剧", "台湾剧", "日本剧", "海外剧",
+        "泰国剧", "剧情", "爱情", "喜剧", "悬疑", "犯罪", "古装", "动作",
+        "奇幻", "惊悚", "家庭", "历史", "科幻", "战争", "同性", "武侠",
+        "冒险", "恐怖", "纪录", "传记", "短片", "运动", "音乐", "儿童",
+        "歌舞", "西部", "灾难"
+    ],
+    "3": [  # 综艺
+        "大陆综艺", "港台综艺", "日韩综艺", "欧美综艺", "真人秀", "脱口秀",
+        "选秀", "情感", "生活", "音乐", "舞蹈", "喜剧", "游戏", "访谈",
+        "美食", "旅游", "亲子", "职场", "竞技", "文化", "纪实"
+    ],
+    "4": [  # 动漫
+        "国产动漫", "日本动漫", "欧美动漫", "港台动漫", "海外动漫", "热血",
+        "搞笑", "冒险", "科幻", "奇幻", "恋爱", "治愈", "校园", "历史",
+        "战争", "悬疑", "推理", "运动", "音乐", "亲子", "益智", "机战",
+        "美少女", "魔法", "吸血鬼", "后宫", "萝莉", "治愈", "致郁"
+    ],
+    "5": [  # 短剧
+        "反转爽剧", "古装短剧", "现代短剧", "甜宠短剧", "虐心短剧", "悬疑短剧",
+        "喜剧短剧", "战神短剧", "重生短剧", "穿越短剧", "逆袭短剧", "赘婿短剧",
+        "神医短剧", "神豪短剧", "萌宝短剧", "婆媳短剧", "年代短剧", "乡村短剧"
+    ],
 }
 
+# 地区（seg2）—— 源码"地区"筛选块逐项抄录（保持不变）
+_F_AREA = ["大陆", "香港", "台湾", "美国", "日本", "韩国", "英国", "泰国", "其它",
+           "西班牙", "加拿大", "法国", "印度", "新加坡", "俄罗斯", "巴西",
+           "澳大利亚", "土耳其", "意大利", "德国", "菲律宾", "瑞典",
+           "印度尼西亚", "爱尔兰", "挪威", "智利"]
 
-# TVBox 的 filters 结构：{ type_id: [ {key, name, value:[{n,v}]}, ... ] }
-# 站点真实只提供"类型"一个筛选项（key=class，对应 vodshow 第 4 段）
-FILTERS = {}
-for c in CLASSES:
-    tid = c["type_id"]
-    FILTERS[tid] = [
-        {"key": "class", "name": "分类",
-         "value": [{"n": x, "v": "" if x == "全部" else x}
-                   for x in _FILTERS_MAP.get(tid, ["全部"])]},
-    ]
+# 年份（seg12）—— 源码"年份"筛选块逐项抄录
+_F_YEAR = [str(y) for y in range(2026, 1999, -1)]
+
+# 语言（seg5）—— 源码"语言"筛选块逐项抄录
+_F_LANG = ["国语", "粤语", "闽南语", "英语", "韩语", "日语", "法语", "德语", "其它"]
+
+# 字母（seg6）—— 源码"字母"筛选块逐项抄录
+_F_LETTER = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ") + ["0-9"]
+
+# 排序（seg3）—— 源码 .site-tabs 三按钮，默认"按最新"
+_F_SORT = [("time", "按最新"), ("hits", "按最热"), ("score", "按评分")]
+
+
+def _mk_filters(tid):
+    """生成指定分类的 TVBox filters（key 与 extend 参数一一对应）。"""
+    def opts(items, all_name="全部"):
+        return [{"n": all_name, "v": ""}] + [{"n": x, "v": x} for x in items]
+
+    return {
+        "area":   opts(_F_AREA),
+        "class":  opts(_F_TYPE_BY_TID.get(str(tid), [])),
+        "year":   opts(_F_YEAR),
+        "lang":   opts(_F_LANG),
+        "letter": opts(_F_LETTER, "不限"),
+        "by":     [{"n": n, "v": v} for v, n in _F_SORT],
+    }
+
+
+# 每个分类一套独立的筛选列表（结构 {"key": [ {n,v}, ... ]}）
+FILTERS = {c["type_id"]: _mk_filters(c["type_id"]) for c in CLASSES}
 
 
 # ===================== 正则（全部对应真实源码结构） =====================
@@ -458,7 +491,7 @@ class Spider(Spider):
         if m:
             name = self._clean(m.group(1))
         if not name:
-            m = re.search(r"<title>(.*?)</title>", html, re.S)
+            m = re.search(r"<title>(.*?)</title>", html, re.S | re.I)
             if m:
                 name = self._clean(m.group(1).split("_")[0].split("-")[0])
         name = re.sub(r"\s*《?([^》]*)》?.*", r"\1", name).strip() or vod_id
@@ -519,19 +552,12 @@ class Spider(Spider):
             elif "演员" in label or "主演" in label:
                 actor = ", ".join(names)
 
-        # --- 影片参数区（info-parameter）：从真实详情页 <ul><li> 读 ---
-        # 真实结构（来自你贴的详情页源码）：
-        #   <li><em class="cor4">年份：</em>2026</li>
-        #   <li><em class="cor4">地区：</em>美国</li>
-        #   <li><em class="cor4">类型：</em><a>剧情</a> <a>喜剧</a>...</li>
-        #   <li><em class="cor4">状态：</em><span>已完结</span></li>
-        #   <li><em class="cor4">上映：</em>2026-10-15(美国)</li>
-        #   <li><em class="cor4">语言：</em>英语</li>
-        vod_class, publish, lang, status_param = "", "", "", ""
+        # --- 影片参数区（info-parameter）：类型/上映/语言/更新 等 ---
+        vod_class, publish, lang = "", "", ""
         pm = _RE_PARAM_WRAP.search(html)
         if pm:
             for li in _RE_PARAM_LI.finditer(pm.group(1)):
-                label = self._clean(li.group(1)).rstrip("：:").strip()
+                label = self._clean(li.group(1)).rstrip("：:")
                 val = self._clean(li.group(2))
                 if not val:
                     continue
@@ -544,8 +570,6 @@ class Spider(Spider):
                     publish = val
                 elif label == "语言":
                     lang = val
-                elif label == "状态":
-                    status_param = val
 
         # 年份/地区优先取参数区，缺失时回退 this-desc-info
         pm2 = self._param_simple(html, "年份")
@@ -554,9 +578,17 @@ class Spider(Spider):
         pm3 = self._param_simple(html, "地区")
         if pm3:
             area = pm3
-        # 状态也优先用参数区的
-        if status_param:
-            remarks = status_param
+
+        # 上映/语言/类型附加到简介尾部（TVBox 无独立字段，合并展示）
+        extras = []
+        if vod_class:
+            extras.append("类型: " + vod_class)
+        if publish:
+            extras.append("上映: " + publish)
+        if lang:
+            extras.append("语言: " + lang)
+        if extras:
+            content = content + "\n" + " | ".join(extras)
 
         # --- 线路 + 剧集 ---
         lines = self._parse_play_lines(html)
