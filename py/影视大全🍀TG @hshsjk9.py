@@ -1,12 +1,14 @@
 # coding=utf-8
 """
 影视大全 iysdq1.com | TVBox Python 爬虫
-严格依据网站真实源码 + 真实 Network 抓包编写：
+严格依据网站真实源码 + F12 抓包编写：
   - 分类 URL：/vodshow/{tid}-{area}-{sort}-{cls}-----{pg}---{year}.html
   - 搜索 URL：/vodsearch/-------------.html?wd={关键词}
   - 详情页线路 tab 用 data-form 标识，与 anthology-list-box 按序对应
   - 剧集 URL：/vodplay/{id}-{sid}-{nid}.html
-  - 播放：player_aaaa.url → 302 → vip17.jimxtc.com 的 index.m3u8（直链可播）
+  - 播放：player_aaaa.url = https://svip.xgplay17.com/{path}/index.m3u8
+          真实可播 CDN  = https://vip17.jimxtc.com/{path}/index.m3u8
+          （{path} 完全相同，已用浏览器验证 vip17 可直播）
 """
 import re
 import sys
@@ -70,7 +72,6 @@ CLASSES = [
     {"type_id": "5", "type_name": "短剧"},
 ]
 
-# 年份列表（源码里是 2026 往前到 2000）
 _YEARS = [{"n": "全部", "v": ""}] + \
          [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]
 
@@ -86,7 +87,6 @@ _AREAS = [
     {"n": "泰国", "v": "泰国"}, {"n": "其它", "v": "其它"},
 ]
 
-# 排序：源码 tab 里是 time / hits / score，默认（最新）为空
 _SORTS = [
     {"n": "最新", "v": ""},
     {"n": "最热", "v": "hits"},
@@ -129,55 +129,42 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
-# 卡片：首页/分类/搜索通用
 _RE_CARD = re.compile(
     r'<a[^>]*class="public-list-exp"[^>]*href="(/voddetail/\d+\.html)"[^>]*title="([^"]*)"'
     r'[\s\S]{0,400}?<img[^>]*?data-src="([^"]*)"'
     r'[\s\S]{0,400}?<span class="public-list-prb[^"]*">([^<]*)</span>',
     re.S | re.I)
 
-# 详情页标题
 _RE_TITLE = re.compile(r'<div class="this-desc-title">([^<]*)</div>', re.I)
-# 详情页封面（背景图）
 _RE_PIC_BJ = re.compile(
     r'<div class="this-pic-bj"\s+style="background-image:\s*url\(\'([^\']+)\'\)', re.I)
-# 详情页简介
 _RE_INTRO = re.compile(
     r'<div id="height_limit"[^>]*>\s*<strong[^>]*>描述:</strong>([\s\S]*?)</div>',
     re.S | re.I)
-# 详情页评分
 _RE_SCORE = re.compile(r'<div class="fraction">([\d.]+)</div>', re.I)
-# 详情页导演/演员
 _RE_DIRECTOR = re.compile(
     r'<div class="this-info"><strong class="r6">导演:</strong>([\s\S]*?)</div>', re.I)
 _RE_ACTOR = re.compile(
     r'<div class="this-info"><strong class="r6">演员:</strong>([\s\S]*?)</div>', re.I)
-# 详情页年份/地区/状态
 _RE_INFO = re.compile(
     r'<div class="this-desc-info">([\s\S]*?)</div>\s*<div class="this-desc-tags"', re.I)
 _RE_A_TAG = re.compile(r'<a[^>]*>([^<]+)</a>', re.I)
 
-# 详情页线路 tab：<a data-form="xxx" class="vod-playerUrl...">线路名<span class="badge">N</span></a>
 _RE_LINE_TAB = re.compile(
     r'<a\s+data-form="([^"]+)"[^>]*class="vod-playerUrl[^"]*"[^>]*>'
     r'[\s\S]*?&nbsp;([^<]+)<span class="badge">(\d+)</span>',
     re.S | re.I)
 
-# 详情页每个线路的剧集列表块
 _RE_ANTHOLOGY_BOX = re.compile(
     r'<div class=[\'"]anthology-list-box[^\'"]*[\'"]>([\s\S]*?)</ul></div></div>',
     re.S | re.I)
-# 单个剧集
 _RE_EPISODE = re.compile(
     r'<a class="hide"[^>]*href="(/vodplay/\d+-\d+-\d+\.html)"[^>]*>\s*<span>([^<]+)</span>',
     re.S | re.I)
 
-# 分页信息
 _RE_PAGE_INFO = re.compile(r'<div class="rg10">\s*(\d+)\s*&nbsp;/\s*&nbsp;(\d+)\s*页', re.I)
-# 总条数
 _RE_TOTAL = re.compile(r"\$\('\.hl-total'\)\.html\('(\d+)'\)", re.I)
 
-# 播放页 player_aaaa
 _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>', re.I)
 
 
@@ -208,8 +195,7 @@ class Spider(Spider):
             h = dict(self.headers)
             if headers:
                 h.update(headers)
-            rsp = self.fetch(url, headers=h, timeout=timeout)
-            return rsp
+            return self.fetch(url, headers=h, timeout=timeout)
         except Exception as e:
             self.log("fetch FAIL %s -> %s" % (url, e))
             return None
@@ -301,7 +287,6 @@ class Spider(Spider):
         year = extend.get("year") or ""
         sort = extend.get("sort") or ""
 
-        # /vodshow/{tid}-{area}-{sort}-{cls}-----{pg}---{year}.html
         url = "%s/vodshow/%s-%s-%s-%s-----%s---%s.html" % (
             self.site_url, tid, area, sort, cls,
             str(page) if page > 1 else "",
@@ -355,7 +340,6 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # 标题
         name = ""
         m = _RE_TITLE.search(html)
         if m:
@@ -366,13 +350,11 @@ class Spider(Spider):
                 name = self._clean(m.group(1).split("_")[0].split("-")[0])
         name = name or vod_id
 
-        # 封面
         pic = self.default_pic
         m = _RE_PIC_BJ.search(html)
         if m:
             pic = self._fix_url(m.group(1))
 
-        # 简介
         content = ""
         m = _RE_INTRO.search(html)
         if m:
@@ -383,27 +365,23 @@ class Spider(Spider):
                 content = self._clean(m.group(1))
         content = INTRO_PREFIX + ("\n" + content if content else "")
 
-        # 评分
         score = ""
         m = _RE_SCORE.search(html)
         if m:
             score = m.group(1)
 
-        # 导演
         director = ""
         m = _RE_DIRECTOR.search(html)
         if m:
             names = _RE_A_TAG.findall(m.group(1))
             director = ", ".join(n.strip() for n in names if n.strip())
 
-        # 演员
         actor = ""
         m = _RE_ACTOR.search(html)
         if m:
             names = _RE_A_TAG.findall(m.group(1))
             actor = ", ".join(n.strip() for n in names if n.strip())
 
-        # 年份/地区/状态
         year, area, status = "", "", ""
         m = _RE_INFO.search(html)
         if m:
@@ -411,7 +389,6 @@ class Spider(Spider):
             if len(spans) >= 4:
                 year, area, status = spans[1], spans[2], spans[3]
 
-        # ===== 线路与剧集 =====
         line_forms = []
         for m in _RE_LINE_TAB.finditer(html):
             line_forms.append((m.group(1), self._clean(m.group(2))))
@@ -459,7 +436,6 @@ class Spider(Spider):
         if play_page in self._play_cache:
             return self._play_cache[play_page]
 
-        # 1. 播放页源码里解析 player_aaaa.url
         html = self._fetch_text(play_page)
         api_url = ""
         if html:
@@ -472,10 +448,9 @@ class Spider(Spider):
                 except Exception as e:
                     self.log("  player_aaaa 解析失败: %s" % e)
 
-        # 2. 请求 api_url 拿真实 m3u8（跟随 302）
         real_url = ""
         if api_url:
-            real_url = self._resolve_final_m3u8(api_url, referer=play_page)
+            real_url = self._get_playable_url(api_url, referer=play_page)
 
         if real_url:
             res = {
@@ -502,52 +477,75 @@ class Spider(Spider):
         self._play_cache[play_page] = res
         return res
 
-    def _resolve_final_m3u8(self, url, referer=None):
+    def _get_playable_url(self, api_url, referer=None):
         """
-        请求 url，跟随 302，返回最终可播的 m3u8 直链。
-        真实链路（来自 F12 Network 抓包）：
-          https://svip.xgplay17.com/.../index.m3u8
-            --302--> https://vip17.jimxtc.com/.../index.m3u8
-        最终 index.m3u8 是可直接播放的 HLS 索引（浏览器直接打开就能播）。
+        已知事实（来自 F12 + 浏览器验证）：
+          player_aaaa.url = https://svip.xgplay17.com/{path}/index.m3u8
+          真实可播直链     = https://vip17.jimxtc.com/{path}/index.m3u8
+          {path} 完全相同，vip17.jimxtc.com 在浏览器里可直接播放。
+        策略：
+          1) 试 302 Location
+          2) 换域名到 vip17.jimxtc.com，实际请求确认响应含 #EXTM3U
+          3) 都失败则返回原 url
         """
-        headers = {
-            "User-Agent": UA,
-            "Accept": "*/*",
-        }
+        headers = {"User-Agent": UA, "Accept": "*/*"}
         if referer:
             headers["Referer"] = referer
 
-        # 第一步：请求原 URL，不跟随跳转，拿 Location
-        try:
-            rsp = self.fetch(url, headers=headers, timeout=15, allow_redirects=False)
-        except TypeError:
-            # 环境不支持 allow_redirects，退化为跟随跳转
-            try:
-                rsp = self.fetch(url, headers=headers, timeout=15)
-                final = getattr(rsp, "url", "") or url
-                self.log("  跟随跳转最终: %s" % final[:180])
-                return final
-            except Exception as e:
-                self.log("  follow 302 fail: %s" % e)
-                return url
-        except Exception as e:
-            self.log("  follow 302 fail: %s" % e)
-            return url
-
+        # 路径1：请求原 url，看能否拿 Location
         loc = ""
-        if hasattr(rsp, "headers"):
-            loc = rsp.headers.get("Location", "") or rsp.headers.get("location", "")
+        try:
+            rsp = self.fetch(api_url, headers=headers, timeout=15,
+                             allow_redirects=False)
+            if hasattr(rsp, "headers"):
+                loc = rsp.headers.get("Location", "") or rsp.headers.get("location", "")
+        except TypeError:
+            try:
+                rsp = self.fetch(api_url, headers=headers, timeout=15)
+                final = getattr(rsp, "url", "") or ""
+                if final and final != api_url:
+                    self.log("  fetch 跟随跳转最终: %s" % final[:180])
+                    return final
+            except Exception as e:
+                self.log("  请求 api_url 失败: %s" % e)
+        except Exception as e:
+            self.log("  请求 api_url 失败: %s" % e)
 
         if loc:
             if loc.startswith("//"):
                 loc = "https:" + loc
             loc = loc.replace("&amp;", "&")
-            self.log("  302 -> %s" % loc[:180])
+            self.log("  302 Location: %s" % loc[:180])
             return loc
 
-        # 没 302：说明原 URL 本身就可播
-        self.log("  无 302, 直接用原 url")
-        return url
+        # 路径2：域名替换到 vip17.jimxtc.com，实际请求校验 #EXTM3U
+        try:
+            parsed = urllib.parse.urlparse(api_url)
+            path = parsed.path
+            if parsed.query:
+                path += "?" + parsed.query
+            candidate = "https://vip17.jimxtc.com%s" % path
+            self.log("  尝试直连 CDN: %s" % candidate[:180])
+            try:
+                rsp2 = self.fetch(candidate, headers=headers, timeout=10)
+                text = ""
+                if hasattr(rsp2, "text"):
+                    text = rsp2.text or ""
+                if not text and hasattr(rsp2, "content"):
+                    text = rsp2.content.decode("utf-8", "ignore")
+                if "#EXTM3U" in text:
+                    self.log("  ✓ CDN 返回 #EXTM3U")
+                    return candidate
+                else:
+                    self.log("  ✗ CDN 无 #EXTM3U")
+            except Exception as e:
+                self.log("  ✗ 校验 CDN 失败: %s" % e)
+        except Exception as e:
+            self.log("  域名替换失败: %s" % e)
+
+        # 路径3：兜底
+        self.log("  兜底返回原 api_url")
+        return api_url
 
     def localProxy(self, param):
         try:
