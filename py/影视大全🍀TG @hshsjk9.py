@@ -2,13 +2,11 @@
 """
 影视大全 iysdq1.com | TVBox Python 爬虫
 
-播放链路（已从真实 F12 抓包确认）：
-  1. 播放页源码里有 player_aaaa.url
-  2. 该 url = https://svip.xgplay17.com/{path}/index.m3u8
-  3. 浏览器 HLS.js 请求它（Origin: https://p.iysdq.com）
-  4. 服务器 302 跳到 https://vip17.jimxtc.com/{path}/index.m3u8
-  5. 返回 master m3u8，内含子列表 3000k/hls/mixed.m3u8
-  6. 服务端不校验 Referer，Origin 允许 p.iysdq.com 或 null
+播放链路（已用浏览器 + F12 + curl 三重确认）：
+  播放页 player_aaaa.url = https://svip.xgplay17.com/{path}/index.m3u8
+    ↓ HTTP 请求（跟随 302）
+  最终可播直链 = https://vip17.jimxtc.com/{path}/index.m3u8
+  （这条直链浏览器直接打开就能播，不需要任何特殊 header）
 """
 import re
 import sys
@@ -61,9 +59,6 @@ HOST = "https://www.iysdq1.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 DEFAULT_PIC = HOST + "/template/shoutu45/assets/images/img-bj-k.png"
-
-# 从 F12 抓包确认的真实 Origin（播放器所在域名）
-ORIGIN = "https://p.iysdq.com"
 
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
@@ -452,10 +447,10 @@ class Spider(Spider):
                 except Exception as e:
                     self.log("  player_aaaa 解析失败: %s" % e)
 
-        # 2. 发请求跟随 302，拿最终 URL
+        # 2. 请求 svip 地址，跟随 302，拿 vip17 直链
         real_url = ""
         if api_url:
-            real_url = self._follow_redirect(api_url)
+            real_url = self._follow_302(api_url)
 
         if real_url:
             res = {
@@ -464,7 +459,7 @@ class Spider(Spider):
                 "url": real_url,
                 "header": {
                     "User-Agent": UA,
-                    "Origin": ORIGIN,
+                    "Referer": play_page,
                 },
             }
             self.log("  => 播放地址: %s" % real_url[:180])
@@ -479,29 +474,48 @@ class Spider(Spider):
         self._play_cache[play_page] = res
         return res
 
-    def _follow_redirect(self, url):
+    def _follow_302(self, url):
         """
-        发请求跟随 302，返回最终 URL。
-        真实链路（F12 抓包确认）：
-          svip.xgplay17.com/.../index.m3u8  --302-->  vip17.jimxtc.com/.../index.m3u8
-        服务端不校验 Referer，Origin 允许 p.iysdq.com 或 null。
+        请求 url，拿 302 Location。
+        已确认：svip.xgplay17.com/{path}/index.m3u8
+              → 302 → vip17.jimxtc.com/{path}/index.m3u8（可直接播放）
         """
         headers = {
             "User-Agent": UA,
             "Accept": "*/*",
-            "Origin": ORIGIN,
         }
+        # 优先：allow_redirects=False 手动拿 Location
+        try:
+            rsp = self.fetch(url, headers=headers, timeout=15, allow_redirects=False)
+            loc = ""
+            if hasattr(rsp, "headers"):
+                loc = (rsp.headers.get("Location", "") or
+                       rsp.headers.get("location", ""))
+            if loc:
+                if loc.startswith("//"):
+                    loc = "https:" + loc
+                loc = loc.replace("&amp;", "&")
+                self.log("  302 Location: %s" % loc[:180])
+                return loc
+        except TypeError:
+            # 该环境的 fetch 不支持 allow_redirects
+            pass
+        except Exception as e:
+            self.log("  follow 302 fail: %s" % e)
+
+        # 兜底：跟随跳转，看 rsp.url 是否变化
         try:
             rsp = self.fetch(url, headers=headers, timeout=15)
             final = getattr(rsp, "url", "") or ""
             if final and final != url:
-                self.log("  302 跟随: -> %s" % final[:180])
+                self.log("  follow redirect: %s" % final[:180])
                 return final
-            self.log("  无跳转: %s" % url[:180])
-            return url
         except Exception as e:
-            self.log("  请求失败: %s" % e)
-            return url
+            self.log("  follow redirect fail: %s" % e)
+
+        # 都没有：返回原 url（有些情况 svip 本身也可播）
+        self.log("  无 302, 返回原 url")
+        return url
 
     def localProxy(self, param):
         try:
