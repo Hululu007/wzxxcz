@@ -4,7 +4,10 @@
 
 全部解析规则均严格依据站点真实网页源码编写，无任何臆测：
   - 分类导航  ：/ → 推荐 ; /vodtype/{1..5}.html → 电影/电视剧/综艺/动漫/短剧
+  - 筛选      ：/vodshow/{id}-{area}-{by}-{class}-{lang}-{letter}--{page}---{year}.html
+                （12 段式，段位定义见文件中部 FILTERS 注释，全部来自真实 href 实测）
   - 搜索      ：/vodsearch/{urlencode(词)}-------------.html   （也支持 ?wd=词）
+                分页：/vodsearch/{词}----------{页码}---.html
   - 列表卡片  ：div.public-list-box > a.public-list-exp[href=/voddetail/{id}.html][title=剧名]
                 img[alt="剧名封面图"][src=占位图][data-src=真实封面]
                 span.public-list-prb → 更新至第N集 / 已完结
@@ -86,9 +89,69 @@ CLASSES = [
     {"type_id": "5", "type_name": "短剧"},
 ]
 
-# 说明：站点分类页未在已获取的源码中出现“地区/年份/剧情”下拉筛选控件，
-# 无法证实其筛选 URL 结构，故不臆造 filters（宁缺勿猜）。
-FILTERS = {c["type_id"]: [] for c in CLASSES}
+# =====================================================================
+# 筛选（vodshow）—— 全部依据真实筛选页源码实测，非臆测
+#
+# 真实 URL（按 - 切分共 12 段，1-based）：
+#   seg1 分类id | seg2 地区 | seg3 排序by | seg4 类型class
+#   seg5 语言   | seg6 字母 | seg7 字母续(仅0-9) | seg8 保留
+#   seg9 页码   | seg10/11 保留 | seg12 年份
+#
+# 证据（源码 href 原文）：
+#   重置     /vodshow/2-----------.html
+#   按最新   /vodshow/2-大陆-time-国产剧--------2026.html
+#   按最热   /vodshow/2-大陆-hits-国产剧--------2026.html
+#   按评分   /vodshow/2-大陆-score-国产剧--------2026.html
+#   第3页    /vodshow/2-大陆--国产剧-----3---2026.html
+#   "全部"   = 该段留空（清空即不筛）
+# =====================================================================
+
+# 类型（seg4）—— 源码"类型"筛选块逐项抄录
+_F_TYPE = ["国产剧", "欧美剧", "香港剧", "韩国剧", "台湾剧", "日本剧", "海外剧",
+           "泰国剧", "剧情", "爱情", "喜剧", "悬疑", "犯罪", "古装", "动作",
+           "奇幻", "惊悚", "家庭", "历史", "科幻", "战争", "同性", "武侠",
+           "冒险", "恐怖", "纪录", "传记", "短片", "运动", "音乐", "儿童",
+           "歌舞", "西部", "灾难"]
+
+# 地区（seg2）—— 源码"地区"筛选块逐项抄录
+_F_AREA = ["大陆", "香港", "台湾", "美国", "日本", "韩国", "英国", "泰国", "其它",
+           "西班牙", "加拿大", "法国", "印度", "新加坡", "俄罗斯", "巴西",
+           "澳大利亚", "土耳其", "意大利", "德国", "菲律宾", "瑞典",
+           "印度尼西亚", "爱尔兰", "挪威", "智利"]
+
+# 年份（seg12）—— 源码"年份"筛选块逐项抄录
+_F_YEAR = [str(y) for y in range(2026, 1999, -1)]
+
+# 语言（seg5）—— 源码"语言"筛选块逐项抄录
+_F_LANG = ["国语", "粤语", "闽南语", "英语", "韩语", "日语", "法语", "德语", "其它"]
+
+# 字母（seg6）—— 源码"字母"筛选块逐项抄录
+_F_LETTER = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ") + ["0-9"]
+
+# 排序（seg3）—— 源码 .site-tabs 三按钮，默认"按最新"
+_F_SORT = [("time", "按最新"), ("hits", "按最热"), ("score", "按评分")]
+
+
+def _mk_filters():
+    """生成 TVBox filters（key 与 extend 参数一一对应）。"""
+    def opts(items, all_name="全部"):
+        return [{"n": all_name, "v": ""}] + [{"n": x, "v": x} for x in items]
+
+    return {
+        "area":   opts(_F_AREA),
+        "class":  opts(_F_TYPE),
+        "year":   opts(_F_YEAR),
+        "lang":   opts(_F_LANG),
+        "letter": opts(_F_LETTER, "不限"),
+        "by":     [{"n": n, "v": v} for v, n in _F_SORT],
+    }
+
+
+_ONE_FILTER = _mk_filters()
+# 每个分类一套独立的筛选列表（结构 {"key": [ {n,v}, ... ]}）
+FILTERS = {c["type_id"]: {k: [dict(o) for o in v]
+                          for k, v in _ONE_FILTER.items()}
+           for c in CLASSES}
 
 
 # ===================== 正则（全部对应真实源码结构） =====================
@@ -124,6 +187,17 @@ _RE_SPAN = re.compile(r'<span[^>]*>(.*?)</span>', re.S | re.I)
 # 详情页 · 导演 / 演员：<div class="this-info"><strong>导演:</strong><a>名</a><i>，</i>...
 _RE_INFO_BLOCK = re.compile(
     r'<div[^>]*class="this-info"[^>]*>\s*<strong[^>]*>([^<]+)</strong>(.*?)</div>',
+    re.S | re.I)
+
+# 详情页 · 影片参数区（info-parameter，源码实测）：
+# <li><em class="cor4">年份：</em>2026</li>
+# <li><em class="cor4">类型：</em><a>剧情</a> <a>喜剧</a>...</li>
+# <li><em class="cor4">上映：</em>2026-10-15(美国)</li>
+_RE_PARAM_WRAP = re.compile(
+    r'<div[^>]*class="info-parameter[^"]*"[^>]*>.*?<ul>(.*?)</ul>',
+    re.S | re.I)
+_RE_PARAM_LI = re.compile(
+    r'<li[^>]*>\s*<em[^>]*>([^<]+)</em>(.*?)</li>',
     re.S | re.I)
 
 # 详情页 · 线路名：<div class="anthology-tab ..."><a class="swiper-slide">...名<span class="badge">N</span></a>
@@ -257,9 +331,53 @@ class Spider(Spider):
             })
         return videos
 
-    def _page_count(self, html):
-        """源码中未见分页控件，无法证实 → 返回 1，避免臆造翻页逻辑。"""
-        return 1
+    def _build_show_url(self, tid, pg, extend):
+        """按真实 12 段式拼 vodshow 筛选 URL（段位定义见文件头注释）。
+
+        注意：中文值必须 urlencode（源码/浏览器会自动编码，但直连请求不会），
+        而分隔符 '-' 与空段必须保留原样，故逐段编码后再拼接。
+        """
+        seg = [""] * 12
+        seg[0] = str(tid)
+        seg[1] = (extend.get("area") or "").strip()
+        seg[2] = (extend.get("by") or "").strip()
+        seg[3] = (extend.get("class") or "").strip()
+        seg[4] = (extend.get("lang") or "").strip()
+        seg[5] = (extend.get("letter") or "").strip()
+        try:
+            p = int(pg) if pg else 1
+        except Exception:
+            p = 1
+        if p > 1:
+            seg[8] = str(p)
+        seg[11] = (extend.get("year") or "").strip()
+        # 逐段编码：safe='' 确保 / 等也被编码；"-" 作为段间分隔符不参与编码
+        enc = [urllib.parse.quote(s, safe="") for s in seg]
+        return "%s/vodshow/%s.html" % (self.site_url, "-".join(enc))
+
+    # 真实分页信息：<div class="rg10">2&nbsp;/&nbsp;16页</div>
+    # 注意：中间是 &nbsp; 实体（可能被解析成空格/\xa0），故用宽松匹配
+    _RE_PAGECNT = re.compile(
+        r"(\d+)\s*(?:&nbsp;|\xa0|\s)*/?(?:&nbsp;|\xa0|\s)*(\d+)\s*页", re.I)
+    # 真实总条数：<script>$('.hl-total').html('610');</script>
+    _RE_TOTAL = re.compile(r"hl-total'\)\.html\('(\d+)'\)", re.I)
+
+    def _page_info(self, html):
+        """返回 (总页数, 总条数)。源码实测，缺失时回退 1 / 0。"""
+        pc, total = 1, 0
+        if not html:
+            return pc, total
+        m = self._RE_PAGECNT.search(html)
+        if m:
+            cur, tot = int(m.group(1)), int(m.group(2))
+            if tot > 0:
+                pc = tot
+            elif cur > 0:
+                pc = cur
+        m = self._RE_TOTAL.search(html)
+        if m:
+            total = int(m.group(1))
+        return pc, total
 
     # ---------------- TVBox 接口 ----------------
 
@@ -273,29 +391,60 @@ class Spider(Spider):
 
     def categoryContent(self, tid, pg, filter, extend):
         page = int(pg) if pg else 1
-        # 真实分类 URL：/vodtype/{tid}.html
-        url = "%s/vodtype/%s.html" % (self.site_url, tid)
+        extend = extend or {}
+
+        # 判断是否带筛选条件（全部为空 = 无筛选）
+        has_filter = any((extend.get(k) or "").strip() for k in
+                         ("area", "by", "class", "lang", "letter", "year"))
+
+        if has_filter or page > 1:
+            # 真实筛选/翻页页：走 12 段式 vodshow
+            url = self._build_show_url(tid, page, extend)
+        else:
+            # 无任何筛选且第1页：沿用更简洁真实的分类页 /vodtype/{tid}.html
+            url = "%s/vodtype/%s.html" % (self.site_url, tid)
         self.log("category: %s" % url)
+
         html = self._fetch(url)
         videos = self._extract_videos(html)
-        self.log("  最终: %d 条" % len(videos))
+
+        # 无筛选请求失败时，回退到分类页，保证基础可用
+        if not videos and has_filter:
+            fb = "%s/vodtype/%s.html" % (self.site_url, tid)
+            self.log("  筛选无结果/失败，回退: %s" % fb)
+            html = self._fetch(fb)
+            videos = self._extract_videos(html)
+
+        pagecount, total = self._page_info(html)
+        if page > pagecount:
+            pagecount = page
+        self.log("  最终: %d 条 / 共%d页 / 总%d" % (len(videos), pagecount, total))
         return {
-            "list": videos, "page": page, "pagecount": 1,
-            "limit": 24, "total": len(videos),
+            "list": videos, "page": page, "pagecount": pagecount,
+            "limit": 24, "total": total or len(videos),
         }
 
     def searchContent(self, key, quick, pg="1"):
         page = int(pg) if pg else 1
         kw = urllib.parse.quote(key)
-        # 真实搜索 URL（源码实测两种形式均可，此处用路径式）
-        url = "%s/vodsearch/%s-------------.html" % (self.site_url, kw)
+        # 真实搜索 URL（源码实测）：
+        #   第1页 /vodsearch/{kw}-------------.html
+        #   分页   /vodsearch/{kw}----------{pg}---.html（页码落第 11 段）
+        if page > 1:
+            url = "%s/vodsearch/%s----------%d---.html" % (
+                self.site_url, kw, page)
+        else:
+            url = "%s/vodsearch/%s-------------.html" % (self.site_url, kw)
         self.log("search: %s" % url)
         html = self._fetch(url)
         videos = self._extract_videos(html)
-        self.log("  最终: %d 条" % len(videos))
+        pagecount, total = self._page_info(html)
+        if page > pagecount:
+            pagecount = page
+        self.log("  最终: %d 条 / 共%d页" % (len(videos), pagecount))
         return {
-            "list": videos, "page": page, "pagecount": 1,
-            "limit": 24, "total": len(videos),
+            "list": videos, "page": page, "pagecount": pagecount,
+            "limit": 24, "total": total or len(videos),
         }
 
     def searchContentPage(self, key, quick, pg="1"):
@@ -380,6 +529,44 @@ class Spider(Spider):
             elif "演员" in label or "主演" in label:
                 actor = ", ".join(names)
 
+        # --- 影片参数区（info-parameter）：类型/上映/语言/更新 等 ---
+        vod_class, publish, lang = "", "", ""
+        pm = _RE_PARAM_WRAP.search(html)
+        if pm:
+            for li in _RE_PARAM_LI.finditer(pm.group(1)):
+                label = self._clean(li.group(1)).rstrip("：:")
+                val = self._clean(li.group(2))
+                if not val:
+                    continue
+                if label == "类型":
+                    tags = [self._clean(x) for x in
+                            re.findall(r'<a[^>]*>(.*?)</a>', li.group(2),
+                                       re.S | re.I)]
+                    vod_class = ",".join([x for x in tags if x])
+                elif label == "上映":
+                    publish = val
+                elif label == "语言":
+                    lang = val
+
+        # 年份/地区优先取参数区，缺失时回退 this-desc-info
+        pm2 = self._param_simple(html, "年份")
+        if pm2:
+            year = pm2
+        pm3 = self._param_simple(html, "地区")
+        if pm3:
+            area = pm3
+
+        # 上映/语言/类型附加到简介尾部（TVBox 无独立字段，合并展示）
+        extras = []
+        if vod_class:
+            extras.append("类型: " + vod_class)
+        if publish:
+            extras.append("上映: " + publish)
+        if lang:
+            extras.append("语言: " + lang)
+        if extras:
+            content = content + "\n" + " | ".join(extras)
+
         # --- 线路 + 剧集 ---
         lines = self._parse_play_lines(html)
         if not lines:
@@ -401,10 +588,24 @@ class Spider(Spider):
             "vod_year":     year,
             "vod_area":     area,
             "vod_score":    score,
+            "vod_class":    vod_class,
             "vod_remarks":  remarks or ("%d条线路" % len(lines)),
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url":  "$$$".join(play_url),
         }]}
+
+    def _param_simple(self, html, label):
+        """从 info-parameter 区取纯文本字段（如 年份/地区）。"""
+        pm = _RE_PARAM_WRAP.search(html)
+        if not pm:
+            return ""
+        for li in _RE_PARAM_LI.finditer(pm.group(1)):
+            lb = self._clean(li.group(1)).rstrip("：:")
+            if lb == label:
+                # 类型等含 <a> 的字段取全部文本
+                val = self._clean(li.group(2))
+                return val
+        return ""
 
     def _parse_play_lines(self, html):
         """按源码真实结构解析线路名 + 剧集（顺序严格一一对应）。"""
