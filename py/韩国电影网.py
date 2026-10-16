@@ -1,7 +1,7 @@
 # coding=utf-8
 """
 韩国电影网 shukanbaoxw.com | TVBox Python 爬虫
-严格基于网站真实源码结构编写（macCMS + ewave 模板 a_0004）
+网站结构（macCMS + ewave 模板 a_0004）
 分类第1页 URL 固定为 /vodshow/{tid}-----------.html（11个短横线）
 分页跟随真实分页链接，不拼第2页+ URL。
 """
@@ -179,6 +179,29 @@ _RE_DIRECTOR = re.compile(
     r'<span[^>]*class="[^"]*text-muted[^"]*">导演：</span>([\s\S]*?)</p>',
     re.S | re.I)
 
+# 类型：<span>类型：</span><a>国产剧</a>&nbsp;<a>国产</a>...<span class="split-line">
+_RE_TYPE = re.compile(
+    r'<span[^>]*class="[^"]*text-muted[^"]*">类型：</span>([\s\S]*?)<span[^>]*class="[^"]*split-line[^"]*"',
+    re.S | re.I)
+
+# 地区：<span>地区：</span><a>大陆</a>
+_RE_AREA = re.compile(
+    r'<span[^>]*class="[^"]*text-muted[^"]*">地区：</span>\s*<a[^>]*>([^<]+)</a>',
+    re.I)
+
+# 年份：<span>年份：</span><a>2026</a>
+_RE_YEAR = re.compile(
+    r'<span[^>]*class="[^"]*text-muted[^"]*">年份：</span>\s*<a[^>]*>([^<]+)</a>',
+    re.I)
+
+# 更新：<span>更新：</span>2026-10-15 21:36:03
+_RE_UPDATE = re.compile(
+    r'<span[^>]*class="[^"]*text-muted[^"]*">更新：</span>\s*([^<\n]+)',
+    re.I)
+
+# 语言：对白语言为国语
+_RE_LANG = re.compile(r'对白语言为([^。<]+)', re.I)
+
 _RE_SCORE = re.compile(
     r'<span[^>]*class="[^"]*score[^"]*raty-score-num[^"]*"[^>]*>([\d.]+)</span>',
     re.I)
@@ -188,6 +211,11 @@ _RE_PLAYLIST_BLOCK = re.compile(
     re.S | re.I)
 _RE_EPISODE = re.compile(
     r'<li[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([^<]*)</a>', re.S | re.I)
+
+# 线路名：<div class="playlist-slide"><ul>...<a href="#playlist1">高清云播</a>...</ul></div>
+_RE_PLAYLIST_SLIDE = re.compile(
+    r'<div[^>]*class="[^"]*playlist-slide[^"]*"[^>]*>([\s\S]*?)</div>',
+    re.S | re.I)
 
 _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{.*?\})\s*</script>', re.S)
 
@@ -419,6 +447,7 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
+        # 标题
         name = ""
         m = _RE_H1.search(html)
         if m:
@@ -436,6 +465,7 @@ class Spider(Spider):
                 name = self._clean(m.group(1).split("_")[0].split("-")[0])
         name = re.sub(r"\s*\(\d{4}\)\s*$", "", name).strip() or vod_id
 
+        # 封面
         pic = self.default_pic
         m = _RE_DETAIL_PIC.search(html)
         if m:
@@ -445,6 +475,7 @@ class Spider(Spider):
             if m2:
                 pic = m2.group(1)
 
+        # 简介
         content = ""
         m = _RE_DESC_FULL.search(html)
         if m:
@@ -468,23 +499,60 @@ class Spider(Spider):
 
         content = INTRO_PREFIX + "\n" + content if content else INTRO_PREFIX
 
+        # 主演
         actor = ""
         m = _RE_ACTOR.search(html)
         if m:
             names = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
             actor = " ".join(self._clean(x) for x in names if self._clean(x))
 
+        # 导演
         director = ""
         m = _RE_DIRECTOR.search(html)
         if m:
             names = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
             director = " ".join(self._clean(x) for x in names if self._clean(x))
 
+        # 类型
+        type_name = ""
+        m = _RE_TYPE.search(html)
+        if m:
+            names = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
+            type_name = " ".join(self._clean(x) for x in names if self._clean(x))
+
+        # 地区
+        area = ""
+        m = _RE_AREA.search(html)
+        if m:
+            area = self._clean(m.group(1))
+
+        # 年份
+        year = ""
+        m = _RE_YEAR.search(html)
+        if m:
+            year = self._clean(m.group(1))
+
+        # 更新时间
+        update_time = ""
+        m = _RE_UPDATE.search(html)
+        if m:
+            update_time = self._clean(m.group(1))
+
+        # 语言
+        lang = ""
+        m = _RE_LANG.search(html)
+        if m:
+            lang = self._clean(m.group(1))
+        if not lang:
+            lang = "国语"
+
+        # 评分
         score = ""
         m = _RE_SCORE.search(html)
         if m:
             score = m.group(1)
 
+        # 选集
         episodes = []
         m = _RE_PLAYLIST_BLOCK.search(html)
         if m:
@@ -500,6 +568,21 @@ class Spider(Spider):
 
         play_url = "#".join("%s$%s" % (n, h) for n, h in episodes)
 
+        # 线路名：从详情页 playlist-slide 解析（真实：<a>高清云播</a>）
+        play_from = ""
+        m = _RE_PLAYLIST_SLIDE.search(html)
+        if m:
+            names = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
+            names = [self._clean(n) for n in names if self._clean(n)]
+            if names:
+                play_from = "$$$".join(names)
+        if not play_from:
+            play_from = "高清云播"
+
+        # 备注：优先网页“更新”时间，否则集数
+        remarks = update_time if update_time else (
+            "%d集" % len(episodes) if len(episodes) > 1 else "")
+
         return {"list": [{
             "vod_id":       vod_id,
             "vod_name":     name,
@@ -508,8 +591,13 @@ class Spider(Spider):
             "vod_actor":    actor,
             "vod_director": director,
             "vod_score":    score,
-            "vod_remarks":  "%d集" % len(episodes) if len(episodes) > 1 else "",
-            "vod_play_from": "ffm3u8",
+            "vod_year":     year,
+            "vod_area":     area,
+            "vod_lang":     lang,
+            "vod_class":    type_name,
+            "type_name":    type_name,
+            "vod_remarks":  remarks,
+            "vod_play_from": play_from,
             "vod_play_url":  play_url,
         }]}
 
