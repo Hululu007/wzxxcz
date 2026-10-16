@@ -4,10 +4,12 @@
 
 严格依据网页真实源码写：
   1. 播放页源码里 var player_aaaa = {...}
-  2. 其中 "url" 字段就是最终播放地址（网页里 xiguam3u8.js 把它直接塞给 iframe，
+  2. 其中 "url" 字段是播放地址的入口（网页里 xiguam3u8.js 把它直接塞给 iframe，
      iframe 里 JXplayer.js 再把它直接赋给 video.src，交给 Hls.js）
-  3. JXplayer.js 不做任何 302 跟随、域名替换、加密——原样使用 url
-  4. 所以 Python 端也照做：原样把 player_aaaa.url 交给播放器
+  3. 实测：svip.xgplay17.com 会 302 跳到 vip17.jimxtc.com，
+     真正的 m3u8 在 vip17.jimxtc.com（master playlist，含 #EXT-X-STREAM-INF）
+  4. 为兼容不跟 302 的 TVBox 内核，Python 端主动跟一次 302，
+     把最终 vip17 地址返回给播放器（选项 B）
 """
 import re
 import sys
@@ -428,10 +430,32 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # -------- 播放 --------
-    # 严格照网页源码：player_aaaa.url 原样交给播放器
-    # 网页端 xiguam3u8.js 把这个 url 直接塞给 iframe，JXplayer.js 再赋给 video.src
-    # 没有任何 302 跟随、域名替换、二次请求
+    # -------- 播放（选项 B：Python 端主动跟一次 302）--------
+    # ★ 修改点 1：新增 _resolve_302() 辅助函数
+    def _resolve_302(self, url, referer=""):
+        """
+        对 svip.xgplay17.com/.../index.m3u8 这类 302 跳板地址主动跟一次，
+        返回最终 vip17.jimxtc.com 的 m3u8 地址。
+        若中途失败或没有跳转，原样返回。
+        """
+        if not url:
+            return url
+        try:
+            rsp = self._fetch(url, timeout=10, headers={
+                "User-Agent": UA,
+                "Accept": "*/*",
+                "Referer": referer or self.site_url + "/",
+            })
+            if rsp is None:
+                return url
+            final_url = getattr(rsp, "url", "") or ""
+            if final_url and final_url != url and final_url.startswith("http"):
+                self.log("  302 跟随后: %s" % final_url[:180])
+                return final_url
+        except Exception as e:
+            self.log("  302 跟随失败，仍用原地址: %s" % e)
+        return url
+
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -452,16 +476,19 @@ class Spider(Spider):
                     self.log("  player_aaaa 解析失败: %s" % e)
 
         if api_url:
+            # ★ 修改点 2：主动跟 302，把最终 m3u8 地址交给播放器
+            final_url = self._resolve_302(api_url, referer=play_page)
+
             res = {
                 "parse": 0,
                 "playUrl": "",
-                "url": api_url,
+                "url": final_url,
                 "header": {
                     "User-Agent": UA,
                     "Referer": play_page,
                 },
             }
-            self.log("  => 播放地址: %s" % api_url[:180])
+            self.log("  => 播放地址: %s" % final_url[:180])
         else:
             res = {
                 "parse": 1,
