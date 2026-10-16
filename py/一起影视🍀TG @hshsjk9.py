@@ -1,11 +1,12 @@
 # coding=utf-8
 """
-一起影视 yiqiys.com | TVBox Python 爬虫 (V1.0)
+一起影视 yiqiys.com | TVBox Python 爬虫 (V1.1)
 关键:
   - MacCMS 标准模板, 结构固定
   - 分类页: /show/{tid}-{area}-{by}-{lang}--{page}---{year}.html
   - 详情页: /detail/{id}.html, 从 player_data 直接提取 m3u8 直链
   - 简介添加指定前缀
+  - vod_remarks 显示状态, vod_class + type_name 双保险显示类型
   - 所有正则均来自真实源码, 不猜测
 """
 import re
@@ -168,6 +169,9 @@ _RE_INTRO = re.compile(
     re.I)
 
 # 元信息（均按真实标签后紧跟内容的模式）
+# 状态: <p class="data"><span class="data2">状态：</span><span class="data3">更新至第16集</span></p>
+_RE_STATUS = re.compile(
+    r'状态：</span>\s*<span[^>]*>([^<]+)</span>', re.I)
 _RE_YEAR = re.compile(r'年份：</span>\s*(\d{4})')
 _RE_AREA = re.compile(r'国家：</span>\s*([^<\s]+)')
 # 类型: <p class="data"><span class="data2">类型：</span><a href="/show/12-----------.html">国产剧</a></p>
@@ -448,6 +452,15 @@ class Spider(Spider):
             content = INTRO_PREFIX
 
         # 元信息
+        # 状态: 更新至第16集
+        status_val = ""
+        try:
+            m = _RE_STATUS.search(html)
+            if m:
+                status_val = self._clean(m.group(1))
+        except Exception:
+            pass
+
         year = ""
         try:
             m = _RE_YEAR.search(html)
@@ -510,6 +523,7 @@ class Spider(Spider):
             self.log("  剧集解析失败: %s" % e)
 
         self.log("  剧集: %s" % {k: len(v) for k, v in groups.items()})
+        self.log("  状态: %s | 类型: %s" % (status_val, class_val))
 
         if not groups:
             return {"list": []}
@@ -519,6 +533,9 @@ class Spider(Spider):
         for line_name, eps in groups.items():
             play_from.append(line_name)
             play_url.append("#".join("%s$%s" % (n, h) for n, h in eps))
+
+        # vod_remarks 优先用状态, 无状态时回退到线路数
+        remarks = status_val if status_val else ("%d条线路" % len(groups))
 
         return {"list": [{
             "vod_id": vod_id,
@@ -530,7 +547,8 @@ class Spider(Spider):
             "vod_year": year,
             "vod_area": area_val,
             "vod_class": class_val,
-            "vod_remarks": "%d条线路" % len(groups),
+            "type_name": class_val,
+            "vod_remarks": remarks,
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url":  "$$$".join(play_url),
         }]}
