@@ -1,14 +1,12 @@
 # coding=utf-8
 """
-一起影视 yiqiys.com | TVBox Python 爬虫 (V1.2)
+一起影视 yiqiys.com | TVBox Python 爬虫 
 关键:
   - MacCMS 标准模板, 结构固定
   - 分类页: /show/{tid}-{area}-{by}-{lang}--{page}---{year}.html
   - 详情页: /detail/{id}.html, 从 player_data 直接提取 m3u8 直链
-  - 简介添加指定前缀
   - vod_remarks 显示状态, vod_class + type_name 双保险显示类型
   - vod_pubdate 显示更新日期
-  - 所有正则均来自真实源码, 不猜测
 """
 import re
 import sys
