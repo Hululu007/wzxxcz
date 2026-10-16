@@ -1,14 +1,16 @@
 # coding=utf-8
 """
-一起影视 yiqiys.com | TVBox Python 爬虫 (V1.5)
+一起影视 yiqiys.com | TVBox Python 爬虫 (V1.8)
 关键:
   - MacCMS 标准模板, 结构固定
   - 分类页: /show/{tid}-{area}-{by}-{lang}--{page}---{year}.html
+  - 分类筛选: 类型/地区/年份/语言/排序 (5 组, 均来自源码)
+  - 搜索页: /search/{keyword}----------{page}---.html (有页码)
+            /search/{keyword}-------------.html    (无页码)
   - 详情页: /detail/{id}.html, 从 player_data 直接提取 m3u8 直链
   - 简介添加指定前缀
-  - player_data 里 4 条线路 m3u8 分属 4 家 CDN (bfvvs/dytt-tvs/lzcdn/ukubf3),
-    全部带 Referer 防盗链, 必须用 m3u8 自身域名做 Referer 才能拿到视频分片,
-    否则会出现"只有声音没有画面"
+  - 详情页线路数量/名称/CDN 全由服务端动态决定, 全部动态解析, 不写死
+  - m3u8 全部托管在第三方 CDN, 统一用 m3u8 自身域名做 Referer
   - 所有正则均来自真实源码, 不猜测
 """
 import re
@@ -100,6 +102,15 @@ _AREAS_SHORT = [
     {"n": "韩国", "v": "韩国"}, {"n": "日本", "v": "日本"},
 ]
 
+# 语言选项 (从分类页源码 <ul><li><span>语言：</span>... 提取)
+_LANGS = [
+    {"n": "全部", "v": ""},
+    {"n": "国语", "v": "国语"}, {"n": "英语", "v": "英语"},
+    {"n": "粤语", "v": "粤语"}, {"n": "韩语", "v": "韩语"},
+    {"n": "日语", "v": "日语"}, {"n": "法语", "v": "法语"},
+    {"n": "德语", "v": "德语"}, {"n": "其它", "v": "其它"},
+]
+
 # 从 /show/5-----------.html / /show/12-----------.html 源码提取
 _FILTERS_MAP = {
     "dianying": [
@@ -134,6 +145,7 @@ for c in CLASSES:
          "value": _FILTERS_MAP.get(key, [{"n": "全部", "v": ""}])},
         {"key": "area",  "name": "地区", "value": areas},
         {"key": "year",  "name": "年份", "value": _YEARS},
+        {"key": "lang",  "name": "语言", "value": _LANGS},
         {"key": "sort",  "name": "排序", "value": _SORTS},
     ]
 
@@ -186,6 +198,7 @@ _RE_ACTOR = re.compile(r'主演：</span>([\s\S]*?)</p>')
 
 # 播放线路块: <h4>...<i class="...iconfontplay2"></i>&nbsp;红牛云播</h4>
 #              <ul class="stui-content__playlist clearfix">...</ul>
+# 注: 站点线路数量/名称均由服务端动态决定, 正则按 order 顺序遍历所有块
 _RE_PLAY_BLOCK = re.compile(
     r'iconfontplay2[^>]*></i>&nbsp;([^<]+?)</h4>\s*'
     r'<ul\s+class="stui-content__playlist clearfix">([\s\S]*?)</ul>',
@@ -197,7 +210,8 @@ _RE_EPISODE = re.compile(
     re.I)
 
 # 播放页 player_data 里的 url 字段
-#   源码: "url":"https:\/\/hn.bfvvs.com\/play\/e3197M9b\/index.m3u8"
+#   源码: "url":"https:\/\/xxx.cdn.com\/...\/index.m3u8"
+#   CDN 域名不固定, 由站点后端按线路动态分配
 _RE_PLAYER_URL = re.compile(r'"url"\s*:\s*"([^"]+)"')
 
 
@@ -324,19 +338,31 @@ class Spider(Spider):
         return 1
 
     # 源码 URL 拆解:
-    #   /show/6-----------.html               (无筛选)
-    #   /show/6-大陆----------2026.html        (area+year)
-    #   /show/6-大陆-------2---2026.html       (area+page+year)
-    #   /show/6-大陆-time---------2026.html    (area+sort+year)
+    #   /show/6-----------.html                        (无筛选)
+    #   /show/6-大陆----------2026.html                 (area+year)
+    #   /show/6-大陆-------2---2026.html                (area+page+year)
+    #   /show/6-大陆-time---------2026.html             (area+sort+year)
+    #   /show/6-大陆---国语-------2026.html              (area+lang+year)
     # 12 字段: [tid, area, by, "", lang, "", "", "", page, "", "", year]
-    def _build_show_url(self, tid, area="", year="", by="", page=1):
+    def _build_show_url(self, tid, area="", year="", by="", lang="", page=1):
         parts = [""] * 12
         parts[0] = str(tid)
         parts[1] = urllib.parse.quote(area) if area else ""
         parts[2] = by or ""
+        parts[4] = urllib.parse.quote(lang) if lang else ""
         parts[8] = str(page) if page and int(page) > 1 else ""
         parts[11] = year or ""
         return "%s/show/%s.html" % (self.site_url, "-".join(parts))
+
+    # 搜索 URL 拆解 (来自搜索结果页源码分页栏):
+    #   无页码: /search/{keyword}-------------.html          (13个-)
+    #   有页码: /search/{keyword}----------{page}---.html    (10个- + page + 3个-)
+    def _build_search_url(self, key, page=1):
+        enc = urllib.parse.quote(key)
+        if page and int(page) > 1:
+            return "%s/search/%s----------%d---.html" % (
+                self.site_url, enc, int(page))
+        return "%s/search/%s-------------.html" % (self.site_url, enc)
 
     def homeContent(self, filter=False):
         return {"class": CLASSES, "filters": FILTERS}
@@ -369,8 +395,10 @@ class Spider(Spider):
         area = extend.get("area") or ""
         year = extend.get("year") or ""
         by   = extend.get("sort") or ""
+        lang = extend.get("lang") or ""
 
-        url = self._build_show_url(use_tid, area=area, year=year, by=by, page=page)
+        url = self._build_show_url(
+            use_tid, area=area, year=year, by=by, lang=lang, page=page)
         self.log("category: %s" % url)
         html = self._fetch(url)
         self.log("  HTML 长度: %d" % len(html))
@@ -387,19 +415,16 @@ class Spider(Spider):
     def searchContent(self, key, quick, pg="1"):
         self._warm_up()
         page = int(pg) if pg else 1
-        keyword = urllib.parse.quote(key)
-        url = "%s/search/%s-------------.html" % (self.site_url, keyword)
-        if page > 1:
-            url += "?page=%d" % page
-
+        url = self._build_search_url(key, page)
         self.log("search: %s" % url)
         html = self._fetch(url)
         self.log("  HTML 长度: %d" % len(html))
         videos = self._extract_videos(html)
+        pagecount = self._page_count(html)
         return {
             "list": videos, "page": page,
-            "pagecount": self._page_count(html),
-            "limit": 24, "total": 999,
+            "pagecount": pagecount,
+            "limit": 24, "total": pagecount * 24,
         }
 
     def searchContentPage(self, key, quick, pg="1"):
@@ -518,6 +543,7 @@ class Spider(Spider):
             pass
 
         # 播放列表 (按 <h4>线路</h4><ul>剧集</ul> 顺序提取)
+        # 注: 站点线路数量/名称动态, 全部保留, 不写死任何一条
         groups = {}
         try:
             for m in _RE_PLAY_BLOCK.finditer(html):
@@ -590,12 +616,8 @@ class Spider(Spider):
             self._play_cache[play_page] = (now, res)
             return res
 
-        # player_data 里的 "url":"https:\/\/hn.bfvvs.com\/play\/xxx\/index.m3u8"
-        # 4 条线路的域名参考:
-        #   红牛 hnm3u8    -> hn.bfvvs.com
-        #   天堂 dyttm3u8  -> vip.dytt-tvs.com
-        #   量子 lzm3u8    -> v.lzcdn27.com
-        #   优酷 ukm3u8    -> ukzy.ukubf3.com
+        # player_data 里的 "url":"https:\/\/xxx.cdn.com\/...\/index.m3u8"
+        # 域名由站点后端按线路动态分配, 不写死任何 CDN
         m3u8_url = ""
         try:
             m = _RE_PLAYER_URL.search(html)
@@ -610,9 +632,9 @@ class Spider(Spider):
             self.log("  player_data 解析失败: %s" % e)
 
         if m3u8_url:
-            # ===== 关键: Referer 用 m3u8 自身域名 =====
-            # 4 家 CDN 均带防盗链, 用站点域名做 Referer 会被拒,
-            # 表现就是"只有声音没有画面"
+            # 关键: 一律用 m3u8 自身域名做 Referer,
+            # 第三方 CDN 都带防盗链, 用站点域名做 Referer 会被拒,
+            # 表现为"只有声音没有画面"。对任何线路都通用, 不写死
             try:
                 p = urllib.parse.urlparse(m3u8_url)
                 m3u8_referer = "%s://%s/" % (p.scheme, p.netloc)
