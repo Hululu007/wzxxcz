@@ -1,12 +1,15 @@
 # coding=utf-8
 """
-一起影视 yiqiys.com | TVBox Python 爬虫 
+一起影视 yiqiys.com | TVBox Python 爬虫 (V1.5)
 关键:
   - MacCMS 标准模板, 结构固定
   - 分类页: /show/{tid}-{area}-{by}-{lang}--{page}---{year}.html
   - 详情页: /detail/{id}.html, 从 player_data 直接提取 m3u8 直链
-  - vod_remarks 显示状态, vod_class + type_name 双保险显示类型
-  - vod_pubdate 显示更新日期
+  - 简介添加指定前缀
+  - player_data 里 4 条线路 m3u8 分属 4 家 CDN (bfvvs/dytt-tvs/lzcdn/ukubf3),
+    全部带 Referer 防盗链, 必须用 m3u8 自身域名做 Referer 才能拿到视频分片,
+    否则会出现"只有声音没有画面"
+  - 所有正则均来自真实源码, 不猜测
 """
 import re
 import sys
@@ -173,7 +176,8 @@ _RE_STATUS = re.compile(
     r'状态：</span>\s*<span[^>]*>([^<]+)</span>', re.I)
 _RE_YEAR = re.compile(r'年份：</span>\s*(\d{4})')
 # 更新: <p class="data"><span class="data2">更新：</span>2026-10-16</p>
-_RE_UPDATE = re.compile(r'更新：</span>\s*(\d{4}-\d{2}-\d{2})')
+_RE_UPDATE = re.compile(
+    r'更新：</span>\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2})')
 _RE_AREA = re.compile(r'国家：</span>\s*([^<\s]+)')
 # 类型: <p class="data"><span class="data2">类型：</span><a href="/show/12-----------.html">国产剧</a></p>
 _RE_CLASS = re.compile(r'类型：</span>\s*<a[^>]*>([^<]+)</a>')
@@ -193,6 +197,7 @@ _RE_EPISODE = re.compile(
     re.I)
 
 # 播放页 player_data 里的 url 字段
+#   源码: "url":"https:\/\/hn.bfvvs.com\/play\/e3197M9b\/index.m3u8"
 _RE_PLAYER_URL = re.compile(r'"url"\s*:\s*"([^"]+)"')
 
 
@@ -533,7 +538,8 @@ class Spider(Spider):
             self.log("  剧集解析失败: %s" % e)
 
         self.log("  剧集: %s" % {k: len(v) for k, v in groups.items()})
-        self.log("  状态: %s | 更新: %s | 类型: %s" % (status_val, update_val, class_val))
+        self.log("  状态: [%s] | 更新: [%s] | 类型: [%s]" % (
+            status_val, update_val, class_val))
 
         if not groups:
             return {"list": []}
@@ -559,6 +565,8 @@ class Spider(Spider):
             "vod_class": class_val,
             "type_name": class_val,
             "vod_pubdate": update_val,
+            "vod_date":    update_val,
+            "vod_note":    update_val,
             "vod_remarks": remarks,
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url":  "$$$".join(play_url),
@@ -583,6 +591,11 @@ class Spider(Spider):
             return res
 
         # player_data 里的 "url":"https:\/\/hn.bfvvs.com\/play\/xxx\/index.m3u8"
+        # 4 条线路的域名参考:
+        #   红牛 hnm3u8    -> hn.bfvvs.com
+        #   天堂 dyttm3u8  -> vip.dytt-tvs.com
+        #   量子 lzm3u8    -> v.lzcdn27.com
+        #   优酷 ukm3u8    -> ukzy.ukubf3.com
         m3u8_url = ""
         try:
             m = _RE_PLAYER_URL.search(html)
@@ -597,14 +610,25 @@ class Spider(Spider):
             self.log("  player_data 解析失败: %s" % e)
 
         if m3u8_url:
+            # ===== 关键: Referer 用 m3u8 自身域名 =====
+            # 4 家 CDN 均带防盗链, 用站点域名做 Referer 会被拒,
+            # 表现就是"只有声音没有画面"
+            try:
+                p = urllib.parse.urlparse(m3u8_url)
+                m3u8_referer = "%s://%s/" % (p.scheme, p.netloc)
+            except Exception:
+                m3u8_referer = self.site_url + "/"
+
             self.log("  => 直链 m3u8: %s" % m3u8_url[:200])
+            self.log("  => Referer: %s" % m3u8_referer)
+
             res = {
                 "parse": 0,
                 "playUrl": "",
                 "url": m3u8_url,
                 "header": {
                     "User-Agent": UA,
-                    "Referer": self.site_url + "/",
+                    "Referer": m3u8_referer,
                 },
             }
             self._play_cache[play_page] = (now, res)
