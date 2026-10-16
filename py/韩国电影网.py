@@ -1,7 +1,9 @@
 # coding=utf-8
 """
 韩国电影网 shukanbaoxw.com | TVBox Python 爬虫
-网站结构（macCMS + ewave 模板 a_0004）
+严格基于网站真实源码结构编写（macCMS + ewave 模板 a_0004）
+分类第1页 URL 固定为 /vodshow/{tid}-----------.html（11个短横线）
+分页跟随真实分页链接，不拼第2页+ URL。
 """
 import re
 import sys
@@ -58,7 +60,6 @@ DEFAULT_PIC = HOST + "/template/a_0004/img/load.gif"
 
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
-# 顶级分类（导航栏 /vodtype/{id}.html）
 CLASSES = [
     {"type_id": "1",  "type_name": "电影"},
     {"type_id": "2",  "type_name": "电视剧"},
@@ -67,7 +68,6 @@ CLASSES = [
     {"type_id": "20", "type_name": "短剧"},
 ]
 
-# 子分类（来自各分类筛选页“按分类”）
 _SUB_CLASS = {
     "1":  [("全部", "1"), ("动作片", "6"), ("喜剧片", "7"), ("爱情片", "8"),
            ("科幻片", "9"), ("恐怖片", "10"), ("剧情片", "11"),
@@ -82,11 +82,9 @@ _SUB_CLASS = {
     "20": [("全部", "20")],
 }
 
-# 年份（所有分类通用）
 _YEARS = [{"n": "全部", "v": ""}] + \
          [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]
 
-# 地区（每个分类不同，来自各自筛选页“按地区”）
 _AREAS = {
     "1": ["全部", "大陆", "香港", "台湾", "美国", "法国", "英国", "日本",
           "韩国", "德国", "泰国", "印度", "意大利", "西班牙", "加拿大", "其他"],
@@ -100,7 +98,6 @@ _AREAS = {
            "泰国", "英国", "新加坡", "其他"],
 }
 
-# 剧情（每个分类不同，来自各自筛选页“按剧情”）
 _GENRES = {
     "1":  ["全部", "喜剧", "爱情", "恐怖", "动作", "科幻", "剧情", "战争",
            "警匪", "犯罪", "动画", "奇幻", "武侠", "冒险", "枪战", "悬疑",
@@ -142,7 +139,6 @@ for c in CLASSES:
 
 # ===================== 正则（全部对应真实源码） =====================
 
-# ---- 列表卡片（首页/分类页）：ewave-vodlist__thumb + thumb-link ----
 _RE_CARD = re.compile(
     r'<div[^>]*class="[^"]*ewave-vodlist__thumb[^"]*"[^>]*?'
     r'title="([^"]*)"[^>]*?'
@@ -153,7 +149,6 @@ _RE_CARD = re.compile(
     r'<a[^>]*class="thumb-link"[^>]*href="([^"]+)"',
     re.S | re.I)
 
-# ---- 搜索卡片（ewave-vodlist__media 结构）----
 _RE_SEARCH_CARD = re.compile(
     r'<li[^>]*class="[^"]*active[^"]*"[^>]*>'
     r'[\s\S]*?'
@@ -165,22 +160,18 @@ _RE_SEARCH_CARD = re.compile(
     r'<span[^>]*class="[^"]*pic-text[^"]*"[^>]*>([^<]*)</span>',
     re.S | re.I)
 
-# ---- 详情页 ----
 _RE_H1 = re.compile(r'<h1[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)</h1>', re.I)
 _RE_DETAIL_PIC = re.compile(
     r'<div[^>]*class="[^"]*ewave-content__thumb[^"]*"[\s\S]*?'
     r'data-original="([^"]+)"', re.S | re.I)
 
-# 简介：详情页 #desc 里的 <p class="col-pd">
 _RE_DESC_FULL = re.compile(
     r'<div[^>]*id="desc"[\s\S]*?<p[^>]*class="[^"]*col-pd[^"]*"[^>]*>([\s\S]*?)</p>',
     re.S | re.I)
-# 简介：详情页 .desc 短简介
 _RE_DESC_SHORT = re.compile(
     r'<p[^>]*class="[^"]*desc[^"]*"[^>]*>[\s\S]*?简介：</span>([\s\S]*?)<a\s+href="#desc"',
     re.S | re.I)
 
-# 主演/导演（详情页 <p class="data">）
 _RE_ACTOR = re.compile(
     r'<span[^>]*class="[^"]*text-muted[^"]*">主演：</span>([\s\S]*?)</p>',
     re.S | re.I)
@@ -188,23 +179,24 @@ _RE_DIRECTOR = re.compile(
     r'<span[^>]*class="[^"]*text-muted[^"]*">导演：</span>([\s\S]*?)</p>',
     re.S | re.I)
 
-# 评分：<span class="score text-red raty-score-num">9.0</span>
 _RE_SCORE = re.compile(
     r'<span[^>]*class="[^"]*score[^"]*raty-score-num[^"]*"[^>]*>([\d.]+)</span>',
     re.I)
 
-# 选集：<ul class="ewave-content__playlist ..."><li ...><a href="/vodplay/xxx-1-1.html">第01集</a></li>
 _RE_PLAYLIST_BLOCK = re.compile(
     r'<ul[^>]*class="[^"]*ewave-content__playlist[^"]*"[^>]*>([\s\S]*?)</ul>',
     re.S | re.I)
 _RE_EPISODE = re.compile(
     r'<li[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([^<]*)</a>', re.S | re.I)
 
-# 播放页 player_aaaa
 _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{.*?\})\s*</script>', re.S)
 
-# 分页：<span class="num">2/12</span>
 _RE_PAGE_NUM = re.compile(r'<span class="num">(\d+)/(\d+)</span>', re.I)
+
+_RE_PAGE_BLOCK = re.compile(
+    r'<ul[^>]*class="[^"]*ewave-page[^"]*"[^>]*>([\s\S]*?)</ul>',
+    re.S | re.I)
+_RE_PAGE_LINK = re.compile(r'<a[^>]*href="([^"]+)"[^>]*>(\d+)</a>', re.I)
 
 
 class Spider(Spider):
@@ -226,6 +218,7 @@ class Spider(Spider):
         }
         self.default_pic = DEFAULT_PIC
         self._play_cache = {}
+        self._page_links_cache = {}
         self.log("init: site=%s" % self.site_url)
 
     # ---------- 基础 ----------
@@ -270,7 +263,6 @@ class Spider(Spider):
 
     # ---------- 列表解析 ----------
     def _extract_list_videos(self, html):
-        """首页/分类页卡片解析"""
         videos = []
         seen = set()
         if not html:
@@ -288,7 +280,6 @@ class Spider(Spider):
         return videos
 
     def _extract_search_videos(self, html):
-        """搜索结果页卡片解析（ewave-vodlist__media 结构）"""
         videos = []
         seen = set()
         if not html:
@@ -316,6 +307,24 @@ class Spider(Spider):
                 pass
         return 1
 
+    def _extract_page_links(self, html):
+        result = {}
+        if not html:
+            return result
+        m = _RE_PAGE_BLOCK.search(html)
+        if not m:
+            return result
+        block = m.group(1)
+        for href, num in _RE_PAGE_LINK.findall(block):
+            href = href.replace("&amp;", "&")
+            if href.startswith("/"):
+                href = self.site_url + href
+            try:
+                result[int(num)] = href
+            except Exception:
+                pass
+        return result
+
     # ---------- 首页/分类/搜索 ----------
     def homeContent(self, filter=False):
         return {"class": CLASSES, "filters": FILTERS}
@@ -323,6 +332,14 @@ class Spider(Spider):
     def homeVideoContent(self):
         html = self._fetch(self.site_url + "/")
         return {"list": self._extract_list_videos(html)}
+
+    def _build_base_url(self, tid, extend):
+        """第1页 URL：/vodshow/{tid}-----------.html （分类id + 11个短横线）"""
+        tid = str(tid)
+        sub = extend.get("class", "") or ""
+        if sub:
+            tid = str(sub)
+        return "%s/vodshow/%s-----------.html" % (self.site_url, tid)
 
     def categoryContent(self, tid, pg, filter, extend):
         page = int(pg) if pg else 1
@@ -334,31 +351,41 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        # URL 模板（真实）：
-        # /vodshow/{分类}-{地区}-{剧情}-{字母}-{排序}-{页码}-{年份}.html
-        # 空段留空，段间 '-'。第1页显式写 1。
-        tid = str(tid)
-        sub = extend.get("class", "") or ""
-        if sub:
-            tid = str(sub)
+        base_url = self._build_base_url(tid, extend)
+        self.log("category base: %s" % base_url)
 
-        area  = extend.get("area", "") or ""
-        genre = extend.get("genre", "") or ""
-        sort  = extend.get("sort", "") or ""
-        year  = extend.get("year", "") or ""
+        # 第1页
+        if page <= 1:
+            html = self._fetch(base_url)
+            videos = self._extract_list_videos(html)
+            pagecount = self._page_count(html)
+            self._page_links_cache[str(tid)] = self._extract_page_links(html)
+            self.log("  page1: %d 条, 共 %d 页" % (len(videos), pagecount))
+            return {
+                "list": videos, "page": 1, "pagecount": pagecount,
+                "limit": 36, "total": pagecount * 36,
+            }
 
-        area_enc  = urllib.parse.quote(area) if area else ""
-        genre_enc = urllib.parse.quote(genre) if genre else ""
+        # 第2页+：从缓存里找真实 href
+        links = self._page_links_cache.get(str(tid), {})
+        real_url = links.get(page)
 
-        # 7 段：分类-地区-剧情-字母-排序-页码-年份
-        url = "%s/vodshow/%s-%s-%s---%s-%d-%s.html" % (
-            self.site_url, tid, area_enc, genre_enc, sort, page, year)
+        if not real_url:
+            html1 = self._fetch(base_url)
+            links = self._extract_page_links(html1)
+            self._page_links_cache[str(tid)] = links
+            real_url = links.get(page)
 
-        self.log("category: %s" % url)
-        html = self._fetch(url)
+        if not real_url:
+            self.log("category: 未找到第 %d 页链接" % page)
+            return {"list": [], "page": page, "pagecount": 1,
+                    "limit": 36, "total": 0}
+
+        self.log("category real: %s" % real_url)
+        html = self._fetch(real_url)
         videos = self._extract_list_videos(html)
         pagecount = self._page_count(html)
-
+        self.log("  page%d: %d 条" % (page, len(videos)))
         return {
             "list": videos, "page": page, "pagecount": pagecount,
             "limit": 36, "total": pagecount * 36,
@@ -366,7 +393,6 @@ class Spider(Spider):
 
     def searchContent(self, key, quick, pg="1"):
         page = int(pg) if pg else 1
-        # 真实搜索 URL：/vodsearch/{关键词URL编码}----------{页码}---.html
         kw = urllib.parse.quote(key)
         url = "%s/vodsearch/%s----------%d---.html" % (self.site_url, kw, page)
         self.log("search: %s" % url)
@@ -393,15 +419,12 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # 标题：<h1 class="title"><span>老舅</span><span class="score...">2.0</span></h1>
         name = ""
         m = _RE_H1.search(html)
         if m:
             raw = m.group(1)
-            # 去掉评分 span
             raw = re.sub(r'<span[^>]*class="[^"]*score[^"]*"[^>]*>[\s\S]*?</span>',
                          "", raw)
-            # 取第一个 <span> 内的文本
             ms = re.search(r"<span[^>]*>([\s\S]*?)</span>", raw)
             if ms:
                 name = self._clean(ms.group(1))
@@ -413,7 +436,6 @@ class Spider(Spider):
                 name = self._clean(m.group(1).split("_")[0].split("-")[0])
         name = re.sub(r"\s*\(\d{4}\)\s*$", "", name).strip() or vod_id
 
-        # 封面
         pic = self.default_pic
         m = _RE_DETAIL_PIC.search(html)
         if m:
@@ -423,12 +445,10 @@ class Spider(Spider):
             if m2:
                 pic = m2.group(1)
 
-        # 简介：优先完整版 #desc，其次 .desc，最后 meta description
         content = ""
         m = _RE_DESC_FULL.search(html)
         if m:
             content = self._clean(m.group(1))
-            # 去掉“《xxx》上映于...剧情简介：”之前的套话
             if "剧情简介：" in content:
                 content = content.split("剧情简介：", 1)[1]
             elif "剧情:" in content:
@@ -448,27 +468,23 @@ class Spider(Spider):
 
         content = INTRO_PREFIX + "\n" + content if content else INTRO_PREFIX
 
-        # 主演
         actor = ""
         m = _RE_ACTOR.search(html)
         if m:
             names = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
             actor = " ".join(self._clean(x) for x in names if self._clean(x))
 
-        # 导演
         director = ""
         m = _RE_DIRECTOR.search(html)
         if m:
             names = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
             director = " ".join(self._clean(x) for x in names if self._clean(x))
 
-        # 评分
         score = ""
         m = _RE_SCORE.search(html)
         if m:
             score = m.group(1)
 
-        # 选集（短剧/电视剧/电影都是同一套 ewave-content__playlist）
         episodes = []
         m = _RE_PLAYLIST_BLOCK.search(html)
         if m:
@@ -533,7 +549,6 @@ class Spider(Spider):
             self._play_cache[play_page] = (now, res)
             return res
 
-        # 兜底：交给 TVBox 嗅探
         res = {"parse": 1, "playUrl": "", "url": play_page,
                "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
         self._play_cache[play_page] = (now, res)
@@ -549,7 +564,7 @@ class Spider(Spider):
         return False
 
     def destroy(self):
-        pass
+        self._page_links_cache.clear()
 
     def close(self):
         self.destroy()
