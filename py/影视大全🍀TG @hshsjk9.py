@@ -2,10 +2,12 @@
 """
 影视大全 iysdq1.com | TVBox Python 爬虫
 
-播放链路（浏览器直接验证过）：
-  播放页 player_aaaa.url = https://svip.xgplay17.com/{path}/index.m3u8
-  真实可播直链            = https://vip17.jimxtc.com/{path}/index.m3u8
-  （两者路径完全相同，svip 会 302 到 vip17）
+严格依据网页真实源码写：
+  1. 播放页源码里 var player_aaaa = {...}
+  2. 其中 "url" 字段就是最终播放地址（网页里 xiguam3u8.js 把它直接塞给 iframe，
+     iframe 里 JXplayer.js 再把它直接赋给 video.src，交给 Hls.js）
+  3. JXplayer.js 不做任何 302 跟随、域名替换、加密——原样使用 url
+  4. 所以 Python 端也照做：原样把 player_aaaa.url 交给播放器
 """
 import re
 import sys
@@ -162,6 +164,7 @@ _RE_EPISODE = re.compile(
 _RE_PAGE_INFO = re.compile(r'<div class="rg10">\s*(\d+)\s*&nbsp;/\s*&nbsp;(\d+)\s*页', re.I)
 _RE_TOTAL = re.compile(r"\$\('\.hl-total'\)\.html\('(\d+)'\)", re.I)
 
+# 播放页源码里的 player_aaaa：var player_aaaa={...}</script>
 _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>', re.I)
 
 
@@ -426,6 +429,9 @@ class Spider(Spider):
         }]}
 
     # -------- 播放 --------
+    # 严格照网页源码：player_aaaa.url 原样交给播放器
+    # 网页端 xiguam3u8.js 把这个 url 直接塞给 iframe，JXplayer.js 再赋给 video.src
+    # 没有任何 302 跟随、域名替换、二次请求
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -433,7 +439,6 @@ class Spider(Spider):
         if play_page in self._play_cache:
             return self._play_cache[play_page]
 
-        # 1. 从播放页源码解析 player_aaaa.url（= svip 地址）
         html = self._fetch_text(play_page)
         api_url = ""
         if html:
@@ -446,24 +451,17 @@ class Spider(Spider):
                 except Exception as e:
                     self.log("  player_aaaa 解析失败: %s" % e)
 
-        # 2. 域名替换：svip.xgplay17.com -> vip17.jimxtc.com（路径完全相同）
-        #    依据：浏览器直接打开 https://vip17.jimxtc.com/{path}/index.m3u8 可播
-        real_url = api_url
-        if real_url and "svip.xgplay17.com" in real_url:
-            real_url = real_url.replace("svip.xgplay17.com", "vip17.jimxtc.com")
-            self.log("  域名替换: %s" % real_url[:180])
-
-        if real_url:
+        if api_url:
             res = {
                 "parse": 0,
                 "playUrl": "",
-                "url": real_url,
+                "url": api_url,
                 "header": {
                     "User-Agent": UA,
                     "Referer": play_page,
                 },
             }
-            self.log("  => 播放地址: %s" % real_url[:180])
+            self.log("  => 播放地址: %s" % api_url[:180])
         else:
             res = {
                 "parse": 1,
