@@ -2,8 +2,8 @@
 """
 韩国电影网 shukanbaoxw.com | TVBox Python 爬虫
 网站结构（macCMS + ewave 模板 a_0004）
-分类第1页 URL 固定为 /vodshow/{tid}-----------.html（11个短横线）
-分页跟随真实分页链接，不拼第2页+ URL。
+分类 URL 精确拼装（12 段 11 个短横线）：
+  /vodshow/{分类}-{地区}-{排序}-{剧情}-{语言}-{字母}---{页码}---{年份}.html
 """
 import re
 import sys
@@ -113,6 +113,12 @@ _GENRES = {
            "奇幻", "剧情", "历史", "经典", "乡村", "情景", "商战", "网剧", "其他"],
 }
 
+# 语言（来自真实筛选区）
+_LANGS = ["全部", "国语", "英语", "粤语", "闽南语", "韩语", "日语", "其它"]
+
+# 字母（来自真实筛选区）
+_LETTERS = ["全部"] + list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
 _SORTS = [
     {"n": "按时间", "v": "time"},
     {"n": "按人气", "v": "hits"},
@@ -133,6 +139,12 @@ for c in CLASSES:
         {"key": "genre", "name": "剧情",
          "value": [{"n": x, "v": ("" if x == "全部" else x)}
                    for x in _GENRES.get(tid, ["全部"])]},
+        {"key": "lang", "name": "语言",
+         "value": [{"n": x, "v": ("" if x == "全部" else x)}
+                   for x in _LANGS]},
+        {"key": "letter", "name": "字母",
+         "value": [{"n": x, "v": ("" if x == "全部" else x)}
+                   for x in _LETTERS]},
         {"key": "sort", "name": "排序", "value": _SORTS},
     ]
 
@@ -361,13 +373,50 @@ class Spider(Spider):
         html = self._fetch(self.site_url + "/")
         return {"list": self._extract_list_videos(html)}
 
-    def _build_base_url(self, tid, extend):
-        """第1页 URL：/vodshow/{tid}-----------.html （分类id + 11个短横线）"""
+    def _build_url(self, tid, extend, page=1):
+        """分类 URL 精确拼装（12 段 11 个短横线）：
+        /vodshow/{分类}-{地区}-{排序}-{剧情}-{语言}-{字母}---{页码}---{年份}.html
+        真实例：
+          2-----------.html                  无筛选
+          2-%E5%A4%A7%E9%99%86----------.html  地区=大陆
+          2---%E5%8F%A4%E8%A3%85--------.html  剧情=古装
+          2-----------2026.html              年份=2026
+          2--hits---------.html              排序=hits
+          2----%E5%9B%BD%E8%AF%AD-------.html  语言=国语
+          2-----A------.html                 字母=A
+          2--------2---.html                 第2页
+        """
         tid = str(tid)
         sub = extend.get("class", "") or ""
         if sub:
             tid = str(sub)
-        return "%s/vodshow/%s-----------.html" % (self.site_url, tid)
+
+        area   = extend.get("area", "") or ""
+        sort   = extend.get("sort", "") or ""
+        genre  = extend.get("genre", "") or ""
+        lang   = extend.get("lang", "") or ""
+        letter = extend.get("letter", "") or ""
+        year   = extend.get("year", "") or ""
+        page_seg = str(page) if page > 1 else ""
+
+        area_enc  = urllib.parse.quote(area) if area else ""
+        genre_enc = urllib.parse.quote(genre) if genre else ""
+        lang_enc  = urllib.parse.quote(lang) if lang else ""
+
+        # 段序：0分类 1地区 2排序 3剧情 4语言 5字母 6空 7空 8页码 9空 10空 11年份
+        # 模板：%s-%s-%s-%s-%s-%s---%s---%s
+        # 短横线数：5 + 3 + 3 = 11 个
+        return "%s/vodshow/%s-%s-%s-%s-%s-%s---%s---%s.html" % (
+            self.site_url,
+            tid,        # 段0 分类
+            area_enc,   # 段1 地区
+            sort,       # 段2 排序
+            genre_enc,  # 段3 剧情
+            lang_enc,   # 段4 语言
+            letter,     # 段5 字母
+            page_seg,   # 段8 页码
+            year,       # 段11 年份
+        )
 
     def categoryContent(self, tid, pg, filter, extend):
         page = int(pg) if pg else 1
@@ -379,41 +428,14 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        base_url = self._build_base_url(tid, extend)
-        self.log("category base: %s" % base_url)
+        url = self._build_url(tid, extend, page)
+        self.log("category: %s" % url)
 
-        # 第1页
-        if page <= 1:
-            html = self._fetch(base_url)
-            videos = self._extract_list_videos(html)
-            pagecount = self._page_count(html)
-            self._page_links_cache[str(tid)] = self._extract_page_links(html)
-            self.log("  page1: %d 条, 共 %d 页" % (len(videos), pagecount))
-            return {
-                "list": videos, "page": 1, "pagecount": pagecount,
-                "limit": 36, "total": pagecount * 36,
-            }
-
-        # 第2页+：从缓存里找真实 href
-        links = self._page_links_cache.get(str(tid), {})
-        real_url = links.get(page)
-
-        if not real_url:
-            html1 = self._fetch(base_url)
-            links = self._extract_page_links(html1)
-            self._page_links_cache[str(tid)] = links
-            real_url = links.get(page)
-
-        if not real_url:
-            self.log("category: 未找到第 %d 页链接" % page)
-            return {"list": [], "page": page, "pagecount": 1,
-                    "limit": 36, "total": 0}
-
-        self.log("category real: %s" % real_url)
-        html = self._fetch(real_url)
+        html = self._fetch(url)
         videos = self._extract_list_videos(html)
         pagecount = self._page_count(html)
-        self.log("  page%d: %d 条" % (page, len(videos)))
+        self.log("  %d 条, 共 %d 页" % (len(videos), pagecount))
+
         return {
             "list": videos, "page": page, "pagecount": pagecount,
             "limit": 36, "total": pagecount * 36,
