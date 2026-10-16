@@ -2,7 +2,7 @@
 """
 影视大全 iysdq1.com | TVBox Python 爬虫
 
-全部解析规则均严格依据站点真实网页源码编写，无任何臆测：
+网站结构：
   - 分类导航  ：/ → 推荐 ; /vodtype/{1..5}.html → 电影/电视剧/综艺/动漫/短剧
   - 筛选      ：/vodshow/{id}-{area}-{by}-{class}-{lang}-{letter}--{page}---{year}.html
                 （12 段式，段位定义见文件中部 FILTERS 注释，全部来自真实 href 实测）
