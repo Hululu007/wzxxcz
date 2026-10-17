@@ -7,6 +7,7 @@
   - 选集通过 <a href="/play/xxx" data-episode="N"> 属性提取（Alpine.js 组件写法）
   - 真实 m3u8 藏于 JS 取流接口，静态 HTML 拿不到；playerContent 做多路尝试，
     拿不到则返回播放页由上层嗅探/解析
+  - 播放/嗅探/代理 header 不带 Referer（CDN 拒绝携带 Referer 的分片请求）
 """
 import re
 import json
@@ -462,18 +463,28 @@ class Spider:
                 pass
         return ""
 
+    def _play_header(self):
+        """
+        播放/嗅探/代理统一使用的 header。
+        bttwo 的 CDN 会拒绝携带 Referer 的分片请求，因此这里只保留 UA，不带 Referer/Origin。
+        """
+        return {
+            "User-Agent": UA,
+            "Accept": "*/*",
+        }
+
     def playerContent(self, flag, ids, vipFlags=None):
         url = ids[0] if isinstance(ids, (list, tuple)) and ids else ids
         url = str(url or "").strip()
         if not url:
-            return {"parse": 0, "url": "", "header": dict(self.header)}
+            return {"parse": 0, "url": "", "header": self._play_header()}
         if not url.startswith("http"):
             url = self._u(url)
         self.log("player: %s" % url)
 
         u = url.lower()
         if u.endswith((".m3u8", ".mp4", ".flv", ".mkv", ".ts", ".avi")) or "m3u8" in u:
-            return {"parse": 0, "url": url, "header": dict(self.header)}
+            return {"parse": 0, "url": url, "header": self._play_header()}
 
         html = self._get(url, referer=self.site + "/")
         found = self._extract_m3u8(html, url)
@@ -483,17 +494,17 @@ class Spider:
             elif not found.startswith("http"):
                 found = self._u(found)
             self.log("  => 直链 m3u8: %s" % found[:160])
-            return {"parse": 0, "url": found, "header": dict(self.header)}
+            return {"parse": 0, "url": found, "header": self._play_header()}
 
-        self.log("  => 未找到直链，交由上层嗅探")
-        return {"parse": 1, "url": url, "header": dict(self.header)}
+        self.log("  => 未找到直链，交由上层嗅探（header 已去 Referer）")
+        return {"parse": 1, "url": url, "header": self._play_header()}
 
     def localProxy(self, param):
         u = param.get("url", "") if isinstance(param, dict) else ""
         if not u:
             return [403, "text/plain", b"", None]
         u = self._u(u)
-        h = dict(self.header)
+        h = self._play_header()
         if self.s is not None:
             try:
                 r = self.s.get(u, headers=h, timeout=15)
