@@ -122,12 +122,11 @@ for c in CLASSES:
 # ===================== 正则 =====================
 # 【严格遵循豆花的多级兜底正则】
 _RE_CARD = re.compile(
-    r'href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*>'
-    r'[\s\S]{0,300}?'  # 兼容复杂的嵌套换行
+    r'<a[^>]*?href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*>\s*'
     r'<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
     re.S | re.I)
 
-_RE_HREF = re.compile(r'href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"', re.I)
+_RE_HREF = re.compile(r'<a[^>]*?href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*?class="thumbnail"', re.I)
 _RE_IMG = re.compile(
     r'<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
     re.S | re.I)
@@ -335,16 +334,10 @@ class Spider(Spider):
         year = str(extend.get("year", "0")).strip() or "0"
         sort = str(extend.get("sort", "0")).strip() or "0"
 
-        # fofo22 的关键修复：第一页无参数时，绝不能带 ?page=1，否则拦截
-        if cls == "0" and area == "0" and year == "0" and sort == "0":
-            if page == 1:
-                url = "%s/%s" % (self.site_url, tid)
-            else:
-                url = "%s/%s?page=%d" % (self.site_url, tid, page)
-        else:
-            url = "%s/%s/%s-%s-%s-%s" % (self.site_url, tid, cls, area, year, sort)
-            if page > 1:
-                url += "?page=%d" % page
+        # 【核心修复】严格遵循网页真实源码，永远请求 /{tid}/0-0-0-0，第一页不带 page 参数
+        url = "%s/%s/%s-%s-%s-%s" % (self.site_url, tid, cls, area, year, sort)
+        if page > 1:
+            url += "?page=%d" % page
 
         self.log("category: %s" % url)
         html = self._fetch(url)
