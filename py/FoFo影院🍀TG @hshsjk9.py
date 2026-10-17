@@ -1,11 +1,11 @@
 # coding=utf-8
 """
-FoFo影院 fofo22.com | TVBox Python 爬虫 (遵循源码破局方法论)
+FoFo影院 fofo22.com | TVBox Python 爬虫 (精准破局版)
 关键:
-  - 列表页：直接解析 <h2> 中的真实 href 和标题（A类直出）
-  - 详情页：解密 var urlList
-  - 播放页：POST /source/ 获取真实 m3u8 直链
-  - 简介添加指定前缀
+  - 全局暴力正则（不依赖 <li> 或 <div>，只要网页有视频链接就能抓）
+  - 防御性日志输出（拿不到数据时直接打印网页头部，暴露拦截真相）
+  - 解密 var urlList
+  - POST /source/ 获取 m3u8 直链
 """
 import re
 import sys
@@ -226,45 +226,35 @@ class Spider(Spider):
                     for k, val in v.items()}
         return v
 
-    # ==================== 遵循方法论：直接照源码提取 ====================
+    # ==================== 全局暴力正则提取 ====================
     def _extract_videos(self, html):
         videos = []
-        seen = set()
         if not html:
-            self.log("  HTML 为空")
+            self.log("  [错误] 获取到的 HTML 为空！")
             return videos
 
-        # 按照源码，列表都在 <li> 标签内
-        blocks = re.findall(r'<li>([\s\S]*?)</li>', html)
-        self.log("  提取到 <li> 块: %d 个" % len(blocks))
+        # 放弃任何 <li> 包裹，直接用正则提取所有满足条件的主标题 A 标签
+        # 结构如: <h2><a href="/dianshiju/135611" target="_blank">孩有孩样</a></h2>
+        matches = re.findall(r'<h2>\s*<a\s+href="(/[a-zA-Z]+/\d+)"[^>]*>([^<]+)</a>\s*</h2>', html)
+        
+        if not matches:
+            self.log("  [警告] 没有找到任何视频！可能是被拦截。HTML头部返回: \n%s" % html[:300])
+            return videos
 
-        for block in blocks:
-            # 源码中真实结构：<h2><a href="/dianshiju/135611" target="_blank">孩有孩样</a></h2>
-            m_h2 = re.search(r'<h2>\s*<a\s+href="([^"]+)"[^>]*>([^<]+)</a>\s*</h2>', block)
-            if not m_h2:
+        seen = set()
+        for href, name in matches:
+            if href in seen:
                 continue
-            
-            href = m_h2.group(1).strip()
-            name = m_h2.group(2).strip()
-            
-            if not href or href in seen:
-                continue
-
-            # 找封面图
-            pic = ""
-            m_img = re.search(r'<img[^>]+src="([^"]+)"', block)
-            if m_img:
-                pic = m_img.group(1)
-
             seen.add(href)
+            
             videos.append({
                 "vod_id":      href,
                 "vod_name":    self._clean(name),
-                "vod_pic":     self._fix_url(pic) or self.default_pic,
+                "vod_pic":     self.default_pic,  # 先用默认图，防止因为图片错乱导致被丢弃
                 "vod_remarks": "",
             })
-
-        self.log("  成功提取出 %d 条视频" % len(videos))
+            
+        self.log("  [成功] 提取到 %d 条视频" % len(videos))
         return videos
 
     def _page_count(self, html):
@@ -308,18 +298,18 @@ class Spider(Spider):
         year = str(extend.get("year", "0")).strip() or "0"
         sort = str(extend.get("sort", "0")).strip() or "0"
 
-        # URL 严格按照 fofo22 网页源码
         url = "%s/%s/%s-%s-%s-%s" % (self.site_url, tid, cls, area, year, sort)
         if page > 1:
             url += "?page=%d" % page
 
-        self.log("category: %s" % url)
+        self.log("category 请求 URL: %s" % url)
         html = self._fetch(url)
+        
+        # 关键：在这里打印响应日志，用户可以直接看 TVBox 日志
         self.log("  HTML 长度: %d" % len(html))
-
+        
         videos = self._extract_videos(html)
         pagecount = self._page_count(html)
-        self.log("  最终: %d 条, 总页数: %d" % (len(videos), pagecount))
 
         return {
             "list": videos, "page": page, "pagecount": pagecount,
@@ -331,7 +321,7 @@ class Spider(Spider):
         page = int(pg) if pg else 1
         keyword = urllib.parse.quote(key)
         url = "%s/search?q=%s&page=%d" % (self.site_url, keyword, page)
-        self.log("search: %s" % url)
+        self.log("search 请求 URL: %s" % url)
         html = self._fetch(url)
         self.log("  HTML 长度: %d" % len(html))
         videos = self._extract_videos(html)
