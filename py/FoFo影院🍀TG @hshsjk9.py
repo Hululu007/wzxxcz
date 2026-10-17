@@ -132,11 +132,6 @@ for c in CLASSES:
          "value": [{"n": n, "v": v} for n, v in _SORTS]},
     ]
 
-_RE_CARD = re.compile(
-    r'<a\s+[^>]*?href="/((?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*?class="thumbnail"[^>]*>\s*'
-    r'<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
-    re.S | re.I)
-
 _RE_TITLE = re.compile(r'<h[12][^>]*class="product-title"[^>]*>([\s\S]*?)</h[12]>', re.I)
 _RE_COVER = re.compile(r'<img[^>]*?src="([^"]*)"[^>]*?class="thumb"', re.I)
 _RE_OG_IMAGE = re.compile(r'<meta[^>]*property="og:image"[^>]*content="([^"]*)"', re.I)
@@ -245,17 +240,39 @@ class Spider(Spider):
         seen = set()
         if not html:
             return videos
-        for m in _RE_CARD.finditer(html):
-            path, pic, name = m.group(1), m.group(2), m.group(3)
-            if path in seen:
+
+        # 严格按照源码，先剥离 <li>...</li> 块，再用精准特征去提取
+        lis = re.findall(r'<li>([\s\S]*?)</li>', html, re.S)
+        for li in lis:
+            # 找到带 href 的 a 标签
+            a_match = re.search(r'<a\s+href="(/[^"]+)"[^>]*>', li)
+            if not a_match:
                 continue
-            seen.add(path)
+            href = a_match.group(1)
+            if not re.search(r'/(dianying|dianshiju|zongyi|dongman)/\d+', href):
+                continue
+
+            # 提取图片和标题
+            img_match = re.search(r'<img[^>]+src="([^"]+)"[^>]*>', li)
+            title_match = re.search(r'<h2><a[^>]*>([^<]+)</a></h2>', li)
+            
+            if not title_match:
+                continue
+                
+            name = title_match.group(1)
+            pic = img_match.group(1) if img_match else ""
+            
+            if href in seen:
+                continue
+            seen.add(href)
+
             videos.append({
-                "vod_id":      "/" + path,
+                "vod_id":      href,
                 "vod_name":    self._clean(name),
                 "vod_pic":     self._fix_url(pic),
                 "vod_remarks": "",
             })
+
         self.log("  提取到 %d 条" % len(videos))
         return videos
 
@@ -285,24 +302,23 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        # ================= 核心修复点 =================
         cls = str(extend.get("class", ""))
         area = str(extend.get("area", ""))
         year = str(extend.get("year", ""))
         sort = str(extend.get("sort", ""))
 
-        # 严格按照源码：无任何筛选时，走真实的 /dianying 路径
-        if not cls and not area and not year and not sort:
-            url = "%s/%s?page=%d" % (self.site_url, tid, page)
-        else:
-            # 如果有筛选条件但缺失其他项，严格补全源码中真实的默认值 (地区1，年份2026)
-            cls = cls or "0"
-            area = area or "1"
-            year = year or "2026"
-            sort = sort or "0"
-            url = "%s/%s/%s-%s-%s-%s?page=%d" % (
-                self.site_url, tid, cls, area, year, sort, page)
-        # ==============================================
+        # 严格按照源码，全部默认参数为 0
+        if not cls:
+            cls = "0"
+        if not area:
+            area = "0"
+        if not year:
+            year = "0"
+        if not sort:
+            sort = "0"
+
+        url = "%s/%s/%s-%s-%s-%s?page=%d" % (
+            self.site_url, tid, cls, area, year, sort, page)
 
         self.log("category: %s" % url)
         html = self._fetch(url)
