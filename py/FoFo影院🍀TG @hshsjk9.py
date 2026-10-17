@@ -132,11 +132,6 @@ for c in CLASSES:
          "value": [{"n": n, "v": v} for n, v in _SORTS]},
     ]
 
-# 【修复】去掉强依赖 class="thumbnail"，完全兼容属性顺序和换行
-_RE_CARD = re.compile(
-    r'<a[^>]*?href="/((?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*?>\s*<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
-    re.S | re.I)
-
 _RE_TITLE = re.compile(r'<h[12][^>]*class="product-title"[^>]*>([\s\S]*?)</h[12]>', re.I)
 _RE_COVER = re.compile(r'<img[^>]*?src="([^"]*)"[^>]*?class="thumb"', re.I)
 _RE_OG_IMAGE = re.compile(r'<meta[^>]*property="og:image"[^>]*content="([^"]*)"', re.I)
@@ -146,7 +141,7 @@ _RE_A_TAG = re.compile(r'<a[^>]*>([^<]*)</a>', re.I)
 _RE_INTRO = re.compile(r'剧情简介：\s*<span>([\s\S]*?)</span>', re.I)
 _RE_OG_DESC = re.compile(r'<meta[^>]*property="og:description"[^>]*content="([^"]*)"', re.I)
 _RE_SCORE = re.compile(r'<span\s+class="rate">([\d.]+)</span>', re.I)
-_RE_URLLIST = re.compile(r'var\s+urlList\s*=\s*decryptDict\((\{[\s\S]*?\})\)\s*\$\(document\)', re.S)
+_RE_URLLIST = re.compile(r'var\s+urlList\s*=\s*decryptDict\((\{[\s\S]*?\})\)', re.S)
 _RE_LAST_PAGE = re.compile(r'尾页.*?page=(\d+)', re.S)
 
 
@@ -245,17 +240,36 @@ class Spider(Spider):
         seen = set()
         if not html:
             return videos
-        for m in _RE_CARD.finditer(html):
-            path, pic, name = m.group(1), m.group(2), m.group(3)
-            if path in seen:
+
+        # 【核心修复】先按 <li> 分块，再在块内按 <a>, <img>, <h2> 精准提取
+        for block in re.findall(r'<li>([\s\S]*?)</li>', html):
+            a_match = re.search(r'<a\s+href="(/[^"]+)"[^>]*>', block)
+            if not a_match:
                 continue
-            seen.add(path)
+            href = a_match.group(1)
+            if not re.search(r'/(dianying|dianshiju|zongyi|dongman)/\d+', href):
+                continue
+
+            img_match = re.search(r'<img[^>]+src="([^"]+)"[^>]*>', block)
+            title_match = re.search(r'<h2><a[^>]*>([^<]+)</a></h2>', block)
+            
+            if not title_match:
+                continue
+                
+            name = title_match.group(1)
+            pic = img_match.group(1) if img_match else ""
+            
+            if href in seen:
+                continue
+            seen.add(href)
+
             videos.append({
-                "vod_id":      "/" + path,
+                "vod_id":      href,
                 "vod_name":    self._clean(name),
                 "vod_pic":     self._fix_url(pic),
                 "vod_remarks": "",
             })
+            
         self.log("  提取到 %d 条" % len(videos))
         return videos
 
@@ -285,13 +299,24 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        # 严格按照源码：无参数时默认全为 0，对应 /dianshiju/0-0-0-0
-        cls = str(extend.get("class", "0"))
-        area = str(extend.get("area", "0"))
-        year = str(extend.get("year", "0"))
-        sort = str(extend.get("sort", "0"))
+        # 【核心修复】防止 TVBox 传 null 或空字符串导致 URL 拼接错误
+        cls = str(extend.get("class", "")).strip()
+        if not cls or cls == "None":
+            cls = "0"
+            
+        area = str(extend.get("area", "")).strip()
+        if not area or area == "None":
+            area = "0"
+            
+        year = str(extend.get("year", "")).strip()
+        if not year or year == "None":
+            year = "0"
+            
+        sort = str(extend.get("sort", "")).strip()
+        if not sort or sort == "None":
+            sort = "0"
 
-        # 首页第一页不能带 ?page=1，只有第二页及以上才带分页参数
+        # 严格按照源码：首页没有 ?page=1，从第二页才开始带参数
         if page == 1:
             url = "%s/%s/%s-%s-%s-%s" % (self.site_url, tid, cls, area, year, sort)
         else:
