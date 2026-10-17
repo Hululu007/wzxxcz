@@ -132,9 +132,9 @@ for c in CLASSES:
          "value": [{"n": n, "v": v} for n, v in _SORTS]},
     ]
 
-# 【重要修复】放宽列表匹配正则，不强制 class="thumbnail"，兼容任何换行和空白
 _RE_CARD = re.compile(
-    r'<a[^>]*?href="/((?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*?>\s*<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
+    r'<a\s+[^>]*?href="/((?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*?class="thumbnail"[^>]*>\s*'
+    r'<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
     re.S | re.I)
 
 _RE_TITLE = re.compile(r'<h[12][^>]*class="product-title"[^>]*>([\s\S]*?)</h[12]>', re.I)
@@ -285,21 +285,24 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
+        # ================= 核心修复点 =================
         cls = str(extend.get("class", ""))
         area = str(extend.get("area", ""))
         year = str(extend.get("year", ""))
         sort = str(extend.get("sort", ""))
 
-        # 【核心修复】如果没有筛选条件，直接访问大类首页，避免 0-0-0-0 导致报错
+        # 严格按照源码：无任何筛选时，走真实的 /dianying 路径
         if not cls and not area and not year and not sort:
             url = "%s/%s?page=%d" % (self.site_url, tid, page)
         else:
+            # 如果有筛选条件但缺失其他项，严格补全源码中真实的默认值 (地区1，年份2026)
             cls = cls or "0"
-            area = area or "1"     # 默认地区给 1（中国大陆），或者给 0
-            year = year or "2026"  # 默认年份给 2026
+            area = area or "1"
+            year = year or "2026"
             sort = sort or "0"
             url = "%s/%s/%s-%s-%s-%s?page=%d" % (
                 self.site_url, tid, cls, area, year, sort, page)
+        # ==============================================
 
         self.log("category: %s" % url)
         html = self._fetch(url)
