@@ -132,9 +132,9 @@ for c in CLASSES:
          "value": [{"n": n, "v": v} for n, v in _SORTS]},
     ]
 
+# 【重要修复】放宽列表匹配正则，不强制 class="thumbnail"，兼容任何换行和空白
 _RE_CARD = re.compile(
-    r'<a\s+[^>]*?href="/((?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*?class="thumbnail"[^>]*>\s*'
-    r'<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
+    r'<a[^>]*?href="/((?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*?>\s*<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
     re.S | re.I)
 
 _RE_TITLE = re.compile(r'<h[12][^>]*class="product-title"[^>]*>([\s\S]*?)</h[12]>', re.I)
@@ -285,13 +285,22 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        cls = str(extend.get("class") or "0")
-        area = str(extend.get("area") or "0")
-        year = str(extend.get("year") or "0")
-        sort = str(extend.get("sort") or "0")
+        cls = str(extend.get("class", ""))
+        area = str(extend.get("area", ""))
+        year = str(extend.get("year", ""))
+        sort = str(extend.get("sort", ""))
 
-        url = "%s/%s/%s-%s-%s-%s?page=%d" % (
-            self.site_url, tid, cls, area, year, sort, page)
+        # 【核心修复】如果没有筛选条件，直接访问大类首页，避免 0-0-0-0 导致报错
+        if not cls and not area and not year and not sort:
+            url = "%s/%s?page=%d" % (self.site_url, tid, page)
+        else:
+            cls = cls or "0"
+            area = area or "1"     # 默认地区给 1（中国大陆），或者给 0
+            year = year or "2026"  # 默认年份给 2026
+            sort = sort or "0"
+            url = "%s/%s/%s-%s-%s-%s?page=%d" % (
+                self.site_url, tid, cls, area, year, sort, page)
+
         self.log("category: %s" % url)
         html = self._fetch(url)
         videos = self._extract_videos(html)
@@ -434,7 +443,6 @@ class Spider(Spider):
         }
         m3u8 = ""
         try:
-            # 抓包明确显示为 POST 请求，且参数为 id
             rsp = self.fetch(api, headers=headers, timeout=20,
                              method='POST', data={"id": sid})
             if hasattr(rsp, "text"):
