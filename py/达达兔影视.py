@@ -5,8 +5,7 @@
   - 本站为 maccms(苹果CMS) + ewave/a_0013 模板，已关闭 JSON 接口(api.php 返回 closed)，全部走 HTML 解析
   - 列表页为 /vodshow/ 模式(带分页+筛选)，/vodtype/ 页无分页、仅板块聚合，故分类走 vodshow
   - 播放页为 maccms 标准 player_aaaa，url 为可直连的 m3u8(实测无需 Referer)
-  - 简介统一加上 INTRO_PREFIX
-实测结构(2026-10 抓取验证):
+实测结构:
   首页        : /                                  板块 + 卡片，卡片 data-original/data-background
   分类列表    : /vodshow/{id}--{sort}------{page}---.html
   分类+地区   : /vodshow/{id}-{area}-{sort}------{page}---.html
