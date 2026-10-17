@@ -2,10 +2,9 @@
 """
 FoFo影院 fofo22.com | TVBox Python 爬虫 
 关键:
-  - 修复分类页 0-0-0-0 导致的空数据问题
-  - 全局精准正则匹配
-  - 逆向 JS decryptDict 解密播放数据
-  - POST /source/ 获取 m3u8 直链
+  - 多级正则兜底解析列表
+  - 解密 var urlList 播放数据
+  - POST /source/ 获取 m3u8
 """
 import re
 import sys
@@ -13,7 +12,6 @@ import json
 import ast
 import time
 import urllib.parse
-import urllib.request
 
 sys.path.append('..')
 
@@ -76,26 +74,23 @@ CLASSES = [
     {"type_id": "dongman",   "type_name": "动漫"},
 ]
 
-_SORTS = [{"n": "按时间排序", "v": "0"},
-          {"n": "按人气排序", "v": "1"},
-          {"n": "按评分排序", "v": "2"}]
+_SORTS = [{"n": "按时间", "v": "0"},
+          {"n": "按人气", "v": "1"},
+          {"n": "按评分", "v": "2"}]
 
 _YEARS = [{"n": "全部", "v": "0"}] + \
          [{"n": str(y), "v": str(y)} for y in range(2026, 2004, -1)] + \
          [{"n": "其他", "v": "1"}]
 
 _AREAS = [
-    {"n": "全部", "v": "0"}, {"n": "中国大陆", "v": "1"},
-    {"n": "美国", "v": "2"}, {"n": "香港", "v": "3"},
-    {"n": "台湾", "v": "4"}, {"n": "日本", "v": "5"},
-    {"n": "韩国", "v": "6"}, {"n": "英国", "v": "7"},
-    {"n": "法国", "v": "8"}, {"n": "德国", "v": "9"},
-    {"n": "意大利", "v": "10"}, {"n": "西班牙", "v": "11"},
-    {"n": "印度", "v": "12"}, {"n": "泰国", "v": "13"},
-    {"n": "俄罗斯", "v": "14"}, {"n": "伊朗", "v": "15"},
-    {"n": "加拿大", "v": "16"}, {"n": "澳大利亚", "v": "17"},
-    {"n": "爱尔兰", "v": "18"}, {"n": "瑞典", "v": "19"},
-    {"n": "巴西", "v": "20"}, {"n": "丹麦", "v": "21"},
+    {"n": "全部", "v": "0"}, {"n": "中国大陆", "v": "1"}, {"n": "美国", "v": "2"},
+    {"n": "香港", "v": "3"}, {"n": "台湾", "v": "4"}, {"n": "日本", "v": "5"},
+    {"n": "韩国", "v": "6"}, {"n": "英国", "v": "7"}, {"n": "法国", "v": "8"},
+    {"n": "德国", "v": "9"}, {"n": "意大利", "v": "10"}, {"n": "西班牙", "v": "11"},
+    {"n": "印度", "v": "12"}, {"n": "泰国", "v": "13"}, {"n": "俄罗斯", "v": "14"},
+    {"n": "伊朗", "v": "15"}, {"n": "加拿大", "v": "16"}, {"n": "澳大利亚", "v": "17"},
+    {"n": "爱尔兰", "v": "18"}, {"n": "瑞典", "v": "19"}, {"n": "巴西", "v": "20"},
+    {"n": "丹麦", "v": "21"},
 ]
 
 _FILTERS_MAP = {
@@ -123,7 +118,21 @@ for c in CLASSES:
         {"key": "sort", "name": "排序", "value": _SORTS},
     ]
 
-# 详情页正则
+
+# ===================== 正则 =====================
+# 【严格遵循豆花的多级兜底正则】
+_RE_CARD = re.compile(
+    r'href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*>'
+    r'[\s\S]{0,300}?'  # 兼容复杂的嵌套换行
+    r'<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
+    re.S | re.I)
+
+_RE_HREF = re.compile(r'href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"', re.I)
+_RE_IMG = re.compile(
+    r'<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
+    re.S | re.I)
+
+# 详情页提取
 _RE_TITLE = re.compile(r'<h1[^>]*class="product-title"[^>]*>([\s\S]*?)</h1>', re.I)
 _RE_COVER = re.compile(r'<img[^>]*?src="([^"]*)"[^>]*?class="thumb"', re.I)
 _RE_OG_IMAGE = re.compile(r'<meta[^>]*property="og:image"[^>]*content="([^"]*)"', re.I)
@@ -227,33 +236,61 @@ class Spider(Spider):
                     for k, val in v.items()}
         return v
 
-    # ==================== 全局精准正则提取 ====================
+    # 严格遵循豆花的三级正则兜底
     def _extract_videos(self, html):
         videos = []
+        seen = set()
         if not html:
+            self.log("  HTML 为空")
             return videos
 
-        # 使用最稳健的跨行匹配正则
-        pattern = re.compile(
-            r'<a\s+href="(/(?:dianying|dianshiju|zongyi|dongman)/(\d+))"[^>]*class="thumbnail"[^>]*>.*?'
-            r'<img[^>]*src="([^"]*)"[^>]*alt="([^"]*)"[^>]*>.*?'
-            r'<div\s+class="note"><span>([^<]*)</span>',
-            re.DOTALL
-        )
-        seen = set()
-        for href, vid, pic, name, note in pattern.findall(html):
-            if vid in seen:
-                continue
-            seen.add(vid)
-            vod_name = name.strip() if name.strip() else vid
-            videos.append({
-                "vod_id": href.lstrip('/'),
-                "vod_name": self._clean(vod_name),
-                "vod_pic": self._fix_url(pic),
-                "vod_remarks": note.strip()
-            })
+        matches = _RE_CARD.findall(html)
+        self.log("  完整卡片: %d 条" % len(matches))
 
-        self.log("  提取到 %d 条视频" % len(videos))
+        if matches:
+            for href, pic, alt in matches:
+                href = href.replace("&amp;", "&")
+                if href in seen:
+                    continue
+                seen.add(href)
+                videos.append({
+                    "vod_id":      href,
+                    "vod_name":    self._clean(alt)[:100],
+                    "vod_pic":     self._fix_url(pic) or self.default_pic,
+                    "vod_remarks": "",
+                })
+            return videos
+
+        hrefs = _RE_HREF.findall(html)
+        imgs = _RE_IMG.findall(html)
+        self.log("  分开: href=%d img=%d" % (len(hrefs), len(imgs)))
+
+        if hrefs and imgs:
+            for i, href in enumerate(hrefs):
+                if href in seen:
+                    continue
+                seen.add(href)
+                pic, alt = ("", "")
+                if i < len(imgs):
+                    pic, alt = imgs[i]
+                videos.append({
+                    "vod_id":      href,
+                    "vod_name":    self._clean(alt)[:100] or href,
+                    "vod_pic":     self._fix_url(pic) or self.default_pic,
+                    "vod_remarks": "",
+                })
+            return videos
+
+        for href in hrefs:
+            if href in seen:
+                continue
+            seen.add(href)
+            videos.append({
+                "vod_id":      href,
+                "vod_name":    href.split("/")[-1].split("-")[0],
+                "vod_pic":     self.default_pic,
+                "vod_remarks": "",
+            })
         return videos
 
     def _page_count(self, html):
@@ -272,7 +309,8 @@ class Spider(Spider):
 
     def homeVideoContent(self):
         self._warm_up()
-        html = self._fetch(self.site_url + "/")
+        url = self.site_url + "/"
+        html = self._fetch(url)
         self.log("home HTML 长度: %d" % len(html))
         videos = self._extract_videos(html)
         return {"list": videos}
@@ -288,23 +326,33 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
+        for k in list(extend.keys()):
+            if extend[k] in ("", None, "全部"):
+                del extend[k]
+
         cls = str(extend.get("class", "0")).strip() or "0"
         area = str(extend.get("area", "0")).strip() or "0"
         year = str(extend.get("year", "0")).strip() or "0"
         sort = str(extend.get("sort", "0")).strip() or "0"
 
-        # 【核心修复】如果全为默认，直接访问 /tid?page=，否则访问 /tid/0-0-0-0
+        # fofo22 的关键修复：第一页无参数时，绝不能带 ?page=1，否则拦截
         if cls == "0" and area == "0" and year == "0" and sort == "0":
-            url = f"{self.site_url}/{tid}?page={page}"
+            if page == 1:
+                url = "%s/%s" % (self.site_url, tid)
+            else:
+                url = "%s/%s?page=%d" % (self.site_url, tid, page)
         else:
-            url = f"{self.site_url}/{tid}/{cls}-{area}-{year}-{sort}?page={page}"
+            url = "%s/%s/%s-%s-%s-%s" % (self.site_url, tid, cls, area, year, sort)
+            if page > 1:
+                url += "?page=%d" % page
 
-        self.log("category 请求 URL: %s" % url)
+        self.log("category: %s" % url)
         html = self._fetch(url)
         self.log("  HTML 长度: %d" % len(html))
 
         videos = self._extract_videos(html)
         pagecount = self._page_count(html)
+        self.log("  最终: %d 条, 总页数: %d" % (len(videos), pagecount))
 
         return {
             "list": videos, "page": page, "pagecount": pagecount,
@@ -315,8 +363,8 @@ class Spider(Spider):
         self._warm_up()
         page = int(pg) if pg else 1
         keyword = urllib.parse.quote(key)
-        url = f"{self.site_url}/search?q={keyword}&page={page}"
-        self.log("search 请求 URL: %s" % url)
+        url = "%s/search?q=%s&page=%d" % (self.site_url, keyword, page)
+        self.log("search: %s" % url)
         html = self._fetch(url)
         self.log("  HTML 长度: %d" % len(html))
         videos = self._extract_videos(html)
@@ -333,40 +381,46 @@ class Spider(Spider):
         if not ids:
             return {"list": []}
         vod_id = str(ids[0])
-        url = f"{self.site_url}/{vod_id}"
+        url = vod_id if vod_id.startswith("http") else self._fix_url(vod_id)
         self.log("detail: %s" % url)
 
         html = self._fetch(url)
+        self.log("  HTML 长度: %d" % len(html))
         if not html:
             return {"list": []}
 
-        name = vod_id
-        year = ""
+        # 标题
+        name = ""
         try:
             m = _RE_TITLE.search(html)
             if m:
-                title_html = m.group(1)
-                year_m = re.search(r'\((\d{4})\)', title_html)
-                if year_m:
-                    year = year_m.group(1)
-                name = re.sub(r'<[^>]+>', '', title_html).strip()
-                name = re.sub(r'\(\d{4}\)', '', name).strip()
-                name = re.sub(r'\d+\.\d+', '', name).strip()
+                name = re.sub(r'\s*<span[^>]*>.*?</span>', "", m.group(1), flags=re.S)
+                name = self._clean(name)
         except Exception:
             pass
+        if not name:
+            try:
+                m = re.search(r'<meta[^>]*property="og:title"[^>]*content="([^"]*)"', html, re.I)
+                if m:
+                    name = self._clean(m.group(1))
+            except Exception:
+                pass
+        name = re.sub(r"\s*\(\d{4}\)\s*$", "", name).strip() or vod_id
 
+        # 封面
         pic = self.default_pic
         try:
-            m = _RE_OG_IMAGE.search(html)
+            m = _RE_COVER.search(html)
             if m:
                 pic = self._fix_url(m.group(1))
             else:
-                m = _RE_COVER.search(html)
+                m = _RE_OG_IMAGE.search(html)
                 if m:
                     pic = self._fix_url(m.group(1))
         except Exception:
             pass
 
+        # 简介
         content = ""
         try:
             m = _RE_INTRO.search(html)
@@ -387,6 +441,7 @@ class Spider(Spider):
         else:
             content = INTRO_PREFIX
 
+        # 导演 / 主演
         director = ""
         try:
             m = _RE_DIRECTOR.search(html)
@@ -403,7 +458,15 @@ class Spider(Spider):
         except Exception:
             pass
 
-        # 剧集提取
+        score = ""
+        try:
+            m = _RE_SCORE.search(html)
+            if m:
+                score = m.group(1)
+        except Exception:
+            pass
+
+        # ===== 剧集解密 =====
         sources = []
         url_list = []
         try:
@@ -416,6 +479,8 @@ class Spider(Spider):
                 url_list = dec.get("url_list", [])
         except Exception as e:
             self.log("  剧集解析失败: %s" % e)
+
+        self.log("  线路: %s" % sources)
 
         if not sources or not url_list:
             return {"list": []}
@@ -449,73 +514,71 @@ class Spider(Spider):
             "vod_content": content,
             "vod_actor": actor,
             "vod_director": director,
-            "vod_year": year,
+            "vod_score": score,
             "vod_remarks": "%d条线路" % len(play_from),
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
     # -------- 播放 --------
-    def _fetch_m3u8(self, sid, referer):
-        source_api = f"{self.site_url}/source/"
-        post_headers = {
-            'User-Agent': UA,
-            'X-Requested-With': 'XMLHttpRequest',
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Referer': referer,
-        }
-        # 策略1：使用 urllib.request
-        try:
-            post_data = urllib.parse.urlencode({"id": sid}).encode('utf-8')
-            req = urllib.request.Request(source_api, data=post_data, headers=post_headers, method='POST')
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                url = resp.read().decode('utf-8').strip()
-                if url and url.startswith("http"):
-                    return url
-        except Exception:
-            pass
-
-        # 策略2：使用 self.fetch
-        try:
-            rsp = self.fetch(source_api, headers=post_headers, method='POST', data={"id": sid})
-            if rsp and hasattr(rsp, 'text') and rsp.text:
-                url = rsp.text.strip()
-                if url and url.startswith("http"):
-                    return url
-        except Exception:
-            pass
-
-        return ""
-
     def playerContent(self, flag, id, vipFlags):
         sid = str(id).strip()
-        if "$" in sid:
-            sid = sid.split("$")[-1]
+        self.log("player: flag=%s sid=%s" % (flag, sid))
 
-        if "/" in sid:
-            sid = sid.rsplit("/", 1)[-1]
+        now = int(time.time())
+        cache_key = "%s_%s" % (flag, sid)
+        if cache_key in self._play_cache:
+            ts, res = self._play_cache[cache_key]
+            if now - ts < 600:
+                return res
 
-        referer = self.site_url + "/"
-        
-        m3u8_url = self._fetch_m3u8(sid, referer)
+        if not sid:
+            return {"parse": 1, "playUrl": "", "url": "",
+                    "header": {"User-Agent": UA}}
 
-        if m3u8_url and ('.m3u8' in m3u8_url or '.mp4' in m3u8_url):
-            return {
+        api = self.site_url + "/source/"
+        headers = {
+            "User-Agent": UA,
+            "Referer": self.site_url + "/",
+            "X-Requested-With": "XMLHttpRequest",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "Accept": "*/*",
+            "Origin": self.site_url,
+        }
+        m3u8 = ""
+        try:
+            rsp = self.fetch(api, headers=headers, timeout=20,
+                             method='POST', data={"id": sid})
+            if hasattr(rsp, "text"):
+                m3u8 = (rsp.text or "").strip()
+            elif hasattr(rsp, "content"):
+                m3u8 = rsp.content.decode("utf-8", "ignore").strip()
+        except Exception as e:
+            self.log("source POST fail: %s" % e)
+
+        if m3u8 and (".m3u8" in m3u8 or ".mp4" in m3u8):
+            if m3u8.startswith("//"):
+                m3u8 = "https:" + m3u8
+            self.log("  => m3u8: %s" % m3u8[:160])
+            res = {
                 "parse": 0,
                 "playUrl": "",
-                "url": m3u8_url,
-                "header": self.headers
+                "url": m3u8,
+                "header": {
+                    "User-Agent": UA,
+                    "Referer": self.site_url + "/",
+                    "Origin": self.site_url,
+                },
             }
+            self._play_cache[cache_key] = (now, res)
+            return res
 
-        if not m3u8_url:
-            m3u8_url = f"{self.site_url}/{sid}"
-
-        return {
-            "parse": 1,
-            "playUrl": "",
-            "url": m3u8_url,
-            "header": self.headers
-        }
+        # 兜底：交给 TVBox 嗅探
+        self.log("  source 返回无效，走嗅探")
+        res = {"parse": 1, "playUrl": "", "url": self.site_url + "/",
+               "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
+        self._play_cache[cache_key] = (now, res)
+        return res
 
     def localProxy(self, param):
         return [200, "text/plain", b"", ""]
