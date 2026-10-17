@@ -1,10 +1,10 @@
 # coding=utf-8
 """
-FoFo影院 fofo22.com | TVBox Python 爬虫
+FoFo影院 fofo22.com | TVBox Python 爬虫 (严格参照豆花工业级容错架构)
 关键:
-  - 标准列表解析（多重正则兜底）
-  - 解密 var urlList = decryptDict({...})
-  - 简介添加指定前缀
+  - 预热机制获取 Cookie/头信息
+  - 列表解析多级降级兜底 (完整卡片 -> 拆解 href/img -> 纯 href)
+  - 解密 var urlList = decryptDict({...}) 
   - POST /source/ 获取 m3u8 直链
 """
 import re
@@ -83,17 +83,13 @@ _YEARS = [{"n": "全部", "v": "0"}] + \
          [{"n": "其他", "v": "1"}]
 
 _AREAS = [
-    {"n": "全部", "v": "0"},
-    {"n": "中国大陆", "v": "1"}, {"n": "美国", "v": "2"},
-    {"n": "香港", "v": "3"}, {"n": "台湾", "v": "4"},
-    {"n": "日本", "v": "5"}, {"n": "韩国", "v": "6"},
-    {"n": "英国", "v": "7"}, {"n": "法国", "v": "8"},
-    {"n": "德国", "v": "9"}, {"n": "意大利", "v": "10"},
-    {"n": "西班牙", "v": "11"}, {"n": "印度", "v": "12"},
-    {"n": "泰国", "v": "13"}, {"n": "俄罗斯", "v": "14"},
-    {"n": "伊朗", "v": "15"}, {"n": "加拿大", "v": "16"},
-    {"n": "澳大利亚", "v": "17"}, {"n": "爱尔兰", "v": "18"},
-    {"n": "瑞典", "v": "19"}, {"n": "巴西", "v": "20"},
+    {"n": "全部", "v": "0"}, {"n": "中国大陆", "v": "1"}, {"n": "美国", "v": "2"},
+    {"n": "香港", "v": "3"}, {"n": "台湾", "v": "4"}, {"n": "日本", "v": "5"},
+    {"n": "韩国", "v": "6"}, {"n": "英国", "v": "7"}, {"n": "法国", "v": "8"},
+    {"n": "德国", "v": "9"}, {"n": "意大利", "v": "10"}, {"n": "西班牙", "v": "11"},
+    {"n": "印度", "v": "12"}, {"n": "泰国", "v": "13"}, {"n": "俄罗斯", "v": "14"},
+    {"n": "伊朗", "v": "15"}, {"n": "加拿大", "v": "16"}, {"n": "澳大利亚", "v": "17"},
+    {"n": "爱尔兰", "v": "18"}, {"n": "瑞典", "v": "19"}, {"n": "巴西", "v": "20"},
     {"n": "丹麦", "v": "21"},
 ]
 
@@ -124,11 +120,13 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
+# 完整卡片
 _RE_CARD = re.compile(
     r'<a[^>]*?href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*>\s*'
     r'<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
     re.S | re.I)
 
+# 降级兜底：单拆 href 和 img
 _RE_HREF = re.compile(r'href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"', re.I)
 _RE_IMG = re.compile(r'<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"', re.S | re.I)
 
@@ -174,6 +172,7 @@ class Spider(Spider):
         if self._warmed:
             return
         try:
+            # 必须先请求首页获取 Cookie，否则分类页可能返回空数据
             self._fetch(self.site_url + "/", timeout=15)
             self._warmed = True
             self.log("预热完成")
@@ -240,7 +239,7 @@ class Spider(Spider):
             self.log("  HTML 为空")
             return videos
 
-        # 1. 优先使用完整卡片匹配
+        # 1. 尝试完整卡片匹配
         matches = _RE_CARD.findall(html)
         self.log("  完整卡片: %d 条" % len(matches))
 
@@ -258,36 +257,45 @@ class Spider(Spider):
                 })
             return videos
 
-        # 2. 分块匹配兜底
-        lis = re.findall(r'<li>([\s\S]*?)</li>', html)
-        self.log("  按 <li> 分块: %d 条" % len(lis))
-        
-        for block in lis:
-            m_href = re.search(r'href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"', block)
-            if not m_href:
-                continue
-            href = m_href.group(1)
+        # 2. 降级：分开提取所有 href 和 img
+        hrefs = _RE_HREF.findall(html)
+        imgs = _RE_IMG.findall(html)
+        self.log("  分开提取: href=%d img=%d" % (len(hrefs), len(imgs)))
+
+        if hrefs and imgs:
+            # 直接按索引匹配
+            for i, href in enumerate(hrefs):
+                href = href.replace("&amp;", "&")
+                if href in seen:
+                    continue
+                seen.add(href)
+                
+                pic, alt = "", ""
+                if i < len(imgs):
+                    pic, alt = imgs[i]
+                    
+                videos.append({
+                    "vod_id":      href,
+                    "vod_name":    self._clean(alt)[:100] or href.split("/")[-1],
+                    "vod_pic":     self._fix_url(pic) or self.default_pic,
+                    "vod_remarks": "",
+                })
+            return videos
+
+        # 3. 极端兜底：只有 href
+        for href in hrefs:
+            href = href.replace("&amp;", "&")
             if href in seen:
                 continue
             seen.add(href)
-
-            m_img = re.search(r'<img[^>]+src="([^"]+)"', block)
-            pic = m_img.group(1) if m_img else ""
-
-            m_title = re.search(r'<h2[^>]*>[\s\S]*?<a[^>]*>([^<]+)</a>', block)
-            if m_title:
-                name = m_title.group(1)
-            else:
-                m_alt = re.search(r'alt="([^"]+)"', block)
-                name = m_alt.group(1) if m_alt else "未知"
-                
             videos.append({
                 "vod_id":      href,
-                "vod_name":    self._clean(name),
-                "vod_pic":     self._fix_url(pic) or self.default_pic,
+                "vod_name":    href.split("/")[-1],
+                "vod_pic":     self.default_pic,
                 "vod_remarks": "",
             })
 
+        self.log("  最终提取到 %d 条" % len(videos))
         return videos
 
     def _page_count(self, html):
@@ -306,8 +314,7 @@ class Spider(Spider):
 
     def homeVideoContent(self):
         self._warm_up()
-        url = self.site_url + "/"
-        html = self._fetch(url)
+        html = self._fetch(self.site_url + "/")
         self.log("home HTML 长度: %d" % len(html))
         videos = self._extract_videos(html)
         return {"list": videos}
@@ -339,7 +346,6 @@ class Spider(Spider):
         if not sort or sort == "None":
             sort = "0"
 
-        # 严格遵循 fofo22 的 URL 格式
         url = "%s/%s/%s-%s-%s-%s" % (self.site_url, tid, cls, area, year, sort)
         if page > 1:
             url += "?page=%d" % page
