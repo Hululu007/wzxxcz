@@ -35585,21 +35585,6 @@
             }
         },
         {
-            "key": "双星99",
-            "name": "🤣双星动漫",
-            "type": 3,
-            "api": "csp_App99",
-            "ext": {
-                "host": "http://111.180.139.119:19987/app/bn",
-                "LoginPath": "/app/log",
-                "versionName": "6.4.9",
-                "name": "双子星动漫",
-                "package": "com.haiwang.liangxia.my.ym",
-                "buildNumber": "2001",
-                "buildSignature": "A40DA80A59D170CAA950CF15C18C454D47A39B26989D8B640ECD745BA71BF5DC"
-            }
-        },
-        {
             "key": "番社动漫",
             "name": "🤖番社动漫",
             "type": 3,
@@ -35641,18 +35626,6 @@
             "type": 3,
             "api": "./js/drpy2.min.js",
             "ext": "./js/Anime1.js"
-        },
-        {
-            "key": "咕咕动漫",
-            "name": "🤣咕咕动漫",
-            "type": 3,
-            "searchable": 1,
-            "api": "csp_AppGet",
-            "ext": {
-                "url": "https://www.gugu3.com",
-                "dataKey": "nKfZ8KX6JTNWRzTD",
-                "dataIv": "nKfZ8KX6JTNWRzTD"
-            }
         },
         {
             "key": "巴士动漫",
