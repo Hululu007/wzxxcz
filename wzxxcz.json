@@ -1496,10 +1496,10 @@
             "filterable": 0
         },
         {
-            "key": "VIP兔影视",
-            "name": "🐇VIP兔影视",
+            "key": "达达兔影视3",
+            "name": "🐇达达兔影视3",
             "type": 3,
-            "api": "./py/VIP兔🍀TG @hshsjk9.py"
+            "api": "./py/达达兔影视.py"
         },
         {
             "key": "FoFo影院",
