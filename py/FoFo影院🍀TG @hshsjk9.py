@@ -1,11 +1,14 @@
 # coding=utf-8
 """
-FoFo影院 fofo22.com | TVBox Python 爬虫
+FoFo影院 fofo22.com | TVBox Python 爬虫 
+关键:
+  - 严格依据真实源码：分类 URL 拼接规则
+  - 剧集提取：从 onclick="play(sid)" 中提取纯数字 ID
+  - 播放逻辑：POST /source/ 获取 m3u8
 """
 import re
 import sys
 import json
-import ast
 import time
 import urllib.parse
 import urllib.request
@@ -115,20 +118,6 @@ for c in CLASSES:
         {"key": "sort", "name": "排序", "value": _SORTS},
     ]
 
-# 详情页提取
-_RE_TITLE = re.compile(r'<h1[^>]*class="product-title"[^>]*>([\s\S]*?)</h1>', re.I)
-_RE_COVER = re.compile(r'<img[^>]*?src="([^"]*)"[^>]*?class="thumb"', re.I)
-_RE_OG_IMAGE = re.compile(r'<meta[^>]*property="og:image"[^>]*content="([^"]*)"', re.I)
-_RE_INTRO = re.compile(r'剧情简介：\s*<span>([\s\S]*?)</span>', re.I)
-_RE_OG_DESC = re.compile(r'<meta[^>]*property="og:description"[^>]*content="([^"]*)"', re.I)
-_RE_DIRECTOR = re.compile(r'导演：\s*<span>([\s\S]*?)</span>', re.I)
-_RE_ACTOR = re.compile(r'主演：\s*<span>([\s\S]*?)</span>', re.I)
-_RE_A_TAG = re.compile(r'<a[^>]*>([^<]*)</a>', re.I)
-_RE_SCORE = re.compile(r'<span\s+class="rate">([\d.]+)</span>', re.I)
-
-# 剧集加密数据
-_RE_URLLIST = re.compile(r'var\s+urlList\s*=\s*decryptDict\((\{[\s\S]*?\})\)', re.S)
-
 
 class Spider(Spider):
 
@@ -205,20 +194,6 @@ class Spider(Spider):
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
 
-    def _decrypt_val(self, v):
-        if isinstance(v, str):
-            t = ''.join(chr(ord(c) - 1) for c in v)
-            try:
-                return json.loads(t)
-            except Exception:
-                return t
-        if isinstance(v, list):
-            return [self._decrypt_val(x) for x in v]
-        if isinstance(v, dict):
-            return {self._decrypt_val(k): self._decrypt_val(val)
-                    for k, val in v.items()}
-        return v
-
     # ==================== 列表提取 ====================
     def _extract_videos(self, html):
         videos = []
@@ -226,53 +201,26 @@ class Spider(Spider):
         if not html:
             return videos
 
-        blocks = re.findall(r'<li>([\s\S]*?)</li>', html)
-        for block in blocks:
-            m_h2 = re.search(r'<h2>\s*<a\s+href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*>([^<]+)</a>\s*</h2>', block)
-            if not m_h2:
-                continue
-            href = m_h2.group(1).strip()
-            name = m_h2.group(2).strip()
-            if not href or href in seen:
-                continue
-            seen.add(href)
-
-            pic = ""
-            m_img = re.search(r'<img[^>]+src="([^"]+)"', block)
-            if m_img:
-                pic = m_img.group(1)
-
-            videos.append({
-                "vod_id": href.lstrip('/'),
-                "vod_name": self._clean(name),
-                "vod_pic": self._fix_url(pic) or self.default_pic,
-                "vod_remarks": "",
-            })
-
-        if videos:
-            self.log("  精准提取: %d 条" % len(videos))
-            return videos
-
         pattern = re.compile(
-            r'href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*>'
-            r'[\s\S]{0,300}?'
-            r'<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
+            r'<a\s+href="(/(?:dianying|dianshiju|zongyi|dongman)/(\d+))"[^>]*class="thumbnail"[^>]*>.*?'
+            r'<img[^>]*src="([^"]*)"[^>]*alt="([^"]*)"[^>]*>.*?'
+            r'<div\s+class="note"><span>([^<]*)</span>',
             re.DOTALL
         )
-        matches = pattern.findall(html)
-        for href, pic, name in matches:
-            href = href.replace("&amp;", "&")
-            if href in seen:
+        
+        for href, vid, pic, name, note in pattern.findall(html):
+            if vid in seen:
                 continue
-            seen.add(href)
+            seen.add(vid)
+            vod_name = name.strip() if name.strip() else vid
             videos.append({
                 "vod_id": href.lstrip('/'),
-                "vod_name": self._clean(name),
-                "vod_pic": self._fix_url(pic) or self.default_pic,
-                "vod_remarks": "",
+                "vod_name": vod_name,
+                "vod_pic": self._fix_url(pic),
+                "vod_remarks": note.strip()
             })
-
-        self.log("  兜底提取: %d 条" % len(videos))
+            
+        self.log("  提取: %d 条" % len(videos))
         return videos
 
     def _page_count(self, html):
@@ -307,15 +255,12 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        for k in list(extend.keys()):
-            if extend[k] in ("", None, "全部"):
-                del extend[k]
-
         genre = str(extend.get("genre", "0")).strip() or "0"
-        area  = str(extend.get("area", "0")).strip() or "0"
-        year  = str(extend.get("year", "0")).strip() or "0"
-        sort  = str(extend.get("sort", "0")).strip() or "0"
+        area = str(extend.get("area", "0")).strip() or "0"
+        year = str(extend.get("year", "0")).strip() or "0"
+        sort = str(extend.get("sort", "0")).strip() or "0"
 
+        # 严格拼接真实 URL
         url = "%s/%s/%s-%s-%s-%s" % (self.site_url, tid, genre, area, year, sort)
         if page > 1:
             url += "?page=%d" % page
@@ -361,9 +306,10 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
+        # 标题
         name = ""
         try:
-            m = _RE_TITLE.search(html)
+            m = re.search(r'<h1[^>]*class="product-title"[^>]*>([\s\S]*?)</h1>', html, re.I)
             if m:
                 name = re.sub(r'\s*<span[^>]*>.*?</span>', "", m.group(1), flags=re.S)
                 name = self._clean(name)
@@ -378,98 +324,65 @@ class Spider(Spider):
                 pass
         name = re.sub(r"\s*\(\d{4}\)\s*$", "", name).strip() or vod_id
 
+        # 封面
         pic = self.default_pic
         try:
-            m = _RE_COVER.search(html)
+            m = re.search(r'<meta[^>]*property="og:image"[^>]*content="([^"]*)"', html, re.I)
             if m:
                 pic = self._fix_url(m.group(1))
-            else:
-                m = _RE_OG_IMAGE.search(html)
-                if m:
-                    pic = self._fix_url(m.group(1))
         except Exception:
             pass
 
+        # 简介
         content = ""
         try:
-            m = _RE_INTRO.search(html)
+            m = re.search(r'<meta[^>]*property="og:description"[^>]*content="([^"]*)"', html, re.I)
             if m:
                 content = self._clean(m.group(1))
         except Exception:
             pass
-        if not content:
-            try:
-                m = _RE_OG_DESC.search(html)
-                if m:
-                    content = self._clean(m.group(1))
-            except Exception:
-                pass
 
         if content:
             content = INTRO_PREFIX + "\n" + content
         else:
             content = INTRO_PREFIX
 
+        # 导演 / 主演
         director = ""
         try:
-            m = _RE_DIRECTOR.search(html)
+            m = re.search(r'<meta[^>]*property="og:video:director"[^>]*content="([^"]*)"', html, re.I)
             if m:
-                director = ", ".join(self._clean(x) for x in _RE_A_TAG.findall(m.group(1)) if self._clean(x))
+                director = self._clean(m.group(1))
         except Exception:
             pass
 
         actor = ""
         try:
-            m = _RE_ACTOR.search(html)
+            m = re.search(r'<meta[^>]*property="og:video:actor"[^>]*content="([^"]*)"', html, re.I)
             if m:
-                actor = ", ".join(self._clean(x) for x in _RE_A_TAG.findall(m.group(1)) if self._clean(x))
+                actor = self._clean(m.group(1))
         except Exception:
             pass
 
-        score = ""
-        try:
-            m = _RE_SCORE.search(html)
-            if m:
-                score = m.group(1)
-        except Exception:
-            pass
-
-        sources = []
+        # ===== 剧集提取（依据真实源码：从 onclick="play(sid)" 中提取） =====
+        sources = ["默认线路"]
         url_list = []
+
         try:
-            m = _RE_URLLIST.search(html)
-            if m:
-                raw = m.group(1)
-                obj = ast.literal_eval(raw)
-                dec = self._decrypt_val(obj)
-                sources = dec.get("source", [])
-                url_list = dec.get("url_list", [])
+            # 匹配所有 play(数字) 的 onclick
+            matches = re.findall(r'play\((\d+)\);"[^>]*>([^<]+)</a>', html)
+            if matches:
+                ep_list = []
+                for sid, title in matches:
+                    ep_list.append("%s$%s" % (title.strip(), sid))
+                if ep_list:
+                    url_list = ["#".join(ep_list)]
+                    self.log("  从 onclick 提取到 %d 集" % len(ep_list))
         except Exception as e:
             self.log("  剧集解析失败: %s" % e)
 
-        if not sources or not url_list:
-            return {"list": []}
-
-        play_from = []
-        play_url = []
-        for i, src_name in enumerate(sources):
-            if i >= len(url_list):
-                break
-            eps = url_list[i]
-            if not eps:
-                continue
-            alias = self._clean(src_name) or ("线路%d" % (i + 1))
-            play_from.append(alias)
-            parts = []
-            for ep in eps:
-                title = ep.get("title", "")
-                sid = ep.get("sid", "")
-                if not title:
-                    title = "第%s集" % ep.get("episode", "")
-                parts.append("%s$%s" % (title, sid))
-            play_url.append("#".join(parts))
-
-        if not play_from:
+        if not url_list:
+            self.log("  未找到剧集播放链接")
             return {"list": []}
 
         return {"list": [{
@@ -479,12 +392,12 @@ class Spider(Spider):
             "vod_content": content,
             "vod_actor": actor,
             "vod_director": director,
-            "vod_score": score,
-            "vod_remarks": "%d条线路" % len(play_from),
-            "vod_play_from": "$$$".join(play_from),
-            "vod_play_url":  "$$$".join(play_url),
+            "vod_remarks": "%d集" % len(url_list[0].split('#')),
+            "vod_play_from": "$$$".join(sources),
+            "vod_play_url":  "$$$".join(url_list),
         }]}
 
+    # -------- 播放 --------
     def playerContent(self, flag, id, vipFlags):
         sid = str(id).strip()
         self.log("player: flag=%s sid=%s" % (flag, sid))
@@ -523,6 +436,7 @@ class Spider(Spider):
         if m3u8 and (".m3u8" in m3u8 or ".mp4" in m3u8):
             if m3u8.startswith("//"):
                 m3u8 = "https:" + m3u8
+            self.log("  => m3u8: %s" % m3u8[:160])
             res = {
                 "parse": 0,
                 "playUrl": "",
@@ -536,6 +450,7 @@ class Spider(Spider):
             self._play_cache[cache_key] = (now, res)
             return res
 
+        self.log("  source 返回无效，走嗅探")
         res = {"parse": 1, "playUrl": "", "url": self.site_url + "/",
                "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
         self._play_cache[cache_key] = (now, res)
