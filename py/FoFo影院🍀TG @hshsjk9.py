@@ -1,11 +1,11 @@
 # coding=utf-8
 """
-FoFo影院 fofo22.com | TVBox Python 爬虫 (严格参照豆花架构)
+FoFo影院 fofo22.com | TVBox Python 爬虫 (遵循源码破局方法论)
 关键:
-  - 破解加密 urlList
-  - 多级兜底解析（完整卡片 -> 分离 img/href -> 纯 href）
+  - 列表页：直接解析 <h2> 中的真实 href 和标题（A类直出）
+  - 详情页：解密 var urlList
+  - 播放页：POST /source/ 获取真实 m3u8 直链
   - 简介添加指定前缀
-  - POST /source/ 获取真实 m3u8
 """
 import re
 import sys
@@ -84,18 +84,17 @@ _YEARS = [{"n": "全部", "v": "0"}] + \
          [{"n": "其他", "v": "1"}]
 
 _AREAS = [
-    {"n": "全部", "v": "0"},
-    {"n": "中国大陆", "v": "1"}, {"n": "美国", "v": "2"},
-    {"n": "香港", "v": "3"}, {"n": "台湾", "v": "4"},
-    {"n": "日本", "v": "5"}, {"n": "韩国", "v": "6"},
-    {"n": "英国", "v": "7"}, {"n": "法国", "v": "8"},
-    {"n": "德国", "v": "9"}, {"n": "意大利", "v": "10"},
-    {"n": "西班牙", "v": "11"}, {"n": "印度", "v": "12"},
-    {"n": "泰国", "v": "13"}, {"n": "俄罗斯", "v": "14"},
-    {"n": "伊朗", "v": "15"}, {"n": "加拿大", "v": "16"},
-    {"n": "澳大利亚", "v": "17"}, {"n": "爱尔兰", "v": "18"},
-    {"n": "瑞典", "v": "19"}, {"n": "巴西", "v": "20"},
-    {"n": "丹麦", "v": "21"},
+    {"n": "全部", "v": "0"}, {"n": "中国大陆", "v": "1"},
+    {"n": "美国", "v": "2"}, {"n": "香港", "v": "3"},
+    {"n": "台湾", "v": "4"}, {"n": "日本", "v": "5"},
+    {"n": "韩国", "v": "6"}, {"n": "英国", "v": "7"},
+    {"n": "法国", "v": "8"}, {"n": "德国", "v": "9"},
+    {"n": "意大利", "v": "10"}, {"n": "西班牙", "v": "11"},
+    {"n": "印度", "v": "12"}, {"n": "泰国", "v": "13"},
+    {"n": "俄罗斯", "v": "14"}, {"n": "伊朗", "v": "15"},
+    {"n": "加拿大", "v": "16"}, {"n": "澳大利亚", "v": "17"},
+    {"n": "爱尔兰", "v": "18"}, {"n": "瑞典", "v": "19"},
+    {"n": "巴西", "v": "20"}, {"n": "丹麦", "v": "21"},
 ]
 
 _FILTERS_MAP = {
@@ -123,22 +122,8 @@ for c in CLASSES:
         {"key": "sort", "name": "排序", "value": _SORTS},
     ]
 
-
-# ===================== 正则 =====================
-# 严格照搬豆花的跨行匹配法
-_RE_CARD = re.compile(
-    r'href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*>'
-    r'[\s\S]{0,200}?'
-    r'<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
-    re.S | re.I)
-
-_RE_HREF = re.compile(r'href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"', re.I)
-_RE_IMG = re.compile(
-    r'<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
-    re.S | re.I)
-
 # 详情页正则
-_RE_TITLE = re.compile(r'<h[12][^>]*class="product-title"[^>]*>([\s\S]*?)</h[12]>', re.I)
+_RE_TITLE = re.compile(r'<h2[^>]*class="product-title"[^>]*>([\s\S]*?)</h2>', re.I)
 _RE_COVER = re.compile(r'<img[^>]*?src="([^"]*)"[^>]*?class="thumb"', re.I)
 _RE_OG_IMAGE = re.compile(r'<meta[^>]*property="og:image"[^>]*content="([^"]*)"', re.I)
 _RE_INTRO = re.compile(r'剧情简介：\s*<span>([\s\S]*?)</span>', re.I)
@@ -241,7 +226,7 @@ class Spider(Spider):
                     for k, val in v.items()}
         return v
 
-    # ==================== 完全照抄豆花的提取方法 ====================
+    # ==================== 遵循方法论：直接照源码提取 ====================
     def _extract_videos(self, html):
         videos = []
         seen = set()
@@ -249,56 +234,37 @@ class Spider(Spider):
             self.log("  HTML 为空")
             return videos
 
-        # 第一重兜底：跨行提取（完整卡片）
-        matches = _RE_CARD.findall(html)
-        self.log("  完整卡片: %d 条" % len(matches))
+        # 按照源码，列表都在 <li> 标签内
+        blocks = re.findall(r'<li>([\s\S]*?)</li>', html)
+        self.log("  提取到 <li> 块: %d 个" % len(blocks))
 
-        if matches:
-            for href, pic, alt in matches:
-                href = href.replace("&amp;", "&")
-                if href in seen:
-                    continue
-                seen.add(href)
-                videos.append({
-                    "vod_id":      href,
-                    "vod_name":    self._clean(alt)[:100],
-                    "vod_pic":     self._fix_url(pic) or self.default_pic,
-                    "vod_remarks": "",
-                })
-            return videos
-
-        # 第二重兜底：分开找
-        hrefs = _RE_HREF.findall(html)
-        imgs = _RE_IMG.findall(html)
-        self.log("  分开: href=%d img=%d" % (len(hrefs), len(imgs)))
-
-        if hrefs and imgs:
-            for i, href in enumerate(hrefs):
-                if href in seen:
-                    continue
-                seen.add(href)
-                pic, alt = ("", "")
-                if i < len(imgs):
-                    pic, alt = imgs[i]
-                videos.append({
-                    "vod_id":      href,
-                    "vod_name":    self._clean(alt)[:100] or href,
-                    "vod_pic":     self._fix_url(pic) or self.default_pic,
-                    "vod_remarks": "",
-                })
-            return videos
-
-        # 第三重兜底：只有 href
-        for href in hrefs:
-            if href in seen:
+        for block in blocks:
+            # 源码中真实结构：<h2><a href="/dianshiju/135611" target="_blank">孩有孩样</a></h2>
+            m_h2 = re.search(r'<h2>\s*<a\s+href="([^"]+)"[^>]*>([^<]+)</a>\s*</h2>', block)
+            if not m_h2:
                 continue
+            
+            href = m_h2.group(1).strip()
+            name = m_h2.group(2).strip()
+            
+            if not href or href in seen:
+                continue
+
+            # 找封面图
+            pic = ""
+            m_img = re.search(r'<img[^>]+src="([^"]+)"', block)
+            if m_img:
+                pic = m_img.group(1)
+
             seen.add(href)
             videos.append({
                 "vod_id":      href,
-                "vod_name":    href.split("/")[-1],
-                "vod_pic":     self.default_pic,
+                "vod_name":    self._clean(name),
+                "vod_pic":     self._fix_url(pic) or self.default_pic,
                 "vod_remarks": "",
             })
+
+        self.log("  成功提取出 %d 条视频" % len(videos))
         return videos
 
     def _page_count(self, html):
@@ -333,7 +299,6 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        # 严格还原豆花的参数清洗逻辑
         for k in list(extend.keys()):
             if extend[k] in ("", None, "全部"):
                 del extend[k]
