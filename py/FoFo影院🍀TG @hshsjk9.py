@@ -241,35 +241,36 @@ class Spider(Spider):
         if not html:
             return videos
 
-        # 【核心修复】先按 <li> 分块，再在块内按 <a>, <img>, <h2> 精准提取
-        for block in re.findall(r'<li>([\s\S]*?)</li>', html):
-            a_match = re.search(r'<a\s+href="(/[^"]+)"[^>]*>', block)
-            if not a_match:
+        # 按照 <li> 标签拆解，彻底避免属性顺序或换行带来的匹配失败
+        lis = re.findall(r'<li>([\s\S]*?)</li>', html)
+        for block in lis:
+            m_href = re.search(r'href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"', block)
+            if not m_href:
                 continue
-            href = a_match.group(1)
-            if not re.search(r'/(dianying|dianshiju|zongyi|dongman)/\d+', href):
+            path = m_href.group(1)
+            if path in seen:
                 continue
 
-            img_match = re.search(r'<img[^>]+src="([^"]+)"[^>]*>', block)
-            title_match = re.search(r'<h2><a[^>]*>([^<]+)</a></h2>', block)
-            
-            if not title_match:
-                continue
-                
-            name = title_match.group(1)
-            pic = img_match.group(1) if img_match else ""
-            
-            if href in seen:
-                continue
-            seen.add(href)
+            m_img = re.search(r'<img[^>]+src="([^"]+)"', block)
+            pic = m_img.group(1) if m_img else ""
 
+            m_title = re.search(r'<h2[^>]*>[\s\S]*?<a[^>]*>([^<]+)</a>', block)
+            if m_title:
+                name = m_title.group(1)
+            else:
+                m_alt = re.search(r'alt="([^"]+)"', block)
+                if not m_alt:
+                    continue
+                name = m_alt.group(1)
+
+            seen.add(path)
             videos.append({
-                "vod_id":      href,
+                "vod_id":      path,
                 "vod_name":    self._clean(name),
                 "vod_pic":     self._fix_url(pic),
                 "vod_remarks": "",
             })
-            
+
         self.log("  提取到 %d 条" % len(videos))
         return videos
 
@@ -299,24 +300,22 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        # 【核心修复】防止 TVBox 传 null 或空字符串导致 URL 拼接错误
-        cls = str(extend.get("class", "")).strip()
+        cls = str(extend.get("class", "0")).strip()
         if not cls or cls == "None":
             cls = "0"
-            
-        area = str(extend.get("area", "")).strip()
+
+        area = str(extend.get("area", "0")).strip()
         if not area or area == "None":
             area = "0"
-            
-        year = str(extend.get("year", "")).strip()
+
+        year = str(extend.get("year", "0")).strip()
         if not year or year == "None":
             year = "0"
-            
-        sort = str(extend.get("sort", "")).strip()
+
+        sort = str(extend.get("sort", "0")).strip()
         if not sort or sort == "None":
             sort = "0"
 
-        # 严格按照源码：首页没有 ?page=1，从第二页才开始带参数
         if page == 1:
             url = "%s/%s/%s-%s-%s-%s" % (self.site_url, tid, cls, area, year, sort)
         else:
@@ -357,7 +356,6 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # 标题
         name = ""
         m = _RE_TITLE.search(html)
         if m:
@@ -369,7 +367,6 @@ class Spider(Spider):
                 name = self._clean(m.group(1))
         name = re.sub(r"\s*\(\d{4}\)\s*$", "", name).strip() or vod_id
 
-        # 封面
         pic = ""
         m = _RE_COVER.search(html)
         if m:
@@ -379,7 +376,6 @@ class Spider(Spider):
             if m:
                 pic = self._fix_url(m.group(1))
 
-        # 简介
         content = ""
         m = _RE_INTRO.search(html)
         if m:
@@ -390,7 +386,6 @@ class Spider(Spider):
                 content = self._clean(m.group(1))
         content = INTRO_PREFIX + ("\n" + content if content else "")
 
-        # 导演 / 主演
         director = ""
         m = _RE_DIRECTOR.search(html)
         if m:
@@ -400,13 +395,11 @@ class Spider(Spider):
         if m:
             actor = ", ".join(self._clean(x) for x in _RE_A_TAG.findall(m.group(1)) if self._clean(x))
 
-        # 评分
         score = ""
         m = _RE_SCORE.search(html)
         if m:
             score = m.group(1)
 
-        # 剧集
         sources, url_list = self._parse_url_list(html)
         if not sources or not url_list:
             return {"list": []}
@@ -488,7 +481,6 @@ class Spider(Spider):
                 },
             }
 
-        # 兜底：交给 TVBox 嗅探
         self.log("  source 返回无效，走嗅探")
         return {
             "parse": 1,
