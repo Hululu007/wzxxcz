@@ -132,9 +132,9 @@ for c in CLASSES:
          "value": [{"n": n, "v": v} for n, v in _SORTS]},
     ]
 
+# 【修复】去掉强依赖 class="thumbnail"，完全兼容属性顺序和换行
 _RE_CARD = re.compile(
-    r'<a\s+[^>]*?href="/((?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*?class="thumbnail"[^>]*>\s*'
-    r'<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
+    r'<a[^>]*?href="/((?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*?>\s*<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
     re.S | re.I)
 
 _RE_TITLE = re.compile(r'<h[12][^>]*class="product-title"[^>]*>([\s\S]*?)</h[12]>', re.I)
@@ -285,12 +285,13 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        # 严格遵循源码结构，无参数时默认全为 0，且首页不带 page 参数
+        # 严格按照源码：无参数时默认全为 0，对应 /dianshiju/0-0-0-0
         cls = str(extend.get("class", "0"))
         area = str(extend.get("area", "0"))
         year = str(extend.get("year", "0"))
         sort = str(extend.get("sort", "0"))
 
+        # 首页第一页不能带 ?page=1，只有第二页及以上才带分页参数
         if page == 1:
             url = "%s/%s/%s-%s-%s-%s" % (self.site_url, tid, cls, area, year, sort)
         else:
