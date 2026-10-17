@@ -6,7 +6,6 @@ bttwo.life（两个BT影视）TVBox 蜘蛛
 结构：服务端渲染；列表走 /filter?classify=N&areas=&types=&years=&tags=&sort_by=&order=&page=；
      详情播放合一 /play/{code}，每集独立 URL；真实 m3u8 藏于 JS 取流接口，静态 HTML 拿不到，
      playerContent 做多路尝试，拿不到则返回播放页由上层嗅探/解析。
-作者：海豚🐬
 """
 
 import re
