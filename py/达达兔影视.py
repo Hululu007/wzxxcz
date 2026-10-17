@@ -164,9 +164,10 @@ _RE_H1 = re.compile(r'<h1[^>]*class="[^"]*media-title[^"]*"[^>]*>([\s\S]*?)</h1>
 _RE_COVER = re.compile(r'<div class="detail-img">\s*<img[^>]*src="([^"]*)"', re.I)
 _RE_COVER2 = re.compile(r'<div class="detail-cover blur lazyload"[^>]*data-original="([^"]*)"', re.I)
 
-# 详情 desc 各字段
-_RE_ACTOR = re.compile(r'主演：([^<]*)<', re.I)
-_RE_DIRECTOR = re.compile(r'导演：([^<]*)<', re.I)
+# 详情 desc 各字段 (已补全正则，支持包含 <a> 标签的结构)
+_RE_ACTOR = re.compile(r'主演：([\s\S]*?)</li>', re.I)
+_RE_DIRECTOR = re.compile(r'导演：([\s\S]*?)</li>', re.I)
+_RE_TYPE = re.compile(r'类型：([\s\S]*?)</li>', re.I)
 _RE_STATE = re.compile(r'状态：([^<]*)<', re.I)
 _RE_YEAR = re.compile(r'年份：<span>([^<]*)</span>', re.I)
 _RE_AREA = re.compile(r'地区：<span>([^<]*)</span>', re.I)
@@ -549,8 +550,19 @@ class Spider(Spider):
             mm = rx.search(html)
             return self._clean(mm.group(1)) if mm else default
 
-        actor = _g(_RE_ACTOR)
-        director = _g(_RE_DIRECTOR)
+        def _g_names(rx, default=""):
+            mm = rx.search(html)
+            if not mm:
+                return default
+            block = mm.group(1)
+            names = re.findall(r'<a[^>]*>([^<]*)</a>', block)
+            if names:
+                return ", ".join(self._clean(n) for n in names if self._clean(n))
+            return self._clean(block).replace(" ", "")
+
+        actor = _g_names(_RE_ACTOR)
+        director = _g_names(_RE_DIRECTOR)
+        vod_type = _g_names(_RE_TYPE)
         area = _g(_RE_AREA)
         year = _g(_RE_YEAR)
         lang = _g(_RE_LANG)
@@ -621,6 +633,7 @@ class Spider(Spider):
             "vod_content": content,
             "vod_actor": actor,
             "vod_director": director,
+            "vod_type": vod_type,
             "vod_area": area,
             "vod_year": year,
             "vod_lang": lang,
