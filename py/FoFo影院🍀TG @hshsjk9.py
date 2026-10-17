@@ -1,10 +1,6 @@
 # coding=utf-8
 """
-FoFo影院 fofo22.com | TVBox Python 爬虫 
-关键:
-  - 多级正则兜底解析列表
-  - 解密 var urlList 播放数据
-  - POST /source/ 获取 m3u8
+FoFo影院 fofo22.com | TVBox Python 爬虫
 """
 import re
 import sys
@@ -223,14 +219,13 @@ class Spider(Spider):
                     for k, val in v.items()}
         return v
 
-    # ==================== 精准列表提取 ====================
+    # ==================== 列表提取 ====================
     def _extract_videos(self, html):
         videos = []
         seen = set()
         if not html:
             return videos
 
-        # 第一重：按 <li> 块内精准提取（最稳）
         blocks = re.findall(r'<li>([\s\S]*?)</li>', html)
         for block in blocks:
             m_h2 = re.search(r'<h2>\s*<a\s+href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*>([^<]+)</a>\s*</h2>', block)
@@ -258,7 +253,6 @@ class Spider(Spider):
             self.log("  精准提取: %d 条" % len(videos))
             return videos
 
-        # 第二重：全局兜底正则（参考豆花）
         pattern = re.compile(
             r'href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*>'
             r'[\s\S]{0,300}?'
@@ -313,7 +307,6 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        # 清洗参数
         for k in list(extend.keys()):
             if extend[k] in ("", None, "全部"):
                 del extend[k]
@@ -323,7 +316,6 @@ class Spider(Spider):
         year  = str(extend.get("year", "0")).strip() or "0"
         sort  = str(extend.get("sort", "0")).strip() or "0"
 
-        # 【核心修复】严格按真实路径：/{tid}/{genre}-{area}-{year}-{sort}
         url = "%s/%s/%s-%s-%s-%s" % (self.site_url, tid, genre, area, year, sort)
         if page > 1:
             url += "?page=%d" % page
@@ -369,7 +361,6 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # 标题
         name = ""
         try:
             m = _RE_TITLE.search(html)
@@ -387,7 +378,6 @@ class Spider(Spider):
                 pass
         name = re.sub(r"\s*\(\d{4}\)\s*$", "", name).strip() or vod_id
 
-        # 封面
         pic = self.default_pic
         try:
             m = _RE_COVER.search(html)
@@ -400,7 +390,6 @@ class Spider(Spider):
         except Exception:
             pass
 
-        # 简介
         content = ""
         try:
             m = _RE_INTRO.search(html)
@@ -421,7 +410,6 @@ class Spider(Spider):
         else:
             content = INTRO_PREFIX
 
-        # 导演 / 主演
         director = ""
         try:
             m = _RE_DIRECTOR.search(html)
@@ -446,7 +434,6 @@ class Spider(Spider):
         except Exception:
             pass
 
-        # 剧集解密
         sources = []
         url_list = []
         try:
@@ -498,7 +485,6 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # -------- 播放 --------
     def playerContent(self, flag, id, vipFlags):
         sid = str(id).strip()
         self.log("player: flag=%s sid=%s" % (flag, sid))
@@ -550,7 +536,6 @@ class Spider(Spider):
             self._play_cache[cache_key] = (now, res)
             return res
 
-        # 兜底：走嗅探
         res = {"parse": 1, "playUrl": "", "url": self.site_url + "/",
                "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
         self._play_cache[cache_key] = (now, res)
