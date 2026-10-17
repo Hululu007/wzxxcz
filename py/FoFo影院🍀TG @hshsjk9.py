@@ -1,11 +1,11 @@
 # coding=utf-8
 """
-FoFo影院 fofo22.com | TVBox Python 爬虫 
+FoFo影院 fofo22.com | TVBox Python 爬虫 (严格参照豆花架构)
 关键:
-  - 预热机制
-  - 按 <li> 分块提取，彻底杜绝排版变化导致的空数据
-  - 解密 urlList
-  - POST /source/ 获取播放直链
+  - 破解加密 urlList
+  - 多级兜底解析（完整卡片 -> 分离 img/href -> 纯 href）
+  - 简介添加指定前缀
+  - POST /source/ 获取真实 m3u8
 """
 import re
 import sys
@@ -125,20 +125,20 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
-# 完整卡片兜底
+# 严格照搬豆花的跨行匹配法
 _RE_CARD = re.compile(
-    r'<a\s+[^>]*?href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*?class="thumbnail"[^>]*>\s*'
+    r'href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*>'
+    r'[\s\S]{0,200}?'
     r'<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
     re.S | re.I)
 
-# 分开的兜底
 _RE_HREF = re.compile(r'href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"', re.I)
 _RE_IMG = re.compile(
     r'<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
     re.S | re.I)
 
-# 详情页信息
-_RE_TITLE = re.compile(r'<h2[^>]*class="product-title"[^>]*>([\s\S]*?)</h2>', re.I)
+# 详情页正则
+_RE_TITLE = re.compile(r'<h[12][^>]*class="product-title"[^>]*>([\s\S]*?)</h[12]>', re.I)
 _RE_COVER = re.compile(r'<img[^>]*?src="([^"]*)"[^>]*?class="thumb"', re.I)
 _RE_OG_IMAGE = re.compile(r'<meta[^>]*property="og:image"[^>]*content="([^"]*)"', re.I)
 _RE_INTRO = re.compile(r'剧情简介：\s*<span>([\s\S]*?)</span>', re.I)
@@ -241,6 +241,7 @@ class Spider(Spider):
                     for k, val in v.items()}
         return v
 
+    # ==================== 完全照抄豆花的提取方法 ====================
     def _extract_videos(self, html):
         videos = []
         seen = set()
@@ -248,6 +249,7 @@ class Spider(Spider):
             self.log("  HTML 为空")
             return videos
 
+        # 第一重兜底：跨行提取（完整卡片）
         matches = _RE_CARD.findall(html)
         self.log("  完整卡片: %d 条" % len(matches))
 
@@ -265,34 +267,38 @@ class Spider(Spider):
                 })
             return videos
 
-        # ================= 严格按照源码 <li> 分块解析 =================
-        blocks = re.findall(r'<li>([\s\S]*?)</li>', html)
-        self.log("  分块 <li>: %d 个" % len(blocks))
+        # 第二重兜底：分开找
+        hrefs = _RE_HREF.findall(html)
+        imgs = _RE_IMG.findall(html)
+        self.log("  分开: href=%d img=%d" % (len(hrefs), len(imgs)))
 
-        for block in blocks:
-            # 取 <h2> 中的标题和链接
-            m_title = re.search(r'<h2[^>]*>\s*<a\s+href="([^"]+)"[^>]*>([^<]+)</a>', block)
-            if not m_title:
+        if hrefs and imgs:
+            for i, href in enumerate(hrefs):
+                if href in seen:
+                    continue
+                seen.add(href)
+                pic, alt = ("", "")
+                if i < len(imgs):
+                    pic, alt = imgs[i]
+                videos.append({
+                    "vod_id":      href,
+                    "vod_name":    self._clean(alt)[:100] or href,
+                    "vod_pic":     self._fix_url(pic) or self.default_pic,
+                    "vod_remarks": "",
+                })
+            return videos
+
+        # 第三重兜底：只有 href
+        for href in hrefs:
+            if href in seen:
                 continue
-                
-            href = m_title.group(1).replace("&amp;", "&").strip()
-            name = m_title.group(2).strip()
-            if not href or href in seen:
-                continue
-
-            # 取图片
-            m_img = re.search(r'<img[^>]+src="([^"]+)"', block)
-            pic = m_img.group(1) if m_img else ""
-
             seen.add(href)
             videos.append({
                 "vod_id":      href,
-                "vod_name":    self._clean(name),
-                "vod_pic":     self._fix_url(pic) or self.default_pic,
+                "vod_name":    href.split("/")[-1],
+                "vod_pic":     self.default_pic,
                 "vod_remarks": "",
             })
-
-        self.log("  提取出 %d 条" % len(videos))
         return videos
 
     def _page_count(self, html):
@@ -327,7 +333,7 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        # 剔除空值和“全部”
+        # 严格还原豆花的参数清洗逻辑
         for k in list(extend.keys()):
             if extend[k] in ("", None, "全部"):
                 del extend[k]
@@ -337,7 +343,7 @@ class Spider(Spider):
         year = str(extend.get("year", "0")).strip() or "0"
         sort = str(extend.get("sort", "0")).strip() or "0"
 
-        # fofo22 真实路径格式
+        # URL 严格按照 fofo22 网页源码
         url = "%s/%s/%s-%s-%s-%s" % (self.site_url, tid, cls, area, year, sort)
         if page > 1:
             url += "?page=%d" % page
