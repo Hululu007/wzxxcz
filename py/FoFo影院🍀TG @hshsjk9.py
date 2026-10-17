@@ -1,11 +1,11 @@
 # coding=utf-8
 """
-FoFo影院 fofo22.com | TVBox Python 爬虫 (严格参照豆花工业级容错架构)
+FoFo影院 fofo22.com | TVBox Python 爬虫 
 关键:
-  - 预热机制获取 Cookie/头信息
-  - 列表解析多级降级兜底 (完整卡片 -> 拆解 href/img -> 纯 href)
-  - 解密 var urlList = decryptDict({...}) 
-  - POST /source/ 获取 m3u8 直链
+  - 预热机制
+  - 按 <li> 分块提取，彻底杜绝排版变化导致的空数据
+  - 解密 urlList
+  - POST /source/ 获取播放直链
 """
 import re
 import sys
@@ -78,18 +78,23 @@ CLASSES = [
 _SORTS = [{"n": "按时间排序", "v": "0"},
           {"n": "按人气排序", "v": "1"},
           {"n": "按评分排序", "v": "2"}]
+
 _YEARS = [{"n": "全部", "v": "0"}] + \
          [{"n": str(y), "v": str(y)} for y in range(2026, 2004, -1)] + \
          [{"n": "其他", "v": "1"}]
 
 _AREAS = [
-    {"n": "全部", "v": "0"}, {"n": "中国大陆", "v": "1"}, {"n": "美国", "v": "2"},
-    {"n": "香港", "v": "3"}, {"n": "台湾", "v": "4"}, {"n": "日本", "v": "5"},
-    {"n": "韩国", "v": "6"}, {"n": "英国", "v": "7"}, {"n": "法国", "v": "8"},
-    {"n": "德国", "v": "9"}, {"n": "意大利", "v": "10"}, {"n": "西班牙", "v": "11"},
-    {"n": "印度", "v": "12"}, {"n": "泰国", "v": "13"}, {"n": "俄罗斯", "v": "14"},
-    {"n": "伊朗", "v": "15"}, {"n": "加拿大", "v": "16"}, {"n": "澳大利亚", "v": "17"},
-    {"n": "爱尔兰", "v": "18"}, {"n": "瑞典", "v": "19"}, {"n": "巴西", "v": "20"},
+    {"n": "全部", "v": "0"},
+    {"n": "中国大陆", "v": "1"}, {"n": "美国", "v": "2"},
+    {"n": "香港", "v": "3"}, {"n": "台湾", "v": "4"},
+    {"n": "日本", "v": "5"}, {"n": "韩国", "v": "6"},
+    {"n": "英国", "v": "7"}, {"n": "法国", "v": "8"},
+    {"n": "德国", "v": "9"}, {"n": "意大利", "v": "10"},
+    {"n": "西班牙", "v": "11"}, {"n": "印度", "v": "12"},
+    {"n": "泰国", "v": "13"}, {"n": "俄罗斯", "v": "14"},
+    {"n": "伊朗", "v": "15"}, {"n": "加拿大", "v": "16"},
+    {"n": "澳大利亚", "v": "17"}, {"n": "爱尔兰", "v": "18"},
+    {"n": "瑞典", "v": "19"}, {"n": "巴西", "v": "20"},
     {"n": "丹麦", "v": "21"},
 ]
 
@@ -120,25 +125,30 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
-# 完整卡片
+# 完整卡片兜底
 _RE_CARD = re.compile(
-    r'<a[^>]*?href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*>\s*'
+    r'<a\s+[^>]*?href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"[^>]*?class="thumbnail"[^>]*>\s*'
     r'<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
     re.S | re.I)
 
-# 降级兜底：单拆 href 和 img
+# 分开的兜底
 _RE_HREF = re.compile(r'href="(/(?:dianying|dianshiju|zongyi|dongman)/\d+)"', re.I)
-_RE_IMG = re.compile(r'<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"', re.S | re.I)
+_RE_IMG = re.compile(
+    r'<img[^>]*?src="([^"]*)"[^>]*?alt="([^"]*)"',
+    re.S | re.I)
 
-_RE_TITLE = re.compile(r'<h[12][^>]*class="product-title"[^>]*>([\s\S]*?)</h[12]>', re.I)
+# 详情页信息
+_RE_TITLE = re.compile(r'<h2[^>]*class="product-title"[^>]*>([\s\S]*?)</h2>', re.I)
 _RE_COVER = re.compile(r'<img[^>]*?src="([^"]*)"[^>]*?class="thumb"', re.I)
 _RE_OG_IMAGE = re.compile(r'<meta[^>]*property="og:image"[^>]*content="([^"]*)"', re.I)
+_RE_INTRO = re.compile(r'剧情简介：\s*<span>([\s\S]*?)</span>', re.I)
+_RE_OG_DESC = re.compile(r'<meta[^>]*property="og:description"[^>]*content="([^"]*)"', re.I)
 _RE_DIRECTOR = re.compile(r'导演：\s*<span>([\s\S]*?)</span>', re.I)
 _RE_ACTOR = re.compile(r'主演：\s*<span>([\s\S]*?)</span>', re.I)
 _RE_A_TAG = re.compile(r'<a[^>]*>([^<]*)</a>', re.I)
-_RE_INTRO = re.compile(r'剧情简介：\s*<span>([\s\S]*?)</span>', re.I)
-_RE_OG_DESC = re.compile(r'<meta[^>]*property="og:description"[^>]*content="([^"]*)"', re.I)
 _RE_SCORE = re.compile(r'<span\s+class="rate">([\d.]+)</span>', re.I)
+
+# 剧集加密数据
 _RE_URLLIST = re.compile(r'var\s+urlList\s*=\s*decryptDict\((\{[\s\S]*?\})\)', re.S)
 
 
@@ -172,7 +182,6 @@ class Spider(Spider):
         if self._warmed:
             return
         try:
-            # 必须先请求首页获取 Cookie，否则分类页可能返回空数据
             self._fetch(self.site_url + "/", timeout=15)
             self._warmed = True
             self.log("预热完成")
@@ -239,7 +248,6 @@ class Spider(Spider):
             self.log("  HTML 为空")
             return videos
 
-        # 1. 尝试完整卡片匹配
         matches = _RE_CARD.findall(html)
         self.log("  完整卡片: %d 条" % len(matches))
 
@@ -257,45 +265,34 @@ class Spider(Spider):
                 })
             return videos
 
-        # 2. 降级：分开提取所有 href 和 img
-        hrefs = _RE_HREF.findall(html)
-        imgs = _RE_IMG.findall(html)
-        self.log("  分开提取: href=%d img=%d" % (len(hrefs), len(imgs)))
+        # ================= 严格按照源码 <li> 分块解析 =================
+        blocks = re.findall(r'<li>([\s\S]*?)</li>', html)
+        self.log("  分块 <li>: %d 个" % len(blocks))
 
-        if hrefs and imgs:
-            # 直接按索引匹配
-            for i, href in enumerate(hrefs):
-                href = href.replace("&amp;", "&")
-                if href in seen:
-                    continue
-                seen.add(href)
-                
-                pic, alt = "", ""
-                if i < len(imgs):
-                    pic, alt = imgs[i]
-                    
-                videos.append({
-                    "vod_id":      href,
-                    "vod_name":    self._clean(alt)[:100] or href.split("/")[-1],
-                    "vod_pic":     self._fix_url(pic) or self.default_pic,
-                    "vod_remarks": "",
-                })
-            return videos
-
-        # 3. 极端兜底：只有 href
-        for href in hrefs:
-            href = href.replace("&amp;", "&")
-            if href in seen:
+        for block in blocks:
+            # 取 <h2> 中的标题和链接
+            m_title = re.search(r'<h2[^>]*>\s*<a\s+href="([^"]+)"[^>]*>([^<]+)</a>', block)
+            if not m_title:
                 continue
+                
+            href = m_title.group(1).replace("&amp;", "&").strip()
+            name = m_title.group(2).strip()
+            if not href or href in seen:
+                continue
+
+            # 取图片
+            m_img = re.search(r'<img[^>]+src="([^"]+)"', block)
+            pic = m_img.group(1) if m_img else ""
+
             seen.add(href)
             videos.append({
                 "vod_id":      href,
-                "vod_name":    href.split("/")[-1],
-                "vod_pic":     self.default_pic,
+                "vod_name":    self._clean(name),
+                "vod_pic":     self._fix_url(pic) or self.default_pic,
                 "vod_remarks": "",
             })
 
-        self.log("  最终提取到 %d 条" % len(videos))
+        self.log("  提取出 %d 条" % len(videos))
         return videos
 
     def _page_count(self, html):
@@ -330,22 +327,17 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        cls = str(extend.get("class", "0")).strip()
-        if not cls or cls == "None":
-            cls = "0"
+        # 剔除空值和“全部”
+        for k in list(extend.keys()):
+            if extend[k] in ("", None, "全部"):
+                del extend[k]
 
-        area = str(extend.get("area", "0")).strip()
-        if not area or area == "None":
-            area = "0"
+        cls = str(extend.get("class", "0")).strip() or "0"
+        area = str(extend.get("area", "0")).strip() or "0"
+        year = str(extend.get("year", "0")).strip() or "0"
+        sort = str(extend.get("sort", "0")).strip() or "0"
 
-        year = str(extend.get("year", "0")).strip()
-        if not year or year == "None":
-            year = "0"
-
-        sort = str(extend.get("sort", "0")).strip()
-        if not sort or sort == "None":
-            sort = "0"
-
+        # fofo22 真实路径格式
         url = "%s/%s/%s-%s-%s-%s" % (self.site_url, tid, cls, area, year, sort)
         if page > 1:
             url += "?page=%d" % page
@@ -368,7 +360,6 @@ class Spider(Spider):
         page = int(pg) if pg else 1
         keyword = urllib.parse.quote(key)
         url = "%s/search?q=%s&page=%d" % (self.site_url, keyword, page)
-        
         self.log("search: %s" % url)
         html = self._fetch(url)
         self.log("  HTML 长度: %d" % len(html))
@@ -394,7 +385,6 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # 标题
         name = ""
         try:
             m = _RE_TITLE.search(html)
@@ -412,7 +402,6 @@ class Spider(Spider):
                 pass
         name = re.sub(r"\s*\(\d{4}\)\s*$", "", name).strip() or vod_id
 
-        # 封面
         pic = self.default_pic
         try:
             m = _RE_COVER.search(html)
@@ -425,7 +414,6 @@ class Spider(Spider):
         except Exception:
             pass
 
-        # 简介
         content = ""
         try:
             m = _RE_INTRO.search(html)
@@ -446,7 +434,6 @@ class Spider(Spider):
         else:
             content = INTRO_PREFIX
 
-        # 导演 / 主演
         director = ""
         try:
             m = _RE_DIRECTOR.search(html)
@@ -525,10 +512,10 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
+    # -------- 播放 --------
     def playerContent(self, flag, id, vipFlags):
         sid = str(id).strip()
         self.log("player: flag=%s sid=%s" % (flag, sid))
-        
         now = int(time.time())
         cache_key = "%s_%s" % (flag, sid)
         if cache_key in self._play_cache:
