@@ -30,7 +30,6 @@ CLASSES = [
     {"type_id": "1", "type_name": "电影"},
     {"type_id": "2", "type_name": "电视剧"},
     {"type_id": "3", "type_name": "动漫"},
-    {"type_id": "4", "type_name": "综艺"},
 ]
 
 _AREAS = [
@@ -72,7 +71,6 @@ for _c in CLASSES:
 
 
 # ===================== 正则集中 =====================
-# —— 列表卡片 ——
 _RE_CARD = re.compile(
     r'<a[^>]+href="(/play/[A-Za-z0-9]+)"[^>]*>([\s\S]{20,2000}?)</a>')
 _RE_IMG_DATA_SRC = re.compile(r'<img[^>]+?data-src="([^"]+)"')
@@ -84,7 +82,6 @@ _RE_TITLE_ATTR = re.compile(r'title="([^"]{2,60})"')
 _RE_REMARK = re.compile(r"(更新至\d+集|全\d+集)")
 _RE_YEAR_TAG = re.compile(r"<[^>]*>(20\d{2}|19\d{2})<")
 
-# —— 详情页 ——
 _RE_DOC_TITLE = re.compile(r"<title[^>]*>([^<]+)</title>")
 _RE_H1_TAG = re.compile(r"<h1[^>]*>([\s\S]*?)</h1>", re.I)
 _RE_OG_IMAGE = re.compile(r'property="og:image"\s+content="([^"]+)"', re.I)
@@ -94,24 +91,20 @@ _RE_POSTER_IMG = re.compile(
 _RE_OG_DESC = re.compile(r'property="og:description"\s+content="([^"]+)"', re.I)
 _RE_META_DESC = re.compile(r'name="description"\s+content="([^"]+)"', re.I)
 
-# —— 选集 ——
 _RE_EPISODE_A = re.compile(
     r'<a[^>]*?href="(/play/[A-Za-z0-9]+)"[^>]*?data-episode="(\d+)"')
 _RE_PLAY_CODE = re.compile(r"/play/([A-Za-z0-9]+)")
 
-# —— 播放页取流 ——
 _RE_M3U8_RAW = re.compile(r'(https?://[^\s"\'<>\\]+\.m3u8[^\s"\'<>\\]*)')
 _RE_M3U8_JSON = re.compile(r'"(https?://[^"]+\.m3u8[^"]*)"')
 _RE_DATAID = re.compile(r'dataid="(\d+)"')
 
-# —— 分页 ——
 _RE_PAGECOUNT = re.compile(r"共\s*(\d+)\s*页")
 _RE_PAGE_NUM = re.compile(r"[?&]page=(\d+)")
 
 
 class Spider:
 
-    # ===================== 生命周期 =====================
     def __init__(self):
         self.site = HOST
         self.name = "两个BT影视"
@@ -158,7 +151,6 @@ class Spider:
     def destroy(self):
         pass
 
-    # ===================== 基础工具 =====================
     def log(self, *a, **kw):
         try:
             print("[bttwo]", *a)
@@ -214,9 +206,7 @@ class Spider:
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
 
-    # ===================== 首页 =====================
     def homeContent(self, filter=False):
-        # 顺带抓一次电影分类的首页推荐，省一次请求
         vod_list = []
         try:
             html = self._get(self.site + "/filter?classify=1")
@@ -233,7 +223,6 @@ class Spider:
             self.log("homeVideoContent fail: %s" % e)
             return {"list": []}
 
-    # ===================== 列表解析 =====================
     def _items(self, html, base=None):
         out = []
         seen = set()
@@ -246,7 +235,6 @@ class Spider:
                 continue
             seen.add(href)
 
-            # 海报：data-src > data-original > src（过滤占位图）
             pic = ""
             im = _RE_IMG_DATA_SRC.search(block) or _RE_IMG_DATA_ORIG.search(block)
             if im:
@@ -257,7 +245,6 @@ class Spider:
             if pic and "placeholder" in pic.lower():
                 pic = ""
 
-            # 标题：h3 优先，其次 title 属性，最后文本兜底
             name = ""
             hm = _RE_H3_TITLE.search(block)
             if hm:
@@ -278,7 +265,6 @@ class Spider:
                             name = p
                             break
 
-            # 备注：先从去 img 的文本找集数，否则退到年份
             block_noimg = re.sub(r"<img[^>]*>", "", block)
             remark = ""
             rm = _RE_REMARK.search(block_noimg)
@@ -296,7 +282,6 @@ class Spider:
             })
         return out
 
-    # ===================== 分类 =====================
     def _cat_url(self, tid, pg, extend=None):
         try:
             pg = int(pg)
@@ -334,7 +319,6 @@ class Spider:
 
         vod_list = self._items(html)
 
-        # 分页：优先"共 X 页"，其次末尾 page=N 链接
         pagecount = pg
         m = _RE_PAGECOUNT.search(html)
         if m:
@@ -355,7 +339,6 @@ class Spider:
             "total":     pagecount * 24,
         }
 
-    # ===================== 搜索 =====================
     def searchContent(self, key, quick=False, pg="1"):
         url = self.site + "/search?q=" + urllib.parse.quote(str(key))
         self.log("search: %s" % url)
@@ -367,7 +350,6 @@ class Spider:
     def searchContentPage(self, key, quick, pg="1"):
         return self.searchContent(key, quick, pg)
 
-    # ===================== 详情 =====================
     def detailContent(self, ids):
         if not ids:
             return {"list": []}
@@ -380,7 +362,6 @@ class Spider:
         if not html:
             return {"list": []}
 
-        # —— 标题 ——
         title = ""
         tm = _RE_DOC_TITLE.search(html)
         if tm:
@@ -393,7 +374,6 @@ class Spider:
                 title = self._clean(h1.group(1))
         title = title or vid
 
-        # —— 封面 ——
         pic = ""
         for pat in (_RE_OG_IMAGE, _RE_DATA_POSTER, _RE_POSTER_IMG):
             im = pat.search(html)
@@ -403,15 +383,12 @@ class Spider:
                     pic = p
                     break
 
-        # —— 简介（加前缀）——
         desc = ""
         dm = _RE_OG_DESC.search(html) or _RE_META_DESC.search(html)
         if dm:
             desc = self._clean(dm.group(1))
         desc = INTRO_PREFIX + "\n" + desc if desc else INTRO_PREFIX
 
-        # —— 选集 ——
-        # 从 data-episode 属性提取（Alpine.js 组件写法，按 </a> 配对会失败）
         eps = []
         seen = set()
         cur_code_m = _RE_PLAY_CODE.search(url)
@@ -424,7 +401,6 @@ class Spider:
             seen.add(code)
             eps.append((num, "第%d集$%s" % (num, self._u(href))))
 
-        # 当前页本身也作为一集（播放页每集独立 URL）
         cm = re.search(r"第(\d+)集", self._un(tm.group(1)) if tm else "")
         cur_num = int(cm.group(1)) if cm else 1
         eps.append((cur_num, "第%d集$%s" % (cur_num, url)))
@@ -442,18 +418,14 @@ class Spider:
             "vod_play_url":  play_url,
         }]}
 
-    # ===================== 播放 =====================
     def _extract_m3u8(self, html, page_url):
-        """多路尝试从播放页 HTML 里挖出直链。"""
         if not html:
             return ""
 
-        # 1) 裸 m3u8
         m = _RE_M3U8_RAW.search(html)
         if m:
             return m.group(1)
 
-        # 2) 常见 JS 变量
         for var in ("videoUrl", "playUrl", "source", "src", "url", "m3u8", "now"):
             m = re.search(
                 r'var\s+%s\s*=\s*["\']([^"\']+\.m3u8[^"\']*)["\']' % re.escape(var),
@@ -461,12 +433,10 @@ class Spider:
             if m:
                 return self._u(m.group(1))
 
-        # 3) JSON 里的 m3u8
         m = _RE_M3U8_JSON.search(html)
         if m:
             return m.group(1).replace("\\/", "/")
 
-        # 4) dataid → 探测站内取流接口
         dataid = _RE_DATAID.search(html)
         code = _RE_PLAY_CODE.search(page_url or "")
         for tpl in ("/api/play/{code}", "/api/video/{dataid}",
@@ -501,12 +471,10 @@ class Spider:
             url = self._u(url)
         self.log("player: %s" % url)
 
-        # 直链直接放行
         u = url.lower()
         if u.endswith((".m3u8", ".mp4", ".flv", ".mkv", ".ts", ".avi")) or "m3u8" in u:
             return {"parse": 0, "url": url, "header": dict(self.header)}
 
-        # 播放页 → 多路尝试提取直链
         html = self._get(url, referer=self.site + "/")
         found = self._extract_m3u8(html, url)
         if found:
@@ -517,11 +485,9 @@ class Spider:
             self.log("  => 直链 m3u8: %s" % found[:160])
             return {"parse": 0, "url": found, "header": dict(self.header)}
 
-        # 拿不到直链：交给上层嗅探/解析
         self.log("  => 未找到直链，交由上层嗅探")
         return {"parse": 1, "url": url, "header": dict(self.header)}
 
-    # ===================== 本地代理 =====================
     def localProxy(self, param):
         u = param.get("url", "") if isinstance(param, dict) else ""
         if not u:
