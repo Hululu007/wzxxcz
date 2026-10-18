@@ -103,9 +103,8 @@ _CLASS_FALLBACK = [
 _SORTS = [{"n": "最热", "v": "hits"}, {"n": "最新", "v": "time"}]
 
 # 线路别名兜底（真实显示名取自 get_detail 的 vodplayer[].show）
-# 已根据网页端真实显示将 lzm3u8 修正为“云播”
 _LINE_ALIAS = {
-    "lzm3u8": "云播", "Ace": "ACE", "jsm3u8": "极速", "bfzym3u8": "暴风",
+    "lzm3u8": "量子M3U8", "Ace": "ACE", "jsm3u8": "极速", "bfzym3u8": "暴风",
     "ikm3u8": "爱坤", "RR": "RR", "BBA": "BB", "NBY": "NB", "rose": "Rose",
     "vwnet": "VW", "YYNB": "YYNB",
 }
@@ -449,7 +448,7 @@ class Spider(Spider):
         return result
 
     def _player_meta(self, vodplayer):
-        """vodplayer[] 是线路定义表：from -> {show显示名, decode_status, decode_mode}"""
+        """vodplayer[] 是线路定义表：from -> {show显示名, decode_status, decode_mode, sort}"""
         meta = {}
         if not isinstance(vodplayer, list):
             return meta
@@ -463,6 +462,7 @@ class Spider(Spider):
                 "show": self._clean(p.get("show")) or key,
                 "status": str(p.get("decode_status", "0")).strip(),
                 "mode": str(p.get("decode_mode") or "").strip(),
+                "sort": str(p.get("sort", "") or "").strip(),
             }
         return meta
 
@@ -544,28 +544,40 @@ class Spider(Spider):
                     continue
                 if str(a.get("decode_status")) == _STATUS_MAINTENANCE:
                     continue
-                
                 one = self._split_from_url(a.get("vod_play_from"), a.get("vod_play_url"))
                 if not one:
                     continue
-                
-                # 修复：将单元素内的多条线路全部遍历提取，不再只取 one[0]
-                for f, eps in one:
-                    # 同一 from 已由详情提供时，保留详情版本（剧集更全），不覆盖
-                    if any(f == exist[0] for exist in lines):
-                        continue
-                    meta.setdefault(f, {
-                        "show": self._clean(a.get("site_name")) or _LINE_ALIAS.get(f, f),
-                        "status": str(a.get("decode_status", "0")),
-                        "mode": str(a.get("decode_mode") or ""),
-                    })
-                    lines.append((f, eps))
+                f, eps = one[0]
+                # 同一 from 已由详情提供时，保留详情版本（剧集更全），不覆盖
+                if any(f == exist[0] for exist in lines):
+                    continue
+                meta.setdefault(f, {
+                    "show": self._clean(a.get("site_name")) or _LINE_ALIAS.get(f, f),
+                    "status": str(a.get("decode_status", "0")),
+                    "mode": str(a.get("decode_mode") or ""),
+                    "sort": str(a.get("sort", "") or ""),
+                })
+                lines.append((f, eps))
 
         if not lines:
             self.log("no play line: %s" % vod_id)
             return {"list": []}
 
-        # 【重要修正】：完全移除了强制排序逻辑，完全遵循接口原始顺序（云播 -> ACE -> 极速 -> 暴风 -> 爱坤），与网页端表现一致。
+        # 排序：完全按站点网页的真实顺序 —— vodplayer[].sort
+        # （实测 云播=0 / ACE=4 / RR=5 / 极速·暴风·爱坤=99，
+        #   sort 相同时保持聚合接口的返回顺序，即网页上的展示顺序）
+        order = {f: i for i, (f, _) in enumerate(lines)}
+
+        def rank(item):
+            f = item[0]
+            m = meta.get(f) or {}
+            try:
+                sv = int(float(m.get("sort") or 9999))
+            except Exception:
+                sv = 9999
+            return (sv, order.get(f, 0))
+
+        lines.sort(key=rank)
 
         play_from = []
         play_url = []
