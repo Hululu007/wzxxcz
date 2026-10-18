@@ -3,6 +3,7 @@
 风月影院 www.cqjwny.com | TVBox Python 爬虫
 网站结构解析：
   - 列表页：/vodshow/{tid}-----------.html
+  - 分类筛选：/vodshow/{tid}-{area}-{order}-{class}-{lang}-{letter}------{page}---{year}.html
   - 详情页：/voddetail/{id}.html
   - 播放页：/vodplay/{id}-{sid}-{nid}.html
   - 播放地址：页面内 var player_aaaa={...} 的 url 字段（m3u8 直链）
@@ -67,6 +68,81 @@ CLASSES = [
     {"type_id": "4",  "type_name": "动漫"},
     {"type_id": "20", "type_name": "短剧"},
 ]
+
+# ---------- 筛选选项（严格照分类页源码 <ul class="stui-screen__list"> 提取） ----------
+_SORT_OPTS = [
+    {"n": "按时间", "v": "time"},
+    {"n": "按人气", "v": "hits"},
+    {"n": "按评分", "v": "score"},
+]
+
+_AREA_OPTS = [
+    {"n": "全部", "v": ""},
+    {"n": "大陆", "v": "大陆"},
+    {"n": "香港", "v": "香港"},
+    {"n": "台湾", "v": "台湾"},
+    {"n": "美国", "v": "美国"},
+    {"n": "法国", "v": "法国"},
+    {"n": "英国", "v": "英国"},
+    {"n": "日本", "v": "日本"},
+    {"n": "韩国", "v": "韩国"},
+    {"n": "德国", "v": "德国"},
+    {"n": "泰国", "v": "泰国"},
+    {"n": "印度", "v": "印度"},
+    {"n": "意大利", "v": "意大利"},
+    {"n": "西班牙", "v": "西班牙"},
+    {"n": "加拿大", "v": "加拿大"},
+    {"n": "其他", "v": "其他"},
+]
+
+_LANG_OPTS = [
+    {"n": "全部", "v": ""},
+    {"n": "国语", "v": "国语"},
+    {"n": "英语", "v": "英语"},
+    {"n": "粤语", "v": "粤语"},
+    {"n": "闽南语", "v": "闽南语"},
+    {"n": "韩语", "v": "韩语"},
+    {"n": "日语", "v": "日语"},
+    {"n": "法语", "v": "法语"},
+    {"n": "德语", "v": "德语"},
+    {"n": "其它", "v": "其它"},
+]
+
+_LETTER_OPTS = [{"n": "全部", "v": ""}] + \
+    [{"n": c, "v": c} for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"] + \
+    [{"n": "0-9", "v": "0-9"}]
+
+_YEAR_OPTS = [{"n": "全部", "v": ""}] + \
+    [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]
+
+_CLASS_OPTS = {
+    "1": ["剧情", "喜剧", "动作", "爱情", "恐怖", "科幻", "战争", "警匪", "犯罪",
+          "动画", "奇幻", "武侠", "冒险", "枪战", "悬疑", "惊悚", "经典", "青春",
+          "文艺", "微电影", "古装", "历史", "运动", "农村", "儿童", "网络电影"],
+    "2": ["古装", "战争", "青春偶像", "喜剧", "家庭", "犯罪", "动作", "奇幻",
+          "剧情", "历史", "经典", "乡村", "情景", "商战", "网剧", "其他"],
+    "3": ["选秀", "情感", "访谈", "播报", "旅游", "音乐", "美食", "纪实", "曲艺",
+          "生活", "游戏互动", "财经", "求职"],
+    "4": ["情感", "科幻", "热血", "推理", "搞笑", "冒险", "萝莉", "校园", "动作",
+          "机战", "运动", "战争", "少年", "少女", "社会", "原创", "亲子", "益智",
+          "励志", "其他"],
+    "20": ["古装", "战争", "青春偶像", "喜剧", "家庭", "犯罪", "动作", "奇幻",
+           "剧情", "历史", "经典", "乡村", "情景", "商战", "网剧", "其他"],
+}
+
+FILTERS = {}
+for _c in CLASSES:
+    _tid = _c["type_id"]
+    FILTERS[_tid] = [
+        {"key": "class", "name": "剧情",
+         "value": [{"n": "全部", "v": ""}] +
+                  [{"n": x, "v": x} for x in _CLASS_OPTS.get(_tid, [])]},
+        {"key": "area", "name": "地区", "value": _AREA_OPTS},
+        {"key": "year", "name": "年份", "value": _YEAR_OPTS},
+        {"key": "lang", "name": "语言", "value": _LANG_OPTS},
+        {"key": "letter", "name": "字母", "value": _LETTER_OPTS},
+        {"key": "order", "name": "排序", "value": _SORT_OPTS},
+    ]
 
 
 class Spider(Spider):
@@ -140,7 +216,6 @@ class Spider(Spider):
         if not html:
             return videos
 
-        # 普通列表卡片 / 搜索页 media 卡片 / 首页轮播
         patterns = [
             re.compile(
                 r'<a class="stui-vodlist__thumb lazyload" href="(/voddetail/\d+\.html)" '
@@ -172,7 +247,6 @@ class Spider(Spider):
                     "vod_remarks": remarks,
                 })
 
-        # 首页/侧栏文本列表
         for m in re.finditer(
                 r'<a class="top-line-dot text-overflow" href="(/voddetail/\d+\.html)" '
                 r'title="([^"]*)"><span class="text-muted pull-right">([^<]*)</span>([^<]*)</a>',
@@ -200,9 +274,8 @@ class Spider(Spider):
             except Exception:
                 pass
 
-        pages = re.findall(r'-------(\d+)---', html)
         nums = []
-        for p in pages:
+        for p in re.findall(r'-------(\d+)---', html):
             try:
                 nums.append(int(p))
             except Exception:
@@ -211,35 +284,57 @@ class Spider(Spider):
 
     # ---------------- 首页 ----------------
     def homeContent(self, filter=False):
-        return {"class": CLASSES, "filters": {}}
+        return {"class": CLASSES, "filters": FILTERS}
 
     def homeVideoContent(self):
         html = self._fetch(self.site_url + "/")
         videos = self._parse_video_list(html)
         return {"list": videos[:60]}
 
-    # ---------------- 分类 ----------------
-    def _category_url(self, tid, pg):
-        pg = int(pg) if pg else 1
-        if pg <= 1:
-            return "%s/vodshow/%s-----------.html" % (self.site_url, tid)
-        return "%s/vodshow/%s--------%d---.html" % (self.site_url, tid, pg)
+    # ---------------- 分类 / 筛选 ----------------
+    def _build_category_url(self, tid, page, extend):
+        """
+        严格按站点真实分页结构（12 段，'-' 分隔）：
+        /vodshow/{tid}-{area}-{order}-{class}-{lang}-{letter}--{}-{page}--{}-{}-{year}.html
+        实测：
+          第1页无筛选 -> /vodshow/1-----------.html
+          area=大陆, year=2026, 第2页
+                      -> /vodshow/13-大陆-------2---2026.html
+        """
+        area = (extend.get("area") or "").strip()
+        order = (extend.get("order") or "").strip()
+        cls = (extend.get("class") or "").strip()
+        lang = (extend.get("lang") or "").strip()
+        letter = (extend.get("letter") or "").strip()
+        year = (extend.get("year") or "").strip()
+
+        page_str = "" if page <= 1 else str(page)
+
+        parts = [str(tid), area, order, cls, lang, letter,
+                 "", "", page_str, "", "", year]
+        path = "-".join(parts)
+        encoded = urllib.parse.quote(path, safe="-")
+        return "%s/vodshow/%s.html" % (self.site_url, encoded)
 
     def categoryContent(self, tid, pg, filter, extend):
         page = int(pg) if pg else 1
-        url = self._category_url(tid, page)
+
+        if isinstance(extend, str):
+            try:
+                extend = json.loads(extend)
+            except Exception:
+                extend = {}
+        if not extend:
+            extend = {}
+
+        # 去掉空值/"全部"
+        extend = {k: v for k, v in extend.items()
+                  if v not in ("", None, "全部")}
+
+        url = self._build_category_url(tid, page, extend)
         self.log("category: %s" % url)
         html = self._fetch(url)
         videos = self._parse_video_list(html)
-
-        # 分页构造失败时，回退到从第一页分页链接里找当前页
-        if not videos and page > 1:
-            base = "%s/vodshow/%s-----------.html" % (self.site_url, tid)
-            base_html = self._fetch(base)
-            m = re.search(r'<a href="([^"]+)">%d</a>' % page, base_html)
-            if m:
-                html = self._fetch(self._fix_url(m.group(1)))
-                videos = self._parse_video_list(html)
 
         pagecount = self._page_count(html, page)
         return {
@@ -312,18 +407,19 @@ class Spider(Spider):
         if m:
             pic = self._fix_url(m.group(1).split("#")[0])
 
-        # 评分 / 备注
+        # 评分
         score = ""
         m = re.search(r'<span class="score text-red">([\d.]+)</span>', html)
         if m:
             score = m.group(1)
 
+        # 备注
         remarks = ""
         m = re.search(r'<span class="pic-text text-right">([^<]*)</span>', html)
         if m:
             remarks = self._clean(m.group(1))
 
-        # 简介
+        # 简介（首选 #desc 的 <p class="col-pd">）
         content = ""
         m = re.search(
             r'<div class="stui-pannel stui-pannel-bg clearfix" id="desc">'
@@ -349,7 +445,7 @@ class Spider(Spider):
         if m:
             director = self._clean(m.group(1))
 
-        # 剧集线路：解析每个 <div class="stui-pannel-box b playlist mb"> 下的 h3 + playlist
+        # 剧集线路：解析 <div class="stui-pannel-box b playlist mb"> 的 h3 + playlist
         play_from = []
         play_url = []
 
@@ -410,7 +506,7 @@ class Spider(Spider):
                 "header": {"User-Agent": UA, "Referer": self.site_url + "/"},
             }
 
-        # 播放页核心：var player_aaaa={...}
+        # 页面内 var player_aaaa={...}
         m = re.search(r'var player_aaaa=(\{[\s\S]*?\})\s*</script>', html)
         if not m:
             m = re.search(r'var player_aaaa=(\{[\s\S]*?\});', html)
@@ -443,7 +539,6 @@ class Spider(Spider):
                     },
                 }
 
-        # 兜底交给 TVBox 嗅探
         return {
             "parse": 1,
             "playUrl": "",
