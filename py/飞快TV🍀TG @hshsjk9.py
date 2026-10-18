@@ -76,7 +76,6 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
 # 站点导航实测：/vodtype/1.html 电影、2 剧集、3 综艺、4 动漫
-# 短剧不是一级导航，是剧集下的 vod_show 分类 32（/vodshow/32-----------.html）
 CLASSES = [
     {"type_id": "1",  "type_name": "电影"},
     {"type_id": "2",  "type_name": "剧集"},
@@ -238,8 +237,9 @@ _RE_PANEL = re.compile(
     r'<div class="module-list[^"]*"[^>]*?data-fk-line-sid="(\d+)"[^>]*>([\s\S]*?)'
     r'(?=<div class="module-list[^"]*"[^>]*?data-fk-line-sid="|\Z)', re.I)
 
+# 修复：兼容 class="module-play-list-link active" 或带空格的情况，避免漏集
 _RE_EP = re.compile(
-    r'<a class="module-play-list-link"\s+href="([^"]+)"[^>]*>\s*<span>([\s\S]*?)</span>',
+    r'<a\s+class="module-play-list-link[^"]*"\s+href="([^"]+)"[^>]*>\s*<span>([\s\S]*?)</span>',
     re.I)
 
 # 分页
@@ -247,8 +247,8 @@ _RE_PAGE_BLOCK = re.compile(r'<div id="page">([\s\S]*?)</div>', re.I)
 _RE_PAGE_HREF = re.compile(r'href="([^"]+)"[^>]*class="[^"]*page-link[^"]*"', re.I)
 _RE_PAGE_TITLE = re.compile(r'title="第(\d+)页"', re.I)
 
-# 播放页 player_aaaa
-_RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>', re.I)
+# 播放页 player_aaaa (兼容结尾带分号)
+_RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*;?\s*</script>', re.I)
 
 _TAG_RE = re.compile(r'<[^>]+>')
 
@@ -622,8 +622,9 @@ class Spider(Spider):
         if not vod_year:
             vod_year = next((t for t in tags if re.fullmatch(r"(19|20)\d{2}", t)), "")
         if not vod_area:
+            exclude_words = "剧情|喜剧|动作|爱情|科幻|动画|悬疑|惊悚|恐怖|犯罪|同性|音乐|歌舞|传记|历史|战争|西部|奇幻|冒险|灾难|武侠|情色|古装|家庭|青春|偶像|乡村|情景|商战|网剧|选秀|情感|访谈|播报|旅游|美食|纪实|曲艺|生活|游戏互动|财经|求职|热血|推理|搞笑|萝莉|校园|机战|少年|少女|社会|原创|亲子|益智|励志|其他|其它"
             for t in tags:
-                if t != vod_year and not re.search(r'剧情|喜剧|动作|爱情|科幻|动画|悬疑|惊悚|恐怖|犯罪|同性|音乐|歌舞|传记|历史|战争|西部|奇幻|冒险|灾难|武侠|情色', t):
+                if t != vod_year and not re.search(exclude_words, t):
                     vod_area = t
                     break
 
@@ -735,7 +736,6 @@ class Spider(Spider):
                         "Referer": self.site_url + "/",
                     },
                 }
-                # 放宽直链判断
                 low = url.lower()
                 if not (".m3u8" in low or ".mp4" in low or "m3u8" in low):
                     res["parse"] = 1
