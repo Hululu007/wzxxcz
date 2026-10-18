@@ -103,7 +103,6 @@ _CLASS_FALLBACK = [
 _SORTS = [{"n": "最热", "v": "hits"}, {"n": "最新", "v": "time"}]
 
 # 线路别名兜底（真实显示名取自 get_detail 的 vodplayer[].show）
-# 已根据网页端 UI 截图将 lzm3u8 修正为“云播”
 _LINE_ALIAS = {
     "lzm3u8": "云播", "Ace": "ACE", "jsm3u8": "极速", "bfzym3u8": "暴风",
     "ikm3u8": "爱坤", "RR": "RR", "BBA": "BB", "NBY": "NB", "rose": "Rose",
@@ -513,28 +512,36 @@ class Spider(Spider):
         body = self._clean(v.get("vod_content"))
         content = (INTRO_PREFIX + "\n" + body) if body else INTRO_PREFIX
 
+        # 1. 先获取主接口返回的默认线路（通常只有 云播、ACE）
         lines = self._split_from_url(v.get("vod_play_from"), v.get("vod_play_url"))
+        existing_froms = set([item[0] for item in lines])
 
-        # 主线路为空时，用同播放页另一个接口 internal/search_aggregate 的聚合线路补
-        if not lines:
-            agg = self._get_json("/api.php/web/internal/search_aggregate",
-                                 {"vod_id": vod_id}, signed=True, referer=play_page)
-            if agg and agg.get("code") == 200 and isinstance(agg.get("data"), list):
-                for a in agg["data"]:
-                    if not isinstance(a, dict):
-                        continue
-                    if str(a.get("decode_status")) == _STATUS_MAINTENANCE:
-                        continue
-                    one = self._split_from_url(a.get("vod_play_from"), a.get("vod_play_url"))
-                    if not one:
-                        continue
-                    f, eps = one[0]
-                    meta.setdefault(f, {
-                        "show": self._clean(a.get("site_name")) or f,
-                        "status": str(a.get("decode_status", "0")),
-                        "mode": str(a.get("decode_mode") or ""),
-                    })
-                    lines.append((f, eps))
+        # 2. 强制请求聚合接口，把极速、暴风、爱坤等备用线路全部合并进来
+        agg = self._get_json("/api.php/web/internal/search_aggregate",
+                             {"vod_id": vod_id}, signed=True, referer=play_page)
+        if agg and agg.get("code") == 200 and isinstance(agg.get("data"), list):
+            for a in agg["data"]:
+                if not isinstance(a, dict):
+                    continue
+                if str(a.get("decode_status")) == _STATUS_MAINTENANCE:
+                    continue
+                
+                one = self._split_from_url(a.get("vod_play_from"), a.get("vod_play_url"))
+                if not one:
+                    continue
+                f, eps = one[0]
+                
+                # 去重：如果主接口已经有了这条线路，就跳过
+                if f in existing_froms:
+                    continue
+                    
+                meta.setdefault(f, {
+                    "show": self._clean(a.get("site_name")) or f,
+                    "status": str(a.get("decode_status", "0")),
+                    "mode": str(a.get("decode_mode") or ""),
+                })
+                lines.append((f, eps))
+                existing_froms.add(f)
 
         if not lines:
             self.log("no play line: %s" % vod_id)
