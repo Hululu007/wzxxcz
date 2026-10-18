@@ -97,7 +97,9 @@ _GENRES = {
            "游戏互动", "财经", "求职"],
     "4":  ["情感", "科幻", "热血", "推理", "搞笑", "冒险", "萝莉", "校园", "动作", "机战",
            "运动", "战争", "少年", "少女", "社会", "原创", "亲子", "益智", "励志", "其他"],
-    "32": [],   # /vodshow/32 页面上没有“剧情”这一筛选项
+    # 短剧 32 的剧情筛选项与剧集 2 完全一致（实测 /vodshow/32-----------.html）
+    "32": ["古装", "战争", "青春偶像", "喜剧", "家庭", "犯罪", "动作", "奇幻", "剧情", "历史",
+           "经典", "乡村", "情景", "商战", "网剧", "其他"],
 }
 
 _AREAS = {
@@ -109,14 +111,27 @@ _AREAS = {
     "32": ["内地", "韩国", "香港", "台湾", "日本", "美国", "泰国", "英国", "新加坡", "其他"],
 }
 
+# 语言：来自各分类 /vodshow/{id}-----------.html 的「语言」区块
+# 只有电影 1 多出 法语 / 德语
+_LANGS = {
+    "1":  ["国语", "英语", "粤语", "闽南语", "韩语", "日语", "法语", "德语", "其它"],
+    "2":  ["国语", "英语", "粤语", "闽南语", "韩语", "日语", "其它"],
+    "3":  ["国语", "英语", "粤语", "闽南语", "韩语", "日语", "其它"],
+    "4":  ["国语", "英语", "粤语", "闽南语", "韩语", "日语", "其它"],
+    "32": ["国语", "英语", "粤语", "闽南语", "韩语", "日语", "其它"],
+}
+
 _YEARS = ["2026", "2025", "2024", "2023", "2022", "2021", "2020", "2019", "2018", "2017",
           "20年代", "10年代", "00年代", "90年代", "80年代", "70年代", "更早"]
 
+# 字母：A-Z + 0-9（各分类一致，取自 /vodshow/{id}-----A------.html）
+_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+            "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "0-9"]
+
 # 排序：真实参数值来自 /vodshow/1--time--------- 这类链接
-# 更新时间是站点默认排序，实际请求可省略该参数
+# 站点已注释「人气排序」，只剩 更新时间 / 豆瓣评分
 _SORTS = [
     {"n": "更新时间", "v": "time"},
-    {"n": "人气排序", "v": "hits"},
     {"n": "豆瓣评分", "v": "score"},
 ]
 
@@ -131,8 +146,10 @@ for c in CLASSES:
     flist = []
     if _GENRES.get(tid):
         flist.append({"key": "class", "name": "剧情", "value": _opts(_GENRES[tid])})
-    flist.append({"key": "area", "name": "地区", "value": _opts(_AREAS.get(tid, []))})
-    flist.append({"key": "year", "name": "年份", "value": _opts(_YEARS)})
+    flist.append({"key": "area",   "name": "地区", "value": _opts(_AREAS.get(tid, []))})
+    flist.append({"key": "lang",   "name": "语言", "value": _opts(_LANGS.get(tid, []))})
+    flist.append({"key": "year",   "name": "年份", "value": _opts(_YEARS)})
+    flist.append({"key": "letter", "name": "字母", "value": _opts(_LETTERS)})
     flist.append({"key": "sort_field", "name": "排序", "value": _SORTS})
     FILTERS[tid] = flist
 
@@ -404,35 +421,37 @@ class Spider(Spider):
     def _build_show_url(self, tid, page, extend):
         """
         列表路由（按站点真实链接逐段对齐，共 12 段）：
-            {id}-{空}-{sort}-{area}-{lang}-{letter}-{class}-{空}-{空}-{page}-{空}-{year}.html
+            {id}-{area}-{sort}-{class}-{lang}-{letter}-{空}-{空}-{page}-{空}-{空}-{year}.html
         实测样例：
             默认        /vodshow/1-----------.html
-            剧情        /vodshow/1---喜剧--------.html
             地区        /vodshow/1-大陆----------.html
+            排序        /vodshow/1--score---------.html
+            剧情        /vodshow/1---喜剧--------.html
             语言        /vodshow/1----国语-------.html
             字母        /vodshow/1-----A------.html
             第2页       /vodshow/1--------2---.html
             年份        /vodshow/1-----------2026.html
-            排序        /vodshow/1--time---------2026.html
-            排序+分页   /vodshow/1--hits------2---2026.html
+            排序+年份   /vodshow/1--score---------2026.html
         """
-        area = urllib.parse.quote(extend.get("area") or "")
-        genre = urllib.parse.quote(extend.get("class") or "")
-        year = urllib.parse.quote(extend.get("year") or "")
-        sort = extend.get("sort_field") or ""
+        area   = urllib.parse.quote(extend.get("area")   or "")
+        genre  = urllib.parse.quote(extend.get("class")  or "")
+        lang   = urllib.parse.quote(extend.get("lang")   or "")
+        letter = urllib.parse.quote(extend.get("letter") or "")
+        year   = urllib.parse.quote(extend.get("year")   or "")
+        sort   = extend.get("sort_field") or ""
         if sort == "time":          # 站点默认排序，可省略
             sort = ""
         pg = str(page) if page and int(page) > 1 else ""
 
         fields = ["", "", "", "", "", "", "", "", "", "", "", ""]
-        fields[0] = tid
-        fields[1] = area
-        fields[2] = sort
-        fields[3] = genre
-        fields[4] = ""        # 语言
-        fields[5] = ""        # 字母
-        fields[8] = pg
-        fields[11] = year
+        fields[0]  = tid
+        fields[1]  = area
+        fields[2]  = sort
+        fields[3]  = genre
+        fields[4]  = lang      # 第 5 段：语言
+        fields[5]  = letter    # 第 6 段：字母
+        fields[8]  = pg        # 第 9 段：分页
+        fields[11] = year      # 第 12 段：年份
         return "%s/vodshow/%s.html" % (self.site_url, "-".join(fields))
 
     # ---------------- TVBox 接口 ----------------
@@ -460,7 +479,7 @@ class Spider(Spider):
             extend = {}
 
         data = {}
-        for k in ("class", "area", "year", "sort_field"):
+        for k in ("class", "area", "lang", "letter", "year", "sort_field"):
             v = extend.get(k)
             if v and v not in ("", "全部", "all"):
                 data[k] = v
