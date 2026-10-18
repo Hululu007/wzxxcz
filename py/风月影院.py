@@ -13,6 +13,7 @@
   - 短剧(tid=20)   : 同电视剧
 筛选 URL 12 段结构（'-' 分隔）：
   {tid}-{area}-{order}-{class}-{lang}-{letter}--{}-{page}--{}-{}-{year}
+  *注意：按类型筛选本质是替换 URL 第一段的 {tid}
 """
 import re
 import sys
@@ -89,6 +90,53 @@ _YEAR_OPTS = [{"n": "全部", "v": ""}] + \
 _LETTER_OPTS = [{"n": "全部", "v": ""}] + \
     [{"n": c, "v": c} for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"] + \
     [{"n": "0-9", "v": "0-9"}]
+
+# 按类型选项（对应真实 tid）
+_MOVIE_TYPE = [
+    {"n": "全部", "v": "1"},
+    {"n": "动作电影", "v": "6"},
+    {"n": "喜剧电影", "v": "7"},
+    {"n": "爱情电影", "v": "8"},
+    {"n": "科幻电影", "v": "9"},
+    {"n": "恐怖电影", "v": "10"},
+    {"n": "剧情电影", "v": "11"},
+    {"n": "战争电影", "v": "12"},
+    {"n": "纪录电影", "v": "21"},
+    {"n": "动漫电影", "v": "26"},
+]
+
+_TV_TYPE = [
+    {"n": "全部", "v": "2"},
+    {"n": "国产剧", "v": "13"},
+    {"n": "香港剧", "v": "14"},
+    {"n": "台湾剧", "v": "15"},
+    {"n": "日本剧", "v": "16"},
+    {"n": "韩国剧", "v": "22"},
+    {"n": "泰国剧", "v": "23"},
+    {"n": "欧美剧", "v": "24"},
+    {"n": "海外剧", "v": "25"},
+]
+
+_VARIETY_TYPE = [
+    {"n": "全部", "v": "3"},
+    {"n": "大陆综艺", "v": "27"},
+    {"n": "日韩综艺", "v": "28"},
+    {"n": "港台综艺", "v": "29"},
+    {"n": "欧美综艺", "v": "30"},
+]
+
+_ANIME_TYPE = [
+    {"n": "全部", "v": "4"},
+    {"n": "国产动漫", "v": "31"},
+    {"n": "日韩动漫", "v": "32"},
+    {"n": "港台动漫", "v": "33"},
+    {"n": "欧美动漫", "v": "34"},
+    {"n": "海外动漫", "v": "35"},
+]
+
+_SHORT_TYPE = [
+    {"n": "全部", "v": "20"},
+]
 
 # 电影页（源码 /vodshow/7-大陆----------2026.html 筛选区）
 _MOVIE_AREA = [
@@ -175,6 +223,7 @@ _ANIME_CLASS = [
 
 FILTERS = {
     "1": [
+        {"key": "type",  "name": "类型", "value": _MOVIE_TYPE},
         {"key": "class", "name": "剧情",
          "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in _MOVIE_CLASS]},
         {"key": "area",  "name": "地区", "value": _MOVIE_AREA},
@@ -184,6 +233,7 @@ FILTERS = {
         {"key": "order", "name": "排序", "value": _SORT_OPTS},
     ],
     "2": [
+        {"key": "type",  "name": "类型", "value": _TV_TYPE},
         {"key": "class", "name": "剧情",
          "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in _TV_CLASS]},
         {"key": "area",  "name": "地区", "value": _TV_AREA},
@@ -193,6 +243,7 @@ FILTERS = {
         {"key": "order", "name": "排序", "value": _SORT_OPTS},
     ],
     "3": [
+        {"key": "type",  "name": "类型", "value": _VARIETY_TYPE},
         {"key": "class", "name": "剧情",
          "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in _VARIETY_CLASS]},
         {"key": "area",  "name": "地区", "value": _TV_AREA},
@@ -202,6 +253,7 @@ FILTERS = {
         {"key": "order", "name": "排序", "value": _SORT_OPTS},
     ],
     "4": [
+        {"key": "type",  "name": "类型", "value": _ANIME_TYPE},
         {"key": "class", "name": "剧情",
          "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in _ANIME_CLASS]},
         {"key": "area",  "name": "地区", "value": _TV_AREA},
@@ -211,6 +263,7 @@ FILTERS = {
         {"key": "order", "name": "排序", "value": _SORT_OPTS},
     ],
     "20": [
+        {"key": "type",  "name": "类型", "value": _SHORT_TYPE},
         {"key": "class", "name": "剧情",
          "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in _TV_CLASS]},
         {"key": "area",  "name": "地区", "value": _TV_AREA},
@@ -400,10 +453,15 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
+        # 核心逻辑：如果传入了 type 值，则用 type 的 v 替换原有的 tid
+        req_tid = tid
+        if extend.get("type"):
+            req_tid = extend["type"]
+
         extend = {k: v for k, v in extend.items()
                   if v not in ("", None, "全部")}
 
-        url = self._build_category_url(tid, page, extend)
+        url = self._build_category_url(req_tid, page, extend)
         self.log("category: %s" % url)
         html = self._fetch(url)
         videos = self._parse_video_list(html)
