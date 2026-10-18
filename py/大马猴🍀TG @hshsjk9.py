@@ -104,7 +104,7 @@ _SORTS = [{"n": "最热", "v": "hits"}, {"n": "最新", "v": "time"}]
 
 # 线路别名兜底（真实显示名取自 get_detail 的 vodplayer[].show）
 _LINE_ALIAS = {
-    "lzm3u8": "云播", "Ace": "ACE", "jsm3u8": "极速", "bfzym3u8": "暴风",
+    "lzm3u8": "量子M3U8", "Ace": "ACE", "jsm3u8": "极速", "bfzym3u8": "暴风",
     "ikm3u8": "爱坤", "RR": "RR", "BBA": "BB", "NBY": "NB", "rose": "Rose",
     "vwnet": "VW", "YYNB": "YYNB",
 }
@@ -465,23 +465,40 @@ class Spider(Spider):
             }
         return meta
 
-    def _is_direct_line(self, from_code, meta):
+    def _line_kind(self, from_code, meta, eps=None):
         """
-        判断该线路地址能否直接交给播放器。
-        依据站点真实定义（vodplayer[].decode_status / decode_mode / parse_features）：
-          - decode_status=0 且 mode=client  -> 地址已是解析后的真实 m3u8（如 lzm3u8/暴风）
-          - decode_status=1 且 mode=server  -> 地址是服务端密文串（如 Ace），TVBox 无法直连
-          - decode_status=2                 -> 线路维护中
-        地址本身以 http + .m3u8 结尾时同样可直接播放（实测 200）。
+        判定一条线路的地址真实形态（以实测样本为准，不臆测）：
+          m3u8 -> 已是可直连的 m3u8/mp4 地址
+                  （如 lzm3u8: https://v.lzcdn31.com/.../index.m3u8，实测 200）
+          page -> 网页地址，需要播放器嗅探
+                  （如 RR: https://mh.yichengwlkj.com/drama/57746?episodeNo=1，
+                    307 跳转 /pc/... 的 Next.js 页面，页面内无 m3u8）
+          code -> 站点密文串，需服务端 WASM 解码
+                  （如 Ace: Ace_Net-xxxxxxxx，自身不含协议与 .m3u8）
         """
-        m = meta.get(from_code)
-        if not m:
-            return False
-        if m["status"] == _STATUS_MAINTENANCE:
-            return False
-        if m["status"] != _STATUS_DECODED:
-            return False
-        return m["mode"] in ("", "client")
+        sample = ""
+        if eps:
+            sample = (eps[0][1] if isinstance(eps[0], (list, tuple)) else str(eps[0])).strip()
+        low = sample.lower()
+
+        if low.startswith("//"):
+            low = "https:" + low
+
+        if low.startswith("http"):
+            if ".m3u8" in low or ".mp4" in low:
+                return "m3u8"
+            return "page"
+
+        if sample:
+            return "code"
+
+        # 无样本时退回线路定义表
+        m = meta.get(from_code) or {}
+        if str(m.get("status", "")) == _STATUS_MAINTENANCE:
+            return "code"
+        if str(m.get("status", "")) == _STATUS_DECODED and str(m.get("mode", "")) in ("", "client"):
+            return "m3u8"
+        return "code"
 
     def detailContent(self, ids):
         if not ids:
@@ -512,11 +529,12 @@ class Spider(Spider):
         body = self._clean(v.get("vod_content"))
         content = (INTRO_PREFIX + "\n" + body) if body else INTRO_PREFIX
 
-        # 1. 先获取主接口返回的默认线路（通常只有 云播、ACE）
         lines = self._split_from_url(v.get("vod_play_from"), v.get("vod_play_url"))
-        existing_froms = set([item[0] for item in lines])
 
-        # 2. 强制请求聚合接口，把极速、暴风、爱坤等备用线路全部合并进来
+        # 聚合线路：必须以“追加”方式合并，不能只在主线路为空时兜底。
+        # 实测 get_detail 只下发部分线路（如仅 lzm3u8$$$Ace），
+        # 而同一播放页调用的 internal/search_aggregate 还带有极速/暴风/爱坤等，
+        # 部分影片（如 169386 拜托了冰箱）详情线路甚至为空、聚合却有 52 集。
         agg = self._get_json("/api.php/web/internal/search_aggregate",
                              {"vod_id": vod_id}, signed=True, referer=play_page)
         if agg and agg.get("code") == 200 and isinstance(agg.get("data"), list):
@@ -525,32 +543,28 @@ class Spider(Spider):
                     continue
                 if str(a.get("decode_status")) == _STATUS_MAINTENANCE:
                     continue
-                
                 one = self._split_from_url(a.get("vod_play_from"), a.get("vod_play_url"))
                 if not one:
                     continue
                 f, eps = one[0]
-                
-                # 去重：如果主接口已经有了这条线路，就跳过
-                if f in existing_froms:
+                # 同一 from 已由详情提供时，保留详情版本（剧集更全），不覆盖
+                if any(f == exist[0] for exist in lines):
                     continue
-                    
                 meta.setdefault(f, {
-                    "show": self._clean(a.get("site_name")) or f,
+                    "show": self._clean(a.get("site_name")) or _LINE_ALIAS.get(f, f),
                     "status": str(a.get("decode_status", "0")),
                     "mode": str(a.get("decode_mode") or ""),
                 })
                 lines.append((f, eps))
-                existing_froms.add(f)
 
         if not lines:
             self.log("no play line: %s" % vod_id)
             return {"list": []}
 
-        # 直连线路优先排在前面，密文线路靠后（保证 TVBox 默认选中的线路能直接播放）
+        # 排序：m3u8 直链 > 网页(需嗅探) > 密文(不可直连)，保证默认线路能直接播放
         def rank(item):
-            f = item[0]
-            return 0 if self._is_direct_line(f, meta) else 1
+            kind = self._line_kind(item[0], meta, item[1])
+            return {"m3u8": 0, "page": 1}.get(kind, 2)
 
         lines.sort(key=rank)
 
@@ -584,12 +598,34 @@ class Spider(Spider):
         }]}
 
     # ================= 播放 =================
+    def _fix_url(self, url):
+        """补全协议，并对含非 ASCII（如中文『第01集』目录）的地址做路径编码。
+        实测 https://p.bvvvvvvv7f.com/video/baituoliaobingxiang/第01集/index.m3u8
+        直接请求会因非 ASCII 报错，编码为 %E7%AC%AC01%E9%9B%86 后返回 200。
+        """
+        u = (url or "").strip()
+        if not u:
+            return ""
+        if u.startswith("//"):
+            u = "https:" + u
+        if not u.lower().startswith("http"):
+            u = urllib.parse.urljoin(self.site_url + "/", u)
+        # 只处理已编码则跳过，避免二次编码
+        try:
+            u.encode("ascii")
+        except UnicodeEncodeError:
+            parts = urllib.parse.urlsplit(u)
+            path = urllib.parse.quote(parts.path, safe="/%:@&=+$,~*'()")
+            query = urllib.parse.quote(parts.query, safe="=&%:@+$,~*'()/?")
+            u = urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, query, parts.fragment))
+        return u
+
     def playerContent(self, flag, id, vipFlags):
         """
-        播放地址来源分两类（均以站点 vodplayer 定义为依据）：
-          - 形如 https://.../index.m3u8 的真实地址 -> parse=0 直出（实测 HTTP 200）
-          - 形如 Ace_Net-xxx 的密文串（decode_status=1）-> 站点需前端 WASM 服务端解码，
-            爬虫内无法还原，改为把该剧的站点播放页交给 TVBox 嗅探
+        按地址真实形态分三种（实测样本）：
+          m3u8 -> https://.../index.m3u8 直出，parse=0
+          page -> 网页(如 RR 的 mh.yichengwlkj.com/drama/xxx)，parse=1 交 TVBox 嗅探
+          code -> 站点密文(如 Ace_Net-xxx)，爬虫内无法解码，退回站点播放页嗅探
         """
         url = (id or "").strip()
         header = {"User-Agent": UA, "Referer": self.site_url + "/"}
@@ -597,22 +633,23 @@ class Spider(Spider):
         if not url:
             return {"parse": 1, "playUrl": "", "url": "", "header": header}
 
-        lower = url.lower()
-
-        if lower.startswith("//"):
+        if url.lower().startswith("//"):
             url = "https:" + url
-            lower = url.lower()
 
-        if lower.startswith("http") and (".m3u8" in lower or ".mp4" in lower):
-            return {"parse": 0, "playUrl": "", "url": url, "header": header}
+        kind = self._line_kind("", {}, [(None, url)])
 
-        # 密文/相对地址：回退到该剧的站点播放页，由 TVBox 嗅探
+        if kind == "m3u8":
+            return {"parse": 0, "playUrl": "", "url": self._fix_url(url), "header": header}
+
+        if kind == "page":
+            # 网页线路：直接嗅探该网页（RR 页面会 307 跳 /pc/...，跟随即可）
+            return {"parse": 1, "playUrl": "", "url": self._fix_url(url), "header": header}
+
+        # 密文线路：回退到本站播放页
         if self._last_vod_id:
             page = "%s/play/%s" % (self.site_url, self._last_vod_id)
             return {"parse": 1, "playUrl": "", "url": page, "header": header}
 
-        if not lower.startswith("http"):
-            url = urllib.parse.urljoin(self.site_url + "/", url)
         return {"parse": 1, "playUrl": "", "url": url, "header": header}
 
     def localProxy(self, param):
