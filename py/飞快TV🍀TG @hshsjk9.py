@@ -1,508 +1,758 @@
-# -*- coding: utf-8 -*-
-# !/usr/bin/python
+# coding=utf-8
+"""
+飞快TV feikuai.in | TVBox Python 爬虫
 
+站点结构：
+  - 程序：MacCMS10 + mxtheme 模板（mxtheme / mxprocms 目录）
+  - 首页         /                                   卡片 <a class="module-poster-item module-item">
+  - 分类首页     /vodtype/{id}.html                   只用于取站点真实分类，不直接列表
+  - 列表页       /vodshow/{id}-{area}-{lang}-{letter}-{page}-{year}.html
+                 排序参数 /vodshow/{id}--{sort}---------{year}.html
+  - 搜索页       /vodsearch/-------------.html?wd={kw}   卡片 <div class="module-card-item module-item">
+  - 详情页       /voddetail/{id}.html
+  - 播放页       /vodplay/{id}-{sid}-{nid}.html
+                 var player_aaaa = {"encrypt":2,"url":"<base64(escape(url))>"}
+                 unescape(base64decode(url)) 即为真实播放地址
+
+要点：
+  - 线路名取自 module-tab-item 的 data-dropdown-value / data-fk-line-sid，
+    再与后面 panel 的 data-fk-line-sid 配对
+  - encrypt=2 的 url 走 base64 -> unescape 两重解码；encrypt=1 只做 unescape
+"""
+import re
 import sys
 import json
-import re
-import base64
-import datetime
 import time
-from urllib.parse import quote_plus, unquote
-from lxml import etree
+import base64
+import urllib.parse
 
 sys.path.append('..')
-from base.spider import Spider
+
+try:
+    from base.spider import Spider
+except ImportError:
+    import requests as _rq
+    try:
+        import urllib3
+        urllib3.disable_warnings()
+    except Exception:
+        pass
+
+    class _BaseSpider(object):
+        def __init__(self):
+            self._session = None
+
+        @property
+        def _sess(self):
+            if self._session is None:
+                self._session = _rq.Session()
+                self._session.verify = False
+                adapter = _rq.adapters.HTTPAdapter(
+                    pool_connections=10, pool_maxsize=10, max_retries=0)
+                self._session.mount('https://', adapter)
+                self._session.mount('http://', adapter)
+            return self._session
+
+        def fetch(self, url, headers=None, **kw):
+            timeout = kw.pop('timeout', 15)
+            r = self._sess.get(url, headers=headers, timeout=timeout, **kw)
+            if not r.encoding or r.encoding.lower() == 'iso-8859-1':
+                r.encoding = 'utf-8'
+            return r
+
+        def log(self, *a, **kw):
+            try:
+                print("[feikuai]", *a)
+            except Exception:
+                pass
+
+    Spider = _BaseSpider
+
+
+HOST = "https://feikuai.in"
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
+
+# 站点导航实测：/vodtype/1.html 电影、2 剧集、3 综艺、4 动漫
+# 短剧不是一级导航，是剧集下的 vod_show 分类 32（/vodshow/32-----------.html）
+CLASSES = [
+    {"type_id": "1",  "type_name": "电影"},
+    {"type_id": "2",  "type_name": "剧集"},
+    {"type_id": "3",  "type_name": "综艺"},
+    {"type_id": "4",  "type_name": "动漫"},
+    {"type_id": "32", "type_name": "短剧"},
+]
+
+# 各分类列表页真实筛选词
+# 来源：/vodshow/{id}-----------.html 页面 .module-class-items 区块，逐条抓取
+_GENRES = {
+    "1":  ["喜剧", "爱情", "恐怖", "动作", "科幻", "剧情", "战争", "警匪", "犯罪", "动画",
+           "奇幻", "武侠", "冒险", "枪战", "悬疑", "惊悚", "经典", "青春", "文艺", "微电影",
+           "古装", "历史", "运动", "农村", "儿童", "网络电影"],
+    "2":  ["古装", "战争", "青春偶像", "喜剧", "家庭", "犯罪", "动作", "奇幻", "剧情", "历史",
+           "经典", "乡村", "情景", "商战", "网剧", "其他"],
+    "3":  ["选秀", "情感", "访谈", "播报", "旅游", "音乐", "美食", "纪实", "曲艺", "生活",
+           "游戏互动", "财经", "求职"],
+    "4":  ["情感", "科幻", "热血", "推理", "搞笑", "冒险", "萝莉", "校园", "动作", "机战",
+           "运动", "战争", "少年", "少女", "社会", "原创", "亲子", "益智", "励志", "其他"],
+    "32": [],   # /vodshow/32 页面上没有“剧情”这一筛选项
+}
+
+_AREAS = {
+    "1":  ["大陆", "香港", "台湾", "美国", "法国", "英国", "日本", "韩国", "德国", "泰国",
+           "印度", "意大利", "西班牙", "加拿大", "其他"],
+    "2":  ["内地", "韩国", "香港", "台湾", "日本", "美国", "泰国", "英国", "新加坡", "其他"],
+    "3":  ["内地", "港台", "日韩", "欧美"],
+    "4":  ["国产", "日本", "欧美", "其他"],
+    "32": ["内地", "韩国", "香港", "台湾", "日本", "美国", "泰国", "英国", "新加坡", "其他"],
+}
+
+_YEARS = ["2026", "2025", "2024", "2023", "2022", "2021", "2020", "2019", "2018", "2017",
+          "20年代", "10年代", "00年代", "90年代", "80年代", "70年代", "更早"]
+
+# 排序：真实参数值来自 /vodshow/1--time--------- 这类链接
+# 更新时间是站点默认排序，实际请求可省略该参数
+_SORTS = [
+    {"n": "更新时间", "v": "time"},
+    {"n": "人气排序", "v": "hits"},
+    {"n": "豆瓣评分", "v": "score"},
+]
+
+
+def _opts(items):
+    return [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in items]
+
+
+FILTERS = {}
+for c in CLASSES:
+    tid = c["type_id"]
+    flist = []
+    if _GENRES.get(tid):
+        flist.append({"key": "class", "name": "剧情", "value": _opts(_GENRES[tid])})
+    flist.append({"key": "area", "name": "地区", "value": _opts(_AREAS.get(tid, []))})
+    flist.append({"key": "year", "name": "年份", "value": _opts(_YEARS)})
+    flist.append({"key": "sort_field", "name": "排序", "value": _SORTS})
+    FILTERS[tid] = flist
+
+
+# ===================== 正则 =====================
+
+# 首页 / 列表页卡片：<a href="/voddetail/xxx.html" title="片名" class="module-poster-item module-item"> ... </a>
+_RE_POSTER_A = re.compile(
+    r'<a\s[^>]*href="(/voddetail/\d+\.html)"[^>]*class="[^"]*module-poster-item[^"]*"[^>]*>',
+    re.I)
+
+_RE_TITLE_ATTR = re.compile(r'title="([^"]*)"', re.I)
+_RE_NOTE = re.compile(r'<div class="module-item-note">([^<]*)</div>', re.I)
+_RE_DOUBAN = re.compile(r'<div class="module-item-douban">\s*豆瓣[:：]\s*([\d.]*)\s*分?', re.I)
+_RE_IMG = re.compile(
+    r'<img[^>]*?(?:data-original|data-remote|src)="([^"]+)"', re.I)
+_RE_IMG_ALT = re.compile(r'alt="([^"]*)"', re.I)
+_RE_POSTER_TITLE = re.compile(
+    r'<div class="module-poster-item-title">([\s\S]*?)</div>', re.I)
+
+# 搜索页卡片：<div class="module-card-item module-item"> ... </div>
+_RE_CARD_BLOCK = re.compile(
+    r'<div class="module-card-item[^"]*"\s*>\s*'
+    r'<div class="module-card-item-class">([^<]*)</div>\s*'
+    r'<a href="(/voddetail/\d+\.html)"[^>]*>([\s\S]*?)'
+    r'<div class="module-card-item-title">\s*<a[^>]*>([\s\S]*?)</a>',
+    re.S | re.I)
+
+# 详情页
+_RE_H1 = re.compile(r'<h1[^>]*>([\s\S]*?)</h1>', re.I)
+_RE_TITLE_TAG = re.compile(r'<title>([\s\S]*?)</title>', re.I)
+_RE_INTRO = re.compile(
+    r'<div class="module-info-introduction-content[^"]*"[^>]*>([\s\S]*?)</div>', re.I)
+_RE_BACKDROP = re.compile(
+    r'--fk-mobile-backdrop-image:url\(\'([^\']+)\'\)', re.I)
+_RE_POSTER_BIG = re.compile(
+    r'<div class="module-info-poster">[\s\S]{0,600}?<img[^>]*?(?:data-original|src)="([^"]+)"',
+    re.I)
+
+_RE_META_ITEM = re.compile(
+    r'<div class="module-info-item">\s*<span class="module-info-item-title">([^<：:]*)'
+    r'[：:]?\s*</span>\s*<div class="module-info-item-content">([\s\S]*?)</div>\s*</div>',
+    re.S | re.I)
+
+_RE_TAG_LINK = re.compile(
+    r'<div class="module-info-tag-link">\s*(?:<a[^>]*>|<span>)([\s\S]*?)</(?:a|span)>', re.I)
+
+# 线路标签：data-dropdown-value="线路名" data-fk-line-sid="7"
+_RE_TAB = re.compile(
+    r'<div class="module-tab-item[^"]*"[^>]*?data-dropdown-value="([^"]*)"[^>]*?'
+    r'data-fk-line-sid="(\d+)"[^>]*>([\s\S]*?)</div>', re.S | re.I)
+
+# 剧集 panel 与其内部链接
+_RE_PANEL = re.compile(
+    r'<div class="module-list[^"]*"[^>]*?data-fk-line-sid="(\d+)"[^>]*>([\s\S]*?)'
+    r'(?=<div class="module-list[^"]*"[^>]*?data-fk-line-sid="|\Z)', re.I)
+
+_RE_EP = re.compile(
+    r'<a class="module-play-list-link"\s+href="([^"]+)"[^>]*>\s*<span>([\s\S]*?)</span>',
+    re.I)
+
+# 分页
+_RE_PAGE_BLOCK = re.compile(r'<div id="page">([\s\S]*?)</div>', re.I)
+_RE_PAGE_HREF = re.compile(r'href="([^"]+)"[^>]*class="[^"]*page-link[^"]*"', re.I)
+_RE_PAGE_TITLE = re.compile(r'title="第(\d+)页"', re.I)
+
+# 播放页 player_aaaa
+_RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>', re.I)
+
+_TAG_RE = re.compile(r'<[^>]+>')
 
 
 class Spider(Spider):
+
     def getName(self):
-        return "飞快"
+        return "飞快TV"
 
     def init(self, extend=""):
-        self.host = "https://feikuai.in"
-        self.default_pic = "https://pic.rmb.bdstatic.com/bjh/user/default.png"
-        self._home_cache = []
-        self._home_cache_time = 0
+        try:
+            self.extend = json.loads(extend) if extend else {}
+        except Exception:
+            self.extend = {}
 
-    # ============================================================
-    # 首页
-    # ============================================================
-    def homeContent(self, filter):
-        _r1 = {}
-        _c1 = {
-            "电影": "1",
-            "剧集": "2",
-            "综艺": "3",
-            "动漫": "4"
+        self.site_url = (self.extend.get("site") or HOST).rstrip("/")
+        self.headers = {
+            "User-Agent": UA,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Referer": self.site_url + "/",
         }
-        _c2 = [{'type_name': _k1, 'type_id': _v1} for _k1, _v1 in _c1.items()]
-        _r1['class'] = _c2
-        # 返回空筛选器，不显示任何筛选选项
-        _r1['filters'] = {}
-        return _r1
+        self.default_pic = self.site_url + "/mxtheme/images/errorpic.png"
+        self._play_cache = {}
+        self.log("init site=%s" % self.site_url)
+
+    # ---------------- 基础工具 ----------------
+
+    def _fetch(self, url, timeout=20, headers=None):
+        try:
+            h = dict(self.headers)
+            if headers:
+                h.update(headers)
+            rsp = self.fetch(url, headers=h, timeout=timeout)
+            text = ""
+            if hasattr(rsp, "text"):
+                text = rsp.text or ""
+            elif hasattr(rsp, "content"):
+                text = rsp.content.decode("utf-8", "ignore")
+            else:
+                text = str(rsp)
+            return text
+        except Exception as e:
+            self.log("fetch FAIL %s -> %s" % (url, e))
+            return ""
+
+    def _fix_url(self, url):
+        if not url:
+            return ""
+        url = url.strip()
+        if url.startswith("//"):
+            return "https:" + url
+        if url.startswith("http"):
+            return url
+        if url.startswith("/"):
+            return self.site_url + url
+        return urllib.parse.urljoin(self.site_url + "/", url)
+
+    def _clean(self, s):
+        if not s:
+            return ""
+        s = re.sub(r"<br\s*/?>", "\n", s, flags=re.I)
+        s = re.sub(r"</p>\s*<p[^>]*>", "\n", s, flags=re.I)
+        s = _TAG_RE.sub("", s)
+        s = (s.replace("&nbsp;", " ").replace("\xa0", " ")
+              .replace("&amp;", "&").replace("&quot;", '"')
+              .replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">")
+              .replace("&ldquo;", "“").replace("&rdquo;", "”")
+              .replace("&middot;", "·"))
+        s = re.sub(r"[ \t\r\f\v]+", " ", s)
+        s = re.sub(r"\n\s*\n+", "\n", s)
+        return s.strip()
+
+    def _pick_img(self, attrs_html, prefer=("data-original", "data-remote", "src")):
+        """从 img 标签里按优先级取可用图片地址"""
+        for key in prefer:
+            m = re.search(r'%s="([^"]+)"' % re.escape(key), attrs_html, re.I)
+            if m:
+                u = m.group(1).strip()
+                if u and "errorpic" not in u and u not in ("", "#"):
+                    return self._fix_url(u)
+        return ""
+
+    # ---------------- 列表解析 ----------------
+
+    def _parse_poster_items(self, html):
+        """解析 module-poster-item 卡片（首页、vodshow 列表页）"""
+        out = []
+        seen = set()
+        marks = [m for m in _RE_POSTER_A.finditer(html)]
+        for idx, m in enumerate(marks):
+            href = m.group(1)
+            if href in seen:
+                continue
+            end = marks[idx + 1].start() if idx + 1 < len(marks) else min(len(html), m.end() + 3000)
+            block = html[m.start():end]
+            head = m.group(0)
+
+            name = ""
+            mt = _RE_TITLE_ATTR.search(head)
+            if mt:
+                name = self._clean(mt.group(1))
+            if not name:
+                mt = _RE_POSTER_TITLE.search(block)
+                if mt:
+                    name = self._clean(mt.group(1))
+            if not name:
+                mi = _RE_IMG_ALT.search(block)
+                if mi:
+                    name = self._clean(mi.group(1))
+
+            img_tag = ""
+            mi = _RE_IMG.search(block)
+            if mi:
+                start = block.rfind("<img", 0, mi.end())
+                img_tag = block[start:mi.end() + 1] if start >= 0 else mi.group(0)
+            pic = self._pick_img(img_tag or block)
+
+            remarks = ""
+            mn = _RE_NOTE.search(block)
+            if mn:
+                remarks = self._clean(mn.group(1))
+            md = _RE_DOUBAN.search(block)
+            if md and md.group(1):
+                score = md.group(1).strip()
+                remarks = ("%s 豆瓣%s" % (remarks, score)).strip() if remarks else ("豆瓣%s" % score)
+
+            seen.add(href)
+            out.append({
+                "vod_id": href,
+                "vod_name": name or href,
+                "vod_pic": pic or self.default_pic,
+                "vod_remarks": remarks,
+            })
+        return out
+
+    def _parse_card_items(self, html):
+        """解析搜索页的 module-card-item 卡片"""
+        out = []
+        seen = set()
+        for m in _RE_CARD_BLOCK.finditer(html):
+            cat, href, mid, name = m.group(1), m.group(2), m.group(3), m.group(4)
+            if href in seen:
+                continue
+            seen.add(href)
+            pic = self._pick_img(mid)
+            remarks = self._clean(cat)
+            mn = _RE_NOTE.search(mid)
+            if mn:
+                note = self._clean(mn.group(1))
+                remarks = ("%s %s" % (remarks, note)).strip() if remarks else note
+            out.append({
+                "vod_id": href,
+                "vod_name": self._clean(name) or href,
+                "vod_pic": pic or self.default_pic,
+                "vod_remarks": remarks,
+            })
+        return out
+
+    def _extract_list(self, html):
+        items = self._parse_poster_items(html)
+        if items:
+            return items
+        return self._parse_card_items(html)
+
+    def _page_count(self, html):
+        """分页块 <div id="page">，取 page-link 的 title="第N页" 最大值
+        真实分页：/vodshow/1--------2---.html /vodsearch/kw----------2---.html
+        注意页码段是 -{page}---，不能把末尾年份当成页码。
+        """
+        m = _RE_PAGE_BLOCK.search(html)
+        if not m:
+            return 1
+        block = m.group(1)
+        nums = []
+        # 1) 翻页链接上的 title="第N页"（最稳，N 可以是 4 位）
+        for t in re.findall(r'title="第(\d+)页"', block):
+            nums.append(int(t))
+        # 2) 尾页链接 ...-{page}---{year}.html
+        tail = re.search(r'href="([^"]+)"[^>]*title="尾页"', block, re.I)
+        if tail:
+            mm = re.search(r'-(\d{1,6})-{3}(\d{4})?\.html$', tail.group(1))
+            if mm:
+                nums.append(int(mm.group(1)))
+        # 3) 当前页 <span ... page-current ...>N
+        cur = re.search(r'page-current[^>]*>\s*(\d+)', block)
+        if cur:
+            nums.append(int(cur.group(1)))
+        if not nums:
+            # 4) 最后兜底：从翻页链接里取 page 段（排除末尾年份）
+            for href in _RE_PAGE_HREF.findall(block):
+                mm = re.search(r'-(\d{1,6})-{3}(\d{4})?\.html$', href)
+                if mm:
+                    nums.append(int(mm.group(1)))
+        if not nums:
+            return 1
+        return max(nums)
+
+    # ---------------- 路由构造 ----------------
+
+    def _build_show_url(self, tid, page, extend):
+        """
+        列表路由（按站点真实链接逐段对齐，共 12 段）：
+            {id}-{空}-{sort}-{area}-{lang}-{letter}-{class}-{空}-{空}-{page}-{空}-{year}.html
+        实测样例：
+            默认        /vodshow/1-----------.html
+            剧情        /vodshow/1---喜剧--------.html
+            地区        /vodshow/1-大陆----------.html
+            语言        /vodshow/1----国语-------.html
+            字母        /vodshow/1-----A------.html
+            第2页       /vodshow/1--------2---.html
+            年份        /vodshow/1-----------2026.html
+            排序        /vodshow/1--time---------2026.html
+            排序+分页   /vodshow/1--hits------2---2026.html
+        """
+        area = urllib.parse.quote(extend.get("area") or "")
+        genre = urllib.parse.quote(extend.get("class") or "")
+        year = urllib.parse.quote(extend.get("year") or "")
+        sort = extend.get("sort_field") or ""
+        if sort == "time":          # 站点默认排序，可省略
+            sort = ""
+        pg = str(page) if page and int(page) > 1 else ""
+
+        fields = ["", "", "", "", "", "", "", "", "", "", "", ""]
+        fields[0] = tid
+        fields[1] = area
+        fields[2] = sort
+        fields[3] = genre
+        fields[4] = ""        # 语言
+        fields[5] = ""        # 字母
+        fields[8] = pg
+        fields[11] = year
+        return "%s/vodshow/%s.html" % (self.site_url, "-".join(fields))
+
+    # ---------------- TVBox 接口 ----------------
+
+    def homeContent(self, filter=False):
+        return {"class": CLASSES, "filters": FILTERS}
 
     def homeVideoContent(self):
-        now = int(time.time())
-        if self._home_cache and now - self._home_cache_time < 300:
-            return {'list': self._home_cache[:30]}
+        html = self._fetch(self.site_url + "/")
+        videos = self._extract_list(html)
+        self.log("home: %d 条" % len(videos))
+        return {"list": videos}
 
-        _l1 = []
-        try:
-            _r2 = self.fetch(self.host + "/", headers=self._get_header())
-            if not _r2 or not _r2.text:
-                return {'list': _l1}
-
-            _h1 = self._parse_dom(_r2)
-            if not _h1:
-                return {'list': _l1}
-
-            _x1 = _h1.xpath(
-                '//div[contains(@class, "module-focus")]//a[contains(@href, "/voddetail/")] | '
-                '//div[contains(@class, "module-hot")]//a[contains(@href, "/voddetail/")] | '
-                '//div[contains(@class, "module-recommend")]//a[contains(@href, "/voddetail/")] | '
-                '//div[contains(@class, "module-items") and contains(@class, "module-poster-items")]//a[contains(@href, "/voddetail/")]'
-            )
-
-            _s1 = set()
-            for _a1 in _x1:
-                _v1 = self._parse_item(_a1)
-                if _v1 and _v1["vod_id"] not in _s1:
-                    _s1.add(_v1["vod_id"])
-                    _l1.append(_v1)
-
-            _l1 = _l1[:30]
-            self._home_cache = _l1
-            self._home_cache_time = now
-        except Exception:
-            pass
-        return {'list': _l1}
-
-    # ============================================================
-    # 分类列表
-    # ============================================================
     def categoryContent(self, tid, pg, filter, extend):
-        if tid == '0':
-            return self.homeVideoContent()
-
-        _r3 = {'list': [], 'page': pg, 'pagecount': 9999, 'limit': 24, 'total': 999999}
         try:
-            _e1 = json.loads(extend) if extend and isinstance(extend, str) else {}
-            _u2 = self._build_category_url(tid, pg, _e1)
+            page = int(pg) if pg else 1
         except Exception:
-            _u2 = f'{self.host}/vodshow/{tid}--------{pg}---.html'
+            page = 1
+        if isinstance(extend, str):
+            try:
+                extend = json.loads(extend)
+            except Exception:
+                extend = {}
+        if not isinstance(extend, dict):
+            extend = {}
 
-        _h2 = self._get_header().copy()
-        _h2['Referer'] = f'{self.host}/vodtype/{tid}.html'
+        data = {}
+        for k in ("class", "area", "year", "sort_field"):
+            v = extend.get(k)
+            if v and v not in ("", "全部", "all"):
+                data[k] = v
 
-        _r4 = self.fetch(_u2, headers=_h2)
-        if not _r4 or not _r4.text:
-            return _r3
+        url = self._build_show_url(tid, page, data)
+        self.log("category: %s" % url)
+        html = self._fetch(url)
+        videos = self._extract_list(html)
 
-        _h3 = self._parse_dom(_r4)
-        _v2 = []
-        _s2 = set()
+        # 未加任何筛选却取不到内容时，才退回分类导航页 /vodtype/{id}.html
+        # 注意：带筛选时结果为空属于站点真实情况，不能回退（否则筛选失效）
+        if not videos and not data:
+            fb = "%s/vodtype/%s.html" % (self.site_url, tid)
+            self.log("  fallback: %s" % fb)
+            html = self._fetch(fb)
+            videos = self._extract_list(html)
 
-        try:
-            _l2 = _h3.xpath('//div[contains(@class, "module-items") and contains(@class, "module-poster-items")]//a[contains(@href, "/voddetail/")]') or \
-                  _h3.xpath('//a[contains(@class, "module-poster-item") and contains(@href, "/voddetail/")]') or \
-                  _h3.xpath('//div[contains(@class, "module-card-items")]//a[contains(@href, "/voddetail/")]')
+        pagecount = self._page_count(html)
+        self.log("  %d 条, 共 %d 页" % (len(videos), pagecount))
 
-            for _a2 in _l2:
-                _v3 = self._parse_item(_a2)
-                if _v3 and _v3["vod_id"] not in _s2:
-                    _s2.add(_v3["vod_id"])
-                    _v2.append(_v3)
-        except Exception:
-            pass
-
-        _r3['pagecount'] = self._get_pagecount(_h3)
-        _r3['list'] = _v2
-        return _r3
-
-    # ============================================================
-    # 详情页
-    # ============================================================
-    def detailContent(self, ids):
-        if not ids:
-            return {'list': []}
-
-        _t1 = str(ids[0]).strip()
-        _u3 = f'{self.host}/voddetail/{_t1}.html'
-
-        try:
-            _r5 = self.fetch(_u3, headers=self._get_header())
-            if not _r5 or not _r5.text:
-                return {'list': []}
-            _h4 = self._parse_dom(_r5)
-            if not _h4:
-                return {'list': []}
-        except Exception:
-            return {'list': []}
-
-        _t2 = _h4.xpath('//h1/text() | //div[contains(@class, "module-info-heading")]//h1/text()')
-        _t3 = _t2[0].strip() if _t2 else ''
-
-        _p1 = self._get_img(_h4)
-        _d1 = self._get_desc(_h4)
-
-        _actor = self._get_text(_h4, '//div[contains(@class, "module-info-item") and contains(text(), "主演")]//span/text()')
-        _director = self._get_text(_h4, '//div[contains(@class, "module-info-item") and contains(text(), "导演")]//span/text()')
-        _year = self._get_text(_h4, '//div[contains(@class, "module-info-item") and contains(text(), "年份")]//span/text()')
-        _area = self._get_text(_h4, '//div[contains(@class, "module-info-item") and contains(text(), "地区")]//span/text()')
-        _type = self._get_text(_h4, '//div[contains(@class, "module-info-item") and contains(text(), "类型")]//span/text()')
-
-        _v4 = {
-            "vod_id": _t1,
-            "vod_name": _t3,
-            "vod_pic": _p1,
-            "type_name": _type,
-            "vod_year": _year,
-            "vod_area": _area,
-            "vod_remarks": "",
-            "vod_actor": _actor,
-            "vod_director": _director,
-            "vod_content": _d1
+        return {
+            "list": videos,
+            "page": page,
+            "pagecount": pagecount,
+            "limit": len(videos) if videos else 20,
+            "total": (pagecount if pagecount > 1 else page) * max(len(videos), 1),
         }
 
-        _f1, _l3 = self._get_sources(_h4, _t1)
-
-        if not _f1 or not _l3:
-            _f1 = ['飞快']
-            _l3 = [f'播放${self.host}/voddetail/{_t1}.html']
-
-        _v4['vod_play_from'] = '$$$'.join(_f1) if _f1 else ""
-        _v4['vod_play_url'] = '$$$'.join(_l3)
-        return {'list': [_v4]}
-
-    # ============================================================
-    # 搜索
-    # ============================================================
-    def searchContent(self, key, quick, pg='1'):
-        _v5 = []
+    def searchContent(self, key, quick, pg="1"):
         try:
-            _p2 = str(pg)
-            _u4 = f'{self.host}/vodsearch/-------------.html?wd={quote_plus(key)}&page={_p2}'
-            _h5 = self._get_header().copy()
-            _h5['Referer'] = f'{self.host}/vodsearch/-------------.html?wd={quote_plus(key)}'
-
-            _r6 = self.fetch(_u4, headers=_h5)
-            if not _r6 or not _r6.text:
-                return {'list': []}
-
-            _h6 = self._parse_dom(_r6)
-            _i1 = _h6.xpath('//div[contains(@class, "module-items") and contains(@class, "module-poster-items")]//a[contains(@href, "/voddetail/")]') or \
-                  _h6.xpath('//a[contains(@class, "module-poster-item") and contains(@href, "/voddetail/")]') or \
-                  _h6.xpath('//a[contains(@href, "/voddetail/")]')
-
-            _s3 = set()
-            for _a3 in _i1:
-                _v6 = self._parse_item(_a3)
-                if _v6 and _v6["vod_id"] not in _s3:
-                    _s3.add(_v6["vod_id"])
-                    _v5.append(_v6)
+            page = int(pg) if pg else 1
         except Exception:
-            pass
-        return {'list': _v5}
+            page = 1
+        kw = urllib.parse.quote(key)
+        if page > 1:
+            url = "%s/vodsearch/%s----------%d---.html" % (self.site_url, kw, page)
+        else:
+            url = "%s/vodsearch/%s-------------.html" % (self.site_url, kw)
+        self.log("search: %s" % url)
+        html = self._fetch(url)
+        videos = self._extract_list(html)
+        self.log("  %d 条" % len(videos))
+        return {
+            "list": videos,
+            "page": page,
+            "pagecount": self._page_count(html),
+            "limit": len(videos) if videos else 20,
+            "total": 999,
+        }
 
-    # ============================================================
-    # 播放
-    # ============================================================
-    def playerContent(self, flag, id, vipFlags):
-        if isinstance(id, str) and id.startswith('push://'):
-            return {"parse": 0, "url": id}
+    def searchContentPage(self, key, quick, pg="1"):
+        return self.searchContent(key, quick, pg)
 
-        if '.m3u8' in id or '.mp4' in id:
-            return {"parse": 0, "url": id, "header": self._get_header()}
+    def detailContent(self, ids):
+        if not ids:
+            return {"list": []}
+        vod_id = str(ids[0])
+        url = vod_id if vod_id.startswith("http") else self._fix_url(vod_id)
+        self.log("detail: %s" % url)
 
-        _u5 = f'{self.host}/vodplay/{id}.html'
-        _v7 = _u5
+        html = self._fetch(url)
+        if not html:
+            return {"list": []}
 
-        try:
-            _r7 = self.fetch(_u5, headers=self._get_header(), timeout=45)
-            if not _r7 or not _r7.text:
-                return {"parse": 1, "url": _v7, "header": self._get_header()}
+        # ---- 标题 ----
+        name = ""
+        m = _RE_H1.search(html)
+        if m:
+            inner = m.group(1)
+            mi = re.search(r'alt="([^"]+)"', inner, re.I)
+            if mi:
+                name = self._clean(mi.group(1))          # h1 里常是 <img alt="片名">
+            if not name:
+                name = self._clean(inner)
+        if not name:
+            m = _RE_TITLE_TAG.search(html)
+            if m:
+                name = self._clean(m.group(1).split("_")[0].split("-")[0])
+        name = re.sub(r"\s*\(\d{4}\)\s*$", "", name).strip() or vod_id
 
-            _p3 = r'(?:var\s+)?player_[a-zA-Z0-9_]+\s*=\s*(\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\})(?=\s*</script>)'
-            _m1 = re.search(_p3, _r7.text, re.S)
-            if _m1:
-                try:
-                    _d2 = json.loads(_m1.group(1))
-                    _v7 = _d2.get('url') or ''
-                    _v7 = self._decode_str(_v7, str(_d2.get('encrypt', '0')))
-                    if _v7.startswith('//'):
-                        _v7 = 'https:' + _v7
-                    if _v7.endswith('.m3u8'):
-                        return {"parse": 1, "url": _v7, "header": self._get_header()}
-                except Exception:
-                    pass
+        # ---- 封面 ----
+        pic = ""
+        m = _RE_POSTER_BIG.search(html)
+        if m:
+            pic = self._fix_url(m.group(1))
+        if not pic:
+            m = _RE_BACKDROP.search(html)
+            if m:
+                pic = self._fix_url(m.group(1))
+        if not pic:
+            pic = self.default_pic
 
-            _iframe = re.search(r'<iframe[^>]*src="([^"]+)"', _r7.text)
-            if _iframe:
-                _v7 = _iframe.group(1)
-                if _v7.startswith('//'):
-                    _v7 = 'https:' + _v7
-                return {"parse": 1, "url": _v7, "header": self._get_header()}
+        # ---- 简介 ----
+        content = ""
+        m = _RE_INTRO.search(html)
+        if m:
+            content = self._clean(m.group(1))
+        if not content:
+            m = re.search(r'<meta[^>]*name="description"[^>]*content="([^"]*)"', html, re.I)
+            if m:
+                content = self._clean(m.group(1))
+        content = (INTRO_PREFIX + "\n" + content) if content else INTRO_PREFIX
 
-        except Exception:
-            pass
+        # ---- 元信息 ----
+        director = actor = remark = ""
+        for mt in _RE_META_ITEM.finditer(html):
+            key_name = self._clean(mt.group(1)).replace("：", "").replace(":", "")
+            val = self._clean(mt.group(2))
+            if not val:
+                continue
+            if key_name == "导演" and not director:
+                director = val.replace("/", ",")
+            elif key_name == "主演" and not actor:
+                actor = re.sub(r"\s*/\s*", ", ", val)
+            elif key_name == "状态" and not remark:
+                remark = val
 
-        return {"parse": 1, "url": _v7, "header": self._get_header()}
+        score = ""
 
-    # ============================================================
-    # 辅助方法
-    # ============================================================
+        # 年份/地区/类型 标签
+        tags = [self._clean(t) for t in _RE_TAG_LINK.findall(html)]
+        tags = [t for t in tags if t and t != name]
+        info = " / ".join(tags[:6])
 
-    def _parse_item(self, a_element):
-        try:
-            _h7 = a_element.xpath('./@href')[0] if a_element.xpath('./@href') else ''
-            _m2 = re.search(r'/voddetail/(\d+)\.html', _h7)
-            if not _m2:
-                return None
-            _s4 = _m2.group(1)
+        # ---- 线路 + 剧集 ----
+        # 1) 线路标签表：sid -> 线路名
+        sid_name = {}
+        for mt in _RE_TAB.finditer(html):
+            line_name = self._clean(mt.group(1)) or self._clean(mt.group(3))
+            sid = mt.group(2)
+            if sid and line_name and sid not in sid_name:
+                sid_name[sid] = line_name
 
-            _t4 = (a_element.xpath('.//div[contains(@class, "module-poster-item-title")]//text()') or
-                   a_element.xpath('.//div[contains(@class, "module-card-item-title")]/a//text()') or
-                   a_element.xpath('./@title') or
-                   a_element.xpath('.//img/@alt'))
-            _n1 = _t4[0].strip() if _t4 else f"视频_{_s4}"
-
-            _i2 = self._get_img(a_element)
-
-            _r8 = a_element.xpath('.//div[contains(@class, "module-item-note")]//text()')
-            _r9 = ''.join([x.strip() for x in _r8 if x.strip()]) if _r8 else ""
-
-            return {
-                "vod_id": _s4,
-                "vod_name": _n1,
-                "vod_pic": _i2,
-                "vod_remarks": _r9
-            }
-        except Exception:
-            return None
-
-    def _get_img(self, element):
-        _i3 = (element.xpath('.//img[contains(@class, "lazy")]/@data-original') or
-               element.xpath('.//img[contains(@class, "lazy")]/@src') or
-               element.xpath('.//img/@data-original') or
-               element.xpath('.//img/@src'))
-        if _i3:
-            _i4 = _i3[0]
-            if _i4.startswith('/'):
-                _i4 = self.host + _i4
-            elif _i4.startswith('//'):
-                _i4 = 'https:' + _i4
-            return _i4
-        return self.default_pic
-
-    def _get_desc(self, root):
-        try:
-            _d3 = root.xpath('//div[contains(@class, "module-info-introduction-content")]//text()')
-            _d4 = '\n'.join([x.strip() for x in _d3 if x.strip()]) if _d3 else ''
-            if not _d4:
-                _d3 = root.xpath('//div[contains(@class, "desc")]//text()')
-                _d4 = '\n'.join([x.strip() for x in _d3 if x.strip()]) if _d3 else ''
-            return _d4
-        except Exception:
-            return ''
-
-    def _get_text(self, root, xpath_expr):
-        try:
-            _t = root.xpath(xpath_expr)
-            return _t[0].strip() if _t else ''
-        except Exception:
-            return ''
-
-    def _parse_dom(self, rsp):
-        try:
-            _p4 = etree.HTMLParser(encoding='utf-8', recover=True, remove_blank_text=True)
-            if hasattr(rsp, 'content'):
-                return etree.HTML(rsp.content, parser=_p4)
-            return etree.HTML(rsp.text.encode('utf-8', errors='ignore'), parser=_p4)
-        except Exception:
-            return None
-
-    # ===== 构建分类URL（无筛选）=====
-    def _build_category_url(self, tid, pg, ext):
-        """构建分类URL，不包含任何筛选参数"""
-        return f'{self.host}/vodshow/{tid}--------{pg}---.html'
-
-    def _get_pagecount(self, root):
-        try:
-            _page_text = root.xpath('//div[@id="page"]//text()')
-            if _page_text:
-                _text = ''.join(_page_text)
-                _m = re.search(r'(\d+)\s*页', _text)
-                if _m:
-                    return int(_m.group(1))
-                _m = re.search(r'尾页</a>\s*<a[^>]*href="[^"]*/(\d+)---\.html', _text)
-                if _m:
-                    return int(_m.group(1))
-            _tail = root.xpath('//a[contains(text(), "尾页")]/@href')
-            if _tail:
-                _m = re.search(r'/(\d+)---\.html', _tail[0])
-                if _m:
-                    return int(_m.group(1))
-        except Exception:
-            pass
-        return 9999
-
-    # ============================================================
-    # 获取播放线路
-    # ============================================================
-    def _get_sources(self, root, tid):
-        _f2 = []
-        _l4 = []
-        self._get_normal_sources(root, tid, _f2, _l4)
-        self._get_pan_sources(root, tid, _f2, _l4)
-        return _f2, _l4
-
-    def _get_normal_sources(self, root, tid, playFrom, playList):
-        try:
-            _e4 = root.xpath('//div[contains(@class, "module-play-list")]//a[contains(@href, "/vodplay/")] | '
-                             '//ul[contains(@class, "module-play-list")]//a[contains(@href, "/vodplay/")]')
-
-            _g1 = {}
-            for _a4 in _e4:
-                try:
-                    _h8 = _a4.xpath('./@href')[0] if _a4.xpath('./@href') else ''
-                    _m3 = re.search(r'/vodplay/(\d+)-(\d+)-(\d+)\.html', _h8)
-                    if not _m3:
-                        continue
-                    _v8, _s5, _e5 = _m3.groups()
-                    if _v8 != tid:
-                        continue
-                    _n2 = ''.join(_a4.xpath('string(.)')).strip()
-                    if not _n2 or _n2 in ('立即播放', '收藏', '追更', '分享', '报错', '下载'):
-                        continue
-                    if _s5 not in _g1:
-                        _g1[_s5] = []
-                    _g1[_s5].append(f"{_n2}${_v8}-{_s5}-{_e5}")
-                except Exception:
+        # 2) 各 panel 的剧集
+        groups = []
+        for mp in _RE_PANEL.finditer(html):
+            sid = mp.group(1)
+            body = mp.group(2)
+            eps = []
+            for me in _RE_EP.finditer(body):
+                href = me.group(1).replace("&amp;", "&")
+                ep = self._clean(me.group(2))
+                if not href:
                     continue
+                eps.append((ep or ("第%d集" % (len(eps) + 1)), self._fix_url(href)))
+            if eps:
+                groups.append((sid, eps))
 
-            _l5 = root.xpath('//div[contains(@class, "module-tab-items-box")]//div[contains(@class, "module-tab-item")]//span/text()')
-            _l5 = [x.strip() for x in _l5 if x.strip()]
+        self.log("  线路: %s" % [(s, sid_name.get(s, s), len(e)) for s, e in groups])
 
-            for _i, _s7 in enumerate(_g1.keys()):
-                _s8 = _l5[_i] if _i < len(_l5) else f"线路{_i+1}"
-                if _g1[_s7]:
-                    playFrom.append(_s8)
-                    playList.append('#'.join(_g1[_s7]))
-        except Exception:
-            pass
+        if not groups:
+            return {"list": []}
 
-    def _get_pan_sources(self, root, tid, playFrom, playList):
+        # 标签顺序即站点排序，保持一致
+        order = [mt.group(2) for mt in _RE_TAB.finditer(html)]
+        groups.sort(key=lambda x: order.index(x[0]) if x[0] in order else 999)
+
+        play_from = []
+        play_url = []
+        for sid, eps in groups:
+            alias = sid_name.get(sid) or ("线路%s" % sid)
+            # 重名线路补 sid 区分
+            if alias in play_from:
+                alias = "%s_%s" % (alias, sid)
+            play_from.append(alias)
+            play_url.append("#".join("%s$%s" % (n, u) for n, u in eps))
+
+        return {"list": [{
+            "vod_id": vod_id,
+            "vod_name": name,
+            "vod_pic": pic,
+            "vod_content": content,
+            "vod_actor": actor,
+            "vod_director": director,
+            "vod_score": score,
+            "vod_year": next((t for t in tags if re.fullmatch(r"(19|20)\d{2}", t)), ""),
+            "vod_area": tags[1] if len(tags) > 1 else "",
+            "vod_remarks": remark or info or ("%d条线路" % len(groups)),
+            "vod_play_from": "$$$".join(play_from),
+            "vod_play_url": "$$$".join(play_url),
+        }]}
+
+    # ---------------- 播放 ----------------
+
+    def _decode_player_url(self, enc, encrypt):
+        """MacCMS 播放地址解码
+        encrypt=1: unescape(url)
+        encrypt=2: unescape(base64decode(url))
+        """
+        if not enc:
+            return ""
+        raw = enc
+        if str(encrypt) == "2":
+            s = raw.strip()
+            s += "=" * (-len(s) % 4)
+            try:
+                raw = base64.b64decode(s).decode("latin-1")
+            except Exception as e:
+                self.log("  base64 解码失败: %s" % e)
+                return ""
         try:
-            _d5 = root.xpath('//div[@id="download-list"]')
-            if not _d5:
-                return
-
-            _p6 = {
-                '百度网盘': '百度网盘',
-                '夸克网盘': '夸克网盘',
-                '迅雷云盘': '迅雷云盘',
-                '阿里云盘': '阿里云盘',
-                '天翼云盘': '天翼云盘',
-                'UC网盘': 'UC网盘',
-                '115网盘': '115网盘',
-                '移动云盘': '移动云盘'
-            }
-
-            _t5 = root.xpath('//div[@id="y-downList"]//div[contains(@class, "module-tab-item")]')
-
-            for _t6 in _t5:
-                try:
-                    _s9 = ''.join(_t6.xpath('.//span/text()')).strip()
-                    if not _s9 or _s9 == '磁力链接':
-                        continue
-
-                    _s10 = _p6.get(_s9, _s9)
-
-                    _t7 = _t6.xpath('./@data-index')
-                    if not _t7:
-                        continue
-                    _t8 = _t7[0]
-
-                    _c4 = root.xpath(f'//div[@id="tab-content-{_t8}"]//div[@class="module-row-info"]//a')
-
-                    _e6 = []
-                    for _i6, _l6 in enumerate(_c4, 1):
-                        try:
-                            _u6 = _l6.xpath('./@href')
-                            if not _u6:
-                                continue
-                            _u7 = _u6[0].strip()
-
-                            _h9 = _l6.xpath('.//h4/text()')
-                            if _h9:
-                                _e7 = _h9[0].strip()
-                                _e7 = re.sub(r'@一键搜片-\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}$', '', _e7).strip()
-                            else:
-                                _e7 = f"资源{_i6}"
-
-                            if not _u7.startswith(('http://', 'https://')):
-                                if _u7.startswith('//'):
-                                    _u8 = 'https:' + _u7
-                                elif _u7.startswith('/'):
-                                    _u8 = self.host + _u7
-                                else:
-                                    continue
-                            else:
-                                _u8 = _u7
-
-                            _e6.append(f"{_e7}$push://{_u8}")
-                        except Exception:
-                            continue
-
-                    if _e6:
-                        playFrom.append(_s10)
-                        playList.append('#'.join(_e6))
-                except Exception:
-                    continue
-        except Exception:
-            pass
-
-    def _decode_str(self, raw, encrypt):
-        try:
-            if not raw:
-                return ''
-            _e8 = str(encrypt or '0').strip()
-            if _e8 == '1':
-                _t9 = unquote(raw)
-            elif _e8 == '2':
-                try:
-                    _b2 = base64.b64decode(raw + '===')
-                    _t9 = unquote(_b2.decode('utf-8', errors='ignore'))
-                except Exception:
-                    _t9 = unquote(raw)
-            else:
-                _t9 = raw
-
-            _t9 = re.sub(r'%u([0-9a-fA-F]{4})',
-                         lambda _m5: chr(int(_m5.group(1), 16)), _t9)
-            return _t9
+            return urllib.parse.unquote(raw)
         except Exception:
             return raw
 
-    # ============================================================
-    # 通用方法
-    # ============================================================
-    def _get_header(self):
-        return {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Connection": "keep-alive"
-        }
+    def playerContent(self, flag, id, vipFlags):
+        play_page = id if str(id).startswith("http") else self._fix_url(id)
+        self.log("player: %s" % play_page)
 
-    def localProxy(self, params):
-        pass
+        now = int(time.time())
+        if play_page in self._play_cache:
+            ts, res = self._play_cache[play_page]
+            if now - ts < 600:
+                return res
+
+        html = self._fetch(play_page, headers={"Referer": play_page})
+        m = _RE_PLAYER.search(html) if html else None
+
+        if m:
+            try:
+                data = json.loads(m.group(1))
+            except Exception as e:
+                self.log("  player_aaaa JSON 解析失败: %s" % e)
+                data = {}
+
+            url = self._decode_player_url(data.get("url", ""), data.get("encrypt", 0))
+            from_name = data.get("from", "")
+            self.log("  encrypt=%s from=%s url=%s" % (
+                data.get("encrypt"), from_name, (url or "EMPTY")[:160]))
+
+            if url:
+                res = {
+                    "parse": 0,
+                    "playUrl": "",
+                    "url": url,
+                    "header": {
+                        "User-Agent": UA,
+                        "Referer": self.site_url + "/",
+                    },
+                }
+                # 非直链媒体（如网页播放页）交给嗅探
+                low = url.lower()
+                if not (low.endswith(".m3u8") or low.endswith(".mp4")
+                        or ".m3u8" in low or ".mp4" in low):
+                    res["parse"] = 1
+                    res["jx"] = 0
+                self._play_cache[play_page] = (now, res)
+                return res
+
+        # 兜底：交给 TVBox 解析播放页
+        res = {
+            "parse": 1,
+            "playUrl": "",
+            "url": play_page,
+            "header": {"User-Agent": UA, "Referer": self.site_url + "/"},
+        }
+        self._play_cache[play_page] = (now, res)
+        return res
+
+    def localProxy(self, param):
+        try:
+            url = ""
+            if isinstance(param, dict):
+                url = param.get("url", "")
+            else:
+                for pair in str(param).split("&"):
+                    if "=" in pair:
+                        k, v = pair.split("=", 1)
+                        if k == "url":
+                            url = urllib.parse.unquote(v)
+            if not url:
+                return [200, "image/jpeg", b"", ""]
+            url = self._fix_url(url)
+            rsp = self.fetch(url, headers={
+                "User-Agent": UA, "Referer": self.site_url + "/"}, timeout=15)
+            content = rsp.content
+            ctype = rsp.headers.get("Content-Type", "image/jpeg")
+            if not ctype.startswith("image/"):
+                ctype = "image/jpeg"
+            return [200, ctype, content, ""]
+        except Exception:
+            return [200, "image/jpeg", b"", ""]
 
     def isVideoFormat(self, url):
-        return url
+        u = (url or "").lower()
+        return ".m3u8" in u or ".mp4" in u
 
     def manualVideoCheck(self):
-        return []
+        return False
 
     def destroy(self):
         pass
+
+    def close(self):
+        self.destroy()
