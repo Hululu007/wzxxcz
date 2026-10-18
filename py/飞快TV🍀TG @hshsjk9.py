@@ -598,7 +598,7 @@ class Spider(Spider):
             if not val:
                 continue
             if key_name == "导演" and not director:
-                director = val.replace("/", ",")
+                director = val.replace("/", ",").replace(" ", "")
             elif key_name == "主演" and not actor:
                 actor = re.sub(r"\s*/\s*", ", ", val)
             elif key_name == "状态" and not remark:
@@ -735,9 +735,9 @@ class Spider(Spider):
                         "Referer": self.site_url + "/",
                     },
                 }
+                # 放宽直链判断
                 low = url.lower()
-                if not (low.endswith(".m3u8") or low.endswith(".mp4")
-                        or ".m3u8" in low or ".mp4" in low):
+                if not (".m3u8" in low or ".mp4" in low or "m3u8" in low):
                     res["parse"] = 1
                     res["jx"] = 0
                 self._play_cache[play_page] = (now, res)
