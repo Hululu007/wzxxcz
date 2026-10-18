@@ -564,16 +564,29 @@ class Spider(Spider):
             content = self._clean(m.group(1))
         content = INTRO_PREFIX + ("\n" + content if content else "")
 
-        # 主演 / 导演
+        # 地区 / 年份
+        area = ""
+        m = re.search(r'地区：</span>([\s\S]*?)&nbsp;', html)
+        if m:
+            area = self._clean(m.group(1))
+
+        year = ""
+        m = re.search(r'年份：</span>([\s\S]*?)&nbsp;', html)
+        if m:
+            year = self._clean(m.group(1))
+
+        # 主演 / 导演 (优化：提取 <a> 标签中的文字并用逗号连接，避免粘连)
         actor = ""
         m = re.search(r'<span class="text-muted">主演：</span>([\s\S]*?)</p>', html)
         if m:
-            actor = self._clean(m.group(1))
+            actors = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
+            actor = ",".join(self._clean(a) for a in actors) if actors else self._clean(m.group(1))
 
         director = ""
         m = re.search(r'<span class="text-muted">导演：</span>([\s\S]*?)</p>', html)
         if m:
-            director = self._clean(m.group(1))
+            directors = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
+            director = ",".join(self._clean(d) for d in directors) if directors else self._clean(m.group(1))
 
         # 剧集线路
         play_from = []
@@ -616,6 +629,8 @@ class Spider(Spider):
             "vod_content": content,
             "vod_actor": actor,
             "vod_director": director,
+            "vod_area": area,
+            "vod_year": year,
             "vod_score": score,
             "vod_remarks": remarks,
             "vod_play_from": "$$$".join(play_from),
