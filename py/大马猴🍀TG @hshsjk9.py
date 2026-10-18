@@ -103,8 +103,9 @@ _CLASS_FALLBACK = [
 _SORTS = [{"n": "最热", "v": "hits"}, {"n": "最新", "v": "time"}]
 
 # 线路别名兜底（真实显示名取自 get_detail 的 vodplayer[].show）
+# 已根据网页端 UI 截图将 lzm3u8 修正为“云播”
 _LINE_ALIAS = {
-    "lzm3u8": "量子M3U8", "Ace": "ACE", "jsm3u8": "极速", "bfzym3u8": "暴风",
+    "lzm3u8": "云播", "Ace": "ACE", "jsm3u8": "极速", "bfzym3u8": "暴风",
     "ikm3u8": "爱坤", "RR": "RR", "BBA": "BB", "NBY": "NB", "rose": "Rose",
     "vwnet": "VW", "YYNB": "YYNB",
 }
