@@ -86,7 +86,6 @@ CLASSES = [
 ]
 
 # 各分类列表页的“类型”（子分类）
-# 来源：/vodshow/{id}-----------.html 页面 .module-class-items 第一个区块
 _SUBCATE_NAMES = {
     "1":  ["全部", "喜剧片", "动作片", "科幻片", "爱情片", "战争片", "恐怖片", "剧情片", "其它"],
     "2":  ["全部", "内地剧", "港台剧", "日韩剧", "欧美剧", "短剧", "其它剧"],
@@ -104,7 +103,6 @@ _SUBCATES = {
 }
 
 # 各分类列表页真实筛选词
-# 来源：/vodshow/{id}-----------.html 页面 .module-class-items 区块，逐条抓取
 _GENRES = {
     "1":  ["喜剧", "爱情", "恐怖", "动作", "科幻", "剧情", "战争", "警匪", "犯罪", "动画",
            "奇幻", "武侠", "冒险", "枪战", "悬疑", "惊悚", "经典", "青春", "文艺", "微电影",
@@ -128,7 +126,7 @@ _AREAS = {
     "32": ["内地", "韩国", "香港", "台湾", "日本", "美国", "泰国", "英国", "新加坡", "其他"],
 }
 
-# 语言：来自各分类 /vodshow/{id}-----------.html 的「语言」区块
+# 语言
 _LANGS = {
     "1":  ["国语", "英语", "粤语", "闽南语", "韩语", "日语", "法语", "德语", "其它"],
     "2":  ["国语", "英语", "粤语", "闽南语", "韩语", "日语", "其它"],
@@ -140,11 +138,11 @@ _LANGS = {
 _YEARS = ["2026", "2025", "2024", "2023", "2022", "2021", "2020", "2019", "2018", "2017",
           "20年代", "10年代", "00年代", "90年代", "80年代", "70年代", "更早"]
 
-# 字母：A-Z + 0-9（各分类一致）
+# 字母
 _LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
             "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "0-9"]
 
-# 排序：真实参数值来自 /vodshow/1--time--------- 这类链接
+# 排序
 _SORTS = [
     {"n": "更新时间", "v": "time"},
     {"n": "豆瓣评分", "v": "score"},
@@ -189,7 +187,7 @@ for c in CLASSES:
 
 # ===================== 正则 =====================
 
-# 首页 / 列表页卡片：<a href="/voddetail/xxx.html" title="片名" class="module-poster-item module-item"> ... </a>
+# 首页 / 列表页卡片
 _RE_POSTER_A = re.compile(
     r'<a\s[^>]*href="(/voddetail/\d+\.html)"[^>]*class="[^"]*module-poster-item[^"]*"[^>]*>',
     re.I)
@@ -203,7 +201,7 @@ _RE_IMG_ALT = re.compile(r'alt="([^"]*)"', re.I)
 _RE_POSTER_TITLE = re.compile(
     r'<div class="module-poster-item-title">([\s\S]*?)</div>', re.I)
 
-# 搜索页卡片：<div class="module-card-item module-item"> ... </div>
+# 搜索页卡片
 _RE_CARD_BLOCK = re.compile(
     r'<div class="module-card-item[^"]*"\s*>\s*'
     r'<div class="module-card-item-class">([^<]*)</div>\s*'
@@ -230,7 +228,7 @@ _RE_META_ITEM = re.compile(
 _RE_TAG_LINK = re.compile(
     r'<div class="module-info-tag-link">\s*(?:<a[^>]*>|<span>)([\s\S]*?)</(?:a|span)>', re.I)
 
-# 线路标签：data-dropdown-value="线路名" data-fk-line-sid="7"
+# 线路标签
 _RE_TAB = re.compile(
     r'<div class="module-tab-item[^"]*"[^>]*?data-dropdown-value="([^"]*)"[^>]*?'
     r'data-fk-line-sid="(\d+)"[^>]*>([\s\S]*?)</div>', re.S | re.I)
@@ -325,7 +323,6 @@ class Spider(Spider):
         return s.strip()
 
     def _pick_img(self, attrs_html, prefer=("data-original", "data-remote", "src")):
-        """从 img 标签里按优先级取可用图片地址"""
         for key in prefer:
             m = re.search(r'%s="([^"]+)"' % re.escape(key), attrs_html, re.I)
             if m:
@@ -337,7 +334,6 @@ class Spider(Spider):
     # ---------------- 列表解析 ----------------
 
     def _parse_poster_items(self, html):
-        """解析 module-poster-item 卡片（首页、vodshow 列表页）"""
         out = []
         seen = set()
         marks = [m for m in _RE_POSTER_A.finditer(html)]
@@ -388,7 +384,6 @@ class Spider(Spider):
         return out
 
     def _parse_card_items(self, html):
-        """解析搜索页的 module-card-item 卡片"""
         out = []
         seen = set()
         for m in _RE_CARD_BLOCK.finditer(html):
@@ -417,30 +412,22 @@ class Spider(Spider):
         return self._parse_card_items(html)
 
     def _page_count(self, html):
-        """分页块 <div id="page">，取 page-link 的 title="第N页" 最大值
-        真实分页：/vodshow/1--------2---.html /vodsearch/kw----------2---.html
-        注意页码段是 -{page}---，不能把末尾年份当成页码。
-        """
         m = _RE_PAGE_BLOCK.search(html)
         if not m:
             return 1
         block = m.group(1)
         nums = []
-        # 1) 翻页链接上的 title="第N页"（最稳，N 可以是 4 位）
         for t in re.findall(r'title="第(\d+)页"', block):
             nums.append(int(t))
-        # 2) 尾页链接 ...-{page}---{year}.html
         tail = re.search(r'href="([^"]+)"[^>]*title="尾页"', block, re.I)
         if tail:
             mm = re.search(r'-(\d{1,6})-{3}(\d{4})?\.html$', tail.group(1))
             if mm:
                 nums.append(int(mm.group(1)))
-        # 3) 当前页 <span ... page-current ...>N
         cur = re.search(r'page-current[^>]*>\s*(\d+)', block)
         if cur:
             nums.append(int(cur.group(1)))
         if not nums:
-            # 4) 最后兜底：从翻页链接里取 page 段（排除末尾年份）
             for href in _RE_PAGE_HREF.findall(block):
                 mm = re.search(r'-(\d{1,6})-{3}(\d{4})?\.html$', href)
                 if mm:
@@ -452,12 +439,6 @@ class Spider(Spider):
     # ---------------- 路由构造 ----------------
 
     def _build_show_url(self, tid, page, extend):
-        """
-        列表路由（按站点真实链接逐段对齐，共 12 段）：
-            {id}-{area}-{sort}-{class}-{lang}-{letter}-{空}-{空}-{page}-{空}-{空}-{year}.html
-        其中 {id} 可以被 sub_id（类型）替换。
-        """
-        # 如果选了“类型”，则使用类型的 ID 替换当前的主分类 ID
         sub_id = extend.get("sub_id") or tid
 
         area   = urllib.parse.quote(extend.get("area")   or "")
@@ -466,7 +447,7 @@ class Spider(Spider):
         letter = urllib.parse.quote(extend.get("letter") or "")
         year   = urllib.parse.quote(extend.get("year")   or "")
         sort   = extend.get("sort_field") or ""
-        if sort == "time":          # 站点默认排序，可省略
+        if sort == "time":
             sort = ""
         pg = str(page) if page and int(page) > 1 else ""
 
@@ -475,10 +456,10 @@ class Spider(Spider):
         fields[1]  = area
         fields[2]  = sort
         fields[3]  = genre
-        fields[4]  = lang      # 第 5 段：语言
-        fields[5]  = letter    # 第 6 段：字母
-        fields[8]  = pg        # 第 9 段：分页
-        fields[11] = year      # 第 12 段：年份
+        fields[4]  = lang
+        fields[5]  = letter
+        fields[8]  = pg
+        fields[11] = year
         return "%s/vodshow/%s.html" % (self.site_url, "-".join(fields))
 
     # ---------------- TVBox 接口 ----------------
@@ -516,8 +497,6 @@ class Spider(Spider):
         html = self._fetch(url)
         videos = self._extract_list(html)
 
-        # 未加任何筛选却取不到内容时，才退回分类导航页 /vodtype/{id}.html
-        # 注意：带筛选时结果为空属于站点真实情况，不能回退（否则筛选失效）
         if not videos and not data:
             fb = "%s/vodtype/%s.html" % (self.site_url, tid)
             self.log("  fallback: %s" % fb)
@@ -578,7 +557,7 @@ class Spider(Spider):
             inner = m.group(1)
             mi = re.search(r'alt="([^"]+)"', inner, re.I)
             if mi:
-                name = self._clean(mi.group(1))          # h1 里常是 <img alt="片名">
+                name = self._clean(mi.group(1))
             if not name:
                 name = self._clean(inner)
         if not name:
@@ -612,6 +591,7 @@ class Spider(Spider):
 
         # ---- 元信息 ----
         director = actor = remark = ""
+        score = ""
         for mt in _RE_META_ITEM.finditer(html):
             key_name = self._clean(mt.group(1)).replace("：", "").replace(":", "")
             val = self._clean(mt.group(2))
@@ -623,16 +603,31 @@ class Spider(Spider):
                 actor = re.sub(r"\s*/\s*", ", ", val)
             elif key_name == "状态" and not remark:
                 remark = val
-
-        score = ""
+            elif key_name == "评分" and not score:
+                m_score = re.search(r'(\d+(\.\d+)?)', val)
+                if m_score:
+                    score = m_score.group(1)
 
         # 年份/地区/类型 标签
         tags = [self._clean(t) for t in _RE_TAG_LINK.findall(html)]
         tags = [t for t in tags if t and t != name]
         info = " / ".join(tags[:6])
 
+        # 精准提取年份和地区（利用 title 属性）
+        title_tags = re.findall(r'<div class="module-info-tag-link">\s*<a\s+[^>]*title="([^"]+)"', html)
+        vod_year = next((t for t in title_tags if re.fullmatch(r"(19|20)\d{2}", t)), "")
+        vod_area = next((t for t in title_tags if not re.fullmatch(r"(19|20)\d{2}", t)), "")
+
+        # 兜底提取
+        if not vod_year:
+            vod_year = next((t for t in tags if re.fullmatch(r"(19|20)\d{2}", t)), "")
+        if not vod_area:
+            for t in tags:
+                if t != vod_year and not re.search(r'剧情|喜剧|动作|爱情|科幻|动画|悬疑|惊悚|恐怖|犯罪|同性|音乐|歌舞|传记|历史|战争|西部|奇幻|冒险|灾难|武侠|情色', t):
+                    vod_area = t
+                    break
+
         # ---- 线路 + 剧集 ----
-        # 1) 线路标签表：sid -> 线路名
         sid_name = {}
         for mt in _RE_TAB.finditer(html):
             line_name = self._clean(mt.group(1)) or self._clean(mt.group(3))
@@ -640,7 +635,6 @@ class Spider(Spider):
             if sid and line_name and sid not in sid_name:
                 sid_name[sid] = line_name
 
-        # 2) 各 panel 的剧集
         groups = []
         for mp in _RE_PANEL.finditer(html):
             sid = mp.group(1)
@@ -660,7 +654,6 @@ class Spider(Spider):
         if not groups:
             return {"list": []}
 
-        # 标签顺序即站点排序，保持一致
         order = [mt.group(2) for mt in _RE_TAB.finditer(html)]
         groups.sort(key=lambda x: order.index(x[0]) if x[0] in order else 999)
 
@@ -668,7 +661,6 @@ class Spider(Spider):
         play_url = []
         for sid, eps in groups:
             alias = sid_name.get(sid) or ("线路%s" % sid)
-            # 重名线路补 sid 区分
             if alias in play_from:
                 alias = "%s_%s" % (alias, sid)
             play_from.append(alias)
@@ -682,8 +674,8 @@ class Spider(Spider):
             "vod_actor": actor,
             "vod_director": director,
             "vod_score": score,
-            "vod_year": next((t for t in tags if re.fullmatch(r"(19|20)\d{2}", t)), ""),
-            "vod_area": tags[1] if len(tags) > 1 else "",
+            "vod_year": vod_year,
+            "vod_area": vod_area,
             "vod_remarks": remark or info or ("%d条线路" % len(groups)),
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url": "$$$".join(play_url),
@@ -692,10 +684,6 @@ class Spider(Spider):
     # ---------------- 播放 ----------------
 
     def _decode_player_url(self, enc, encrypt):
-        """MacCMS 播放地址解码
-        encrypt=1: unescape(url)
-        encrypt=2: unescape(base64decode(url))
-        """
         if not enc:
             return ""
         raw = enc
@@ -747,7 +735,6 @@ class Spider(Spider):
                         "Referer": self.site_url + "/",
                     },
                 }
-                # 非直链媒体（如网页播放页）交给嗅探
                 low = url.lower()
                 if not (low.endswith(".m3u8") or low.endswith(".mp4")
                         or ".m3u8" in low or ".mp4" in low):
@@ -756,7 +743,6 @@ class Spider(Spider):
                 self._play_cache[play_page] = (now, res)
                 return res
 
-        # 兜底：交给 TVBox 解析播放页
         res = {
             "parse": 1,
             "playUrl": "",
