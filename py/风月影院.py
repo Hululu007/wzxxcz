@@ -3,10 +3,16 @@
 风月影院 www.cqjwny.com | TVBox Python 爬虫
 网站结构解析：
   - 列表页：/vodshow/{tid}-----------.html
-  - 分类筛选：/vodshow/{tid}-{area}-{order}-{class}-{lang}-{letter}------{page}---{year}.html
   - 详情页：/voddetail/{id}.html
   - 播放页：/vodplay/{id}-{sid}-{nid}.html
   - 播放地址：页面内 var player_aaaa={...} 的 url 字段（m3u8 直链）
+  - 电影(tid=1)    : 地区无"内地/新加坡"，语言含"法语/德语"
+  - 电视剧(tid=2)  : 地区含"内地/新加坡"，语言无法语/德语
+  - 综艺(tid=3)    : 同电视剧
+  - 动漫(tid=4)    : 同电视剧
+  - 短剧(tid=20)   : 同电视剧
+筛选 URL 12 段结构（'-' 分隔）：
+  {tid}-{area}-{order}-{class}-{lang}-{letter}--{}-{page}--{}-{}-{year}
 """
 import re
 import sys
@@ -69,14 +75,23 @@ CLASSES = [
     {"type_id": "20", "type_name": "短剧"},
 ]
 
-# ---------- 筛选选项（严格照分类页源码 <ul class="stui-screen__list"> 提取） ----------
+# ==================== 严格按源码逐分类定义 ====================
+
 _SORT_OPTS = [
     {"n": "按时间", "v": "time"},
     {"n": "按人气", "v": "hits"},
     {"n": "按评分", "v": "score"},
 ]
 
-_AREA_OPTS = [
+_YEAR_OPTS = [{"n": "全部", "v": ""}] + \
+    [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]
+
+_LETTER_OPTS = [{"n": "全部", "v": ""}] + \
+    [{"n": c, "v": c} for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"] + \
+    [{"n": "0-9", "v": "0-9"}]
+
+# 电影页（源码 /vodshow/7-大陆----------2026.html 筛选区）
+_MOVIE_AREA = [
     {"n": "全部", "v": ""},
     {"n": "大陆", "v": "大陆"},
     {"n": "香港", "v": "香港"},
@@ -95,7 +110,7 @@ _AREA_OPTS = [
     {"n": "其他", "v": "其他"},
 ]
 
-_LANG_OPTS = [
+_MOVIE_LANG = [
     {"n": "全部", "v": ""},
     {"n": "国语", "v": "国语"},
     {"n": "英语", "v": "英语"},
@@ -108,41 +123,103 @@ _LANG_OPTS = [
     {"n": "其它", "v": "其它"},
 ]
 
-_LETTER_OPTS = [{"n": "全部", "v": ""}] + \
-    [{"n": c, "v": c} for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"] + \
-    [{"n": "0-9", "v": "0-9"}]
+_MOVIE_CLASS = [
+    "喜剧", "爱情", "恐怖", "动作", "科幻", "剧情", "战争", "警匪",
+    "犯罪", "动画", "奇幻", "武侠", "冒险", "枪战", "悬疑", "惊悚",
+    "经典", "青春", "文艺", "微电影", "古装", "历史", "运动",
+    "农村", "儿童", "网络电影",
+]
 
-_YEAR_OPTS = [{"n": "全部", "v": ""}] + \
-    [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]
+# 电视剧/综艺/动漫/短剧（源码 13/27/31/20 页面筛选区）
+_TV_AREA = [
+    {"n": "全部", "v": ""},
+    {"n": "大陆", "v": "大陆"},
+    {"n": "内地", "v": "内地"},
+    {"n": "韩国", "v": "韩国"},
+    {"n": "香港", "v": "香港"},
+    {"n": "台湾", "v": "台湾"},
+    {"n": "日本", "v": "日本"},
+    {"n": "美国", "v": "美国"},
+    {"n": "泰国", "v": "泰国"},
+    {"n": "英国", "v": "英国"},
+    {"n": "新加坡", "v": "新加坡"},
+    {"n": "其他", "v": "其他"},
+]
 
-_CLASS_OPTS = {
-    "1": ["剧情", "喜剧", "动作", "爱情", "恐怖", "科幻", "战争", "警匪", "犯罪",
-          "动画", "奇幻", "武侠", "冒险", "枪战", "悬疑", "惊悚", "经典", "青春",
-          "文艺", "微电影", "古装", "历史", "运动", "农村", "儿童", "网络电影"],
-    "2": ["古装", "战争", "青春偶像", "喜剧", "家庭", "犯罪", "动作", "奇幻",
-          "剧情", "历史", "经典", "乡村", "情景", "商战", "网剧", "其他"],
-    "3": ["选秀", "情感", "访谈", "播报", "旅游", "音乐", "美食", "纪实", "曲艺",
-          "生活", "游戏互动", "财经", "求职"],
-    "4": ["情感", "科幻", "热血", "推理", "搞笑", "冒险", "萝莉", "校园", "动作",
-          "机战", "运动", "战争", "少年", "少女", "社会", "原创", "亲子", "益智",
-          "励志", "其他"],
-    "20": ["古装", "战争", "青春偶像", "喜剧", "家庭", "犯罪", "动作", "奇幻",
-           "剧情", "历史", "经典", "乡村", "情景", "商战", "网剧", "其他"],
-}
+_TV_LANG = [
+    {"n": "全部", "v": ""},
+    {"n": "国语", "v": "国语"},
+    {"n": "英语", "v": "英语"},
+    {"n": "粤语", "v": "粤语"},
+    {"n": "闽南语", "v": "闽南语"},
+    {"n": "韩语", "v": "韩语"},
+    {"n": "日语", "v": "日语"},
+    {"n": "其它", "v": "其它"},
+]
 
-FILTERS = {}
-for _c in CLASSES:
-    _tid = _c["type_id"]
-    FILTERS[_tid] = [
+_TV_CLASS = [
+    "古装", "战争", "青春偶像", "喜剧", "家庭", "犯罪", "动作",
+    "奇幻", "剧情", "历史", "经典", "乡村", "情景", "商战", "网剧", "其他",
+]
+
+_VARIETY_CLASS = [
+    "选秀", "情感", "访谈", "播报", "旅游", "音乐", "美食", "纪实",
+    "曲艺", "生活", "游戏互动", "财经", "求职",
+]
+
+_ANIME_CLASS = [
+    "情感", "科幻", "热血", "推理", "搞笑", "冒险", "萝莉", "校园",
+    "动作", "机战", "运动", "战争", "少年", "少女", "社会", "原创",
+    "亲子", "益智", "励志", "其他",
+]
+
+FILTERS = {
+    "1": [
         {"key": "class", "name": "剧情",
-         "value": [{"n": "全部", "v": ""}] +
-                  [{"n": x, "v": x} for x in _CLASS_OPTS.get(_tid, [])]},
-        {"key": "area", "name": "地区", "value": _AREA_OPTS},
-        {"key": "year", "name": "年份", "value": _YEAR_OPTS},
-        {"key": "lang", "name": "语言", "value": _LANG_OPTS},
-        {"key": "letter", "name": "字母", "value": _LETTER_OPTS},
+         "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in _MOVIE_CLASS]},
+        {"key": "area",  "name": "地区", "value": _MOVIE_AREA},
+        {"key": "year",  "name": "年份", "value": _YEAR_OPTS},
+        {"key": "lang",  "name": "语言", "value": _MOVIE_LANG},
+        {"key": "letter","name": "字母", "value": _LETTER_OPTS},
         {"key": "order", "name": "排序", "value": _SORT_OPTS},
-    ]
+    ],
+    "2": [
+        {"key": "class", "name": "剧情",
+         "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in _TV_CLASS]},
+        {"key": "area",  "name": "地区", "value": _TV_AREA},
+        {"key": "year",  "name": "年份", "value": _YEAR_OPTS},
+        {"key": "lang",  "name": "语言", "value": _TV_LANG},
+        {"key": "letter","name": "字母", "value": _LETTER_OPTS},
+        {"key": "order", "name": "排序", "value": _SORT_OPTS},
+    ],
+    "3": [
+        {"key": "class", "name": "剧情",
+         "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in _VARIETY_CLASS]},
+        {"key": "area",  "name": "地区", "value": _TV_AREA},
+        {"key": "year",  "name": "年份", "value": _YEAR_OPTS},
+        {"key": "lang",  "name": "语言", "value": _TV_LANG},
+        {"key": "letter","name": "字母", "value": _LETTER_OPTS},
+        {"key": "order", "name": "排序", "value": _SORT_OPTS},
+    ],
+    "4": [
+        {"key": "class", "name": "剧情",
+         "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in _ANIME_CLASS]},
+        {"key": "area",  "name": "地区", "value": _TV_AREA},
+        {"key": "year",  "name": "年份", "value": _YEAR_OPTS},
+        {"key": "lang",  "name": "语言", "value": _TV_LANG},
+        {"key": "letter","name": "字母", "value": _LETTER_OPTS},
+        {"key": "order", "name": "排序", "value": _SORT_OPTS},
+    ],
+    "20": [
+        {"key": "class", "name": "剧情",
+         "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in _TV_CLASS]},
+        {"key": "area",  "name": "地区", "value": _TV_AREA},
+        {"key": "year",  "name": "年份", "value": _YEAR_OPTS},
+        {"key": "lang",  "name": "语言", "value": _TV_LANG},
+        {"key": "letter","name": "字母", "value": _LETTER_OPTS},
+        {"key": "order", "name": "排序", "value": _SORT_OPTS},
+    ],
+}
 
 
 class Spider(Spider):
@@ -294,12 +371,8 @@ class Spider(Spider):
     # ---------------- 分类 / 筛选 ----------------
     def _build_category_url(self, tid, page, extend):
         """
-        严格按站点真实分页结构（12 段，'-' 分隔）：
-        /vodshow/{tid}-{area}-{order}-{class}-{lang}-{letter}--{}-{page}--{}-{}-{year}.html
-        实测：
-          第1页无筛选 -> /vodshow/1-----------.html
-          area=大陆, year=2026, 第2页
-                      -> /vodshow/13-大陆-------2---2026.html
+        严格按站点真实 12 段分页结构：
+        {tid}-{area}-{order}-{class}-{lang}-{letter}--{}-{page}--{}-{}-{year}
         """
         area = (extend.get("area") or "").strip()
         order = (extend.get("order") or "").strip()
@@ -327,7 +400,6 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        # 去掉空值/"全部"
         extend = {k: v for k, v in extend.items()
                   if v not in ("", None, "全部")}
 
@@ -445,7 +517,7 @@ class Spider(Spider):
         if m:
             director = self._clean(m.group(1))
 
-        # 剧集线路：解析 <div class="stui-pannel-box b playlist mb"> 的 h3 + playlist
+        # 剧集线路
         play_from = []
         play_url = []
 
@@ -506,7 +578,6 @@ class Spider(Spider):
                 "header": {"User-Agent": UA, "Referer": self.site_url + "/"},
             }
 
-        # 页面内 var player_aaaa={...}
         m = re.search(r'var player_aaaa=(\{[\s\S]*?\})\s*</script>', html)
         if not m:
             m = re.search(r'var player_aaaa=(\{[\s\S]*?\});', html)
