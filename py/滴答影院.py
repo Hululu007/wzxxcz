@@ -222,7 +222,9 @@ AREA = {
 # 若强行给 2025 会得到空页，故严格照抄真实取值）。
 YEAR = {
     "1": [str(y) for y in range(2026, 2009, -1)],
-    "2": [str(y) for y in range(2026, 2009, -1)],
+    # 根据图2，剧集年份为区间格式
+    "2": ["2026", "2025", "2024", "2023", "2022", "2021", "2020", "2019", 
+          "2020-2016", "2015-2011", "2010-2000"],
     "3": [str(y) for y in range(2018, 2003, -1)],
     "4": [str(y) for y in range(2018, 2003, -1)],
     "24": [],
@@ -504,43 +506,57 @@ class Spider(Spider):
                 # 1) 类型 —— 真实是子分类，点击后跳到 /filter/id/{tid}.html
                 subs = SUB_TYPES.get(tid) or []
                 if subs:
+                    val_list = [{"n": "全部", "v": ""}]
+                    val_list.extend([{"n": n, "v": v} for v, n in subs])
                     groups.append({
                         "key": "id", "name": "类型",
-                        "value": [{"n": n, "v": v} for v, n in subs],
+                        "value": val_list,
                     })
                 # 2) 剧情
                 if CLAZZ.get(tid):
+                    val_list = [{"n": "全部", "v": ""}]
+                    val_list.extend([{"n": x, "v": x} for x in CLAZZ[tid]])
                     groups.append({
                         "key": "class", "name": "剧情",
-                        "value": [{"n": x, "v": x} for x in CLAZZ[tid]],
+                        "value": val_list,
                     })
                 # 3) 地区
                 if AREA.get(tid):
+                    val_list = [{"n": "全部", "v": ""}]
+                    val_list.extend([{"n": x, "v": x} for x in AREA[tid]])
                     groups.append({
                         "key": "area", "name": "地区",
-                        "value": [{"n": x, "v": x} for x in AREA[tid]],
+                        "value": val_list,
                     })
                 # 4) 年份
                 if YEAR.get(tid):
+                    val_list = [{"n": "全部", "v": ""}]
+                    val_list.extend([{"n": y, "v": y} for y in YEAR[tid]])
                     groups.append({
                         "key": "year", "name": "年份",
-                        "value": [{"n": y, "v": y} for y in YEAR[tid]],
+                        "value": val_list,
                     })
                 # 5) 语言
                 if LANG.get(tid):
+                    val_list = [{"n": "全部", "v": ""}]
+                    val_list.extend([{"n": x, "v": x} for x in LANG[tid]])
                     groups.append({
                         "key": "lang", "name": "语言",
-                        "value": [{"n": x, "v": x} for x in LANG[tid]],
+                        "value": val_list,
                     })
                 # 6) 字母（全站统一 27 项，短剧也有）
+                val_list = [{"n": "全部", "v": ""}]
+                val_list.extend([{"n": x, "v": x} for x in LETTER])
                 groups.append({
                     "key": "letter", "name": "字母",
-                    "value": [{"n": x, "v": x} for x in LETTER],
+                    "value": val_list,
                 })
                 # 7) 排序
+                val_list = [{"n": "全部", "v": ""}]
+                val_list.extend([{"n": n, "v": v} for v, n in SORT_BY])
                 groups.append({
                     "key": "by", "name": "排序",
-                    "value": [{"n": n, "v": v} for v, n in SORT_BY],
+                    "value": val_list,
                 })
                 filters[tid] = groups
         return {"class": CLASSES, "filters": filters}
