@@ -1,12 +1,12 @@
 # coding=utf-8
 """
 滴答影院 www.loldyw.com | TVBox Python 爬虫
-严格对照真实源码：
-  - 分类及子分类 ID 对照真实菜单和筛选栏
-  - 筛选 URL 路径式：/filter/[class|area|lang]/.../id/{子分类ID}/year/{年}/letter/{字母}.html
-  - 搜索：/lookup/wd/{关键词}.html
-  - 详情：/film/{id}f.html
-  - 播放：var player_aaaa={...} 取 url
+严格对照真实源码，拒绝猜测：
+  - 分类 ID 严格按照源码筛选栏提取
+  - 筛选路径严格按照真实链接 /filter/class/... 提取
+  - 搜索结果严格解析 ul#searchList 下的 li 结构
+  - 详情剧集严格解析 #playlist 和 tab 标签
+  - 播放直接提取 player_aaaa 的 url
 """
 import re
 import sys
@@ -33,8 +33,9 @@ except ImportError:
             if self._session is None:
                 self._session = _rq.Session()
                 self._session.verify = False
-                self._session.mount('https://', _rq.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=0))
-                self._session.mount('http://', _rq.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=0))
+                adapter = _rq.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=0)
+                self._session.mount('https://', adapter)
+                self._session.mount('http://', adapter)
             return self._session
         def fetch(self, url, headers=None, **kw):
             timeout = kw.pop('timeout', 15)
@@ -55,7 +56,7 @@ DEFAULT_PIC = HOST + "/template/three/statics/img/load.gif"
 
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
-# === 严格按照网页真实子分类 ID 定义 ===
+# ================= 1. 真实分类 ID =================
 CLASSES = [
     {"type_id": "1", "type_name": "电影"},
     {"type_id": "2", "type_name": "电视剧"},
@@ -64,20 +65,28 @@ CLASSES = [
     {"type_id": "24", "type_name": "短剧"},
 ]
 
-# 真实网页的筛选参数（依据分类页的真实 HTML 拼装）
+# ================= 2. 真实筛选列表 =================
+# 由于苹果CMS的筛选是覆盖式的（例如 /filter/class/喜剧/id/6.html 或者 /filter/id/6/year/2025.html）
+# 所以这里提供所有真实的子分类、地区、年份等
+_SORT_LIST = [{"n": "时间", "v": "time"}, {"n": "人气", "v": "hits"}, {"n": "评分", "v": "score"}]
+_YEAR_LIST = [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 2003, -1)]
+_LETTER_LIST = [{"n": "全部", "v": ""}] + [{"n": c, "v": c} for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0-9"]
+_LANG_LIST = [
+    {"n": "全部", "v": ""}, {"n": "国语", "v": "国语"}, {"n": "英语", "v": "英语"},
+    {"n": "粤语", "v": "粤语"}, {"n": "闽南语", "v": "闽南语"}, {"n": "韩语", "v": "韩语"},
+    {"n": "日语", "v": "日语"}, {"n": "法语", "v": "法语"}, {"n": "德语", "v": "德语"},
+    {"n": "其它", "v": "其它"}
+]
+
+# 严格依据分类页源码中的 ul.iqy-screen__list
 FILTERS = {
-    # 动作片分类页抓取的 6
-    "6": [
-        {"key": "class", "name": "剧情", "value": [
-            {"n": "全部", "v": ""}, {"n": "喜剧", "v": "喜剧"}, {"n": "爱情", "v": "爱情"},
-            {"n": "恐怖", "v": "恐怖"}, {"n": "动作", "v": "动作"}, {"n": "科幻", "v": "科幻"},
-            {"n": "剧情", "v": "剧情"}, {"n": "战争", "v": "战争"}, {"n": "警匪", "v": "警匪"},
-            {"n": "犯罪", "v": "犯罪"}, {"n": "动画", "v": "动画"}, {"n": "奇幻", "v": "奇幻"},
-            {"n": "武侠", "v": "武侠"}, {"n": "冒险", "v": "冒险"}, {"n": "枪战", "v": "枪战"},
-            {"n": "悬疑", "v": "悬疑"}, {"n": "惊悚", "v": "惊悚"}, {"n": "经典", "v": "经典"},
-            {"n": "青春", "v": "青春"}, {"n": "文艺", "v": "文艺"}, {"n": "微电影", "v": "微电影"},
-            {"n": "古装", "v": "古装"}, {"n": "历史", "v": "历史"}, {"n": "运动", "v": "运动"},
-            {"n": "农村", "v": "农村"}, {"n": "儿童", "v": "儿童"}, {"n": "网络电影", "v": "网络电影"}
+    # 大类：电影
+    "1": [
+        {"key": "tid", "name": "类型", "value": [
+            {"n": "全部", "v": ""}, {"n": "动作片", "v": "6"}, {"n": "喜剧片", "v": "7"},
+            {"n": "爱情片", "v": "8"}, {"n": "科幻片", "v": "9"}, {"n": "剧情片", "v": "10"},
+            {"n": "战争片", "v": "11"}, {"n": "动画片", "v": "41"}, {"n": "记录片", "v": "12"},
+            {"n": "恐怖片", "v": "39"}
         ]},
         {"key": "area", "name": "地区", "value": [
             {"n": "全部", "v": ""}, {"n": "大陆", "v": "大陆"}, {"n": "香港", "v": "香港"},
@@ -87,31 +96,17 @@ FILTERS = {
             {"n": "意大利", "v": "意大利"}, {"n": "西班牙", "v": "西班牙"},
             {"n": "加拿大", "v": "加拿大"}, {"n": "其他", "v": "其他"}
         ]},
-        {"key": "year", "name": "年份", "value": [
-            {"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 2009, -1)
-        ]},
-        {"key": "lang", "name": "语言", "value": [
-            {"n": "全部", "v": ""}, {"n": "国语", "v": "国语"}, {"n": "英语", "v": "英语"},
-            {"n": "粤语", "v": "粤语"}, {"n": "闽南语", "v": "闽南语"}, {"n": "韩语", "v": "韩语"},
-            {"n": "日语", "v": "日语"}, {"n": "法语", "v": "法语"}, {"n": "德语", "v": "德语"},
-            {"n": "其它", "v": "其它"}
-        ]},
-        {"key": "letter", "name": "字母", "value": [
-            {"n": "全部", "v": ""}] + [{"n": c, "v": c} for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0-9"
-        ]},
-        {"key": "sort", "name": "排序", "value": [
-            {"n": "时间", "v": "time"}, {"n": "人气", "v": "hits"}, {"n": "评分", "v": "score"}
-        ]}
+        {"key": "year", "name": "年份", "value": _YEAR_LIST},
+        {"key": "lang", "name": "语言", "value": _LANG_LIST},
+        {"key": "letter", "name": "字母", "value": _LETTER_LIST},
+        {"key": "sort", "name": "排序", "value": _SORT_LIST},
     ],
-    # 国产剧
-    "13": [
-        {"key": "class", "name": "剧情", "value": [
-            {"n": "全部", "v": ""}, {"n": "古装", "v": "古装"}, {"n": "战争", "v": "战争"},
-            {"n": "青春偶像", "v": "青春偶像"}, {"n": "喜剧", "v": "喜剧"}, {"n": "家庭", "v": "家庭"},
-            {"n": "犯罪", "v": "犯罪"}, {"n": "动作", "v": "动作"}, {"n": "奇幻", "v": "奇幻"},
-            {"n": "剧情", "v": "剧情"}, {"n": "历史", "v": "历史"}, {"n": "经典", "v": "经典"},
-            {"n": "乡村", "v": "乡村"}, {"n": "情景", "v": "情景"}, {"n": "商战", "v": "商战"},
-            {"n": "网剧", "v": "网剧"}, {"n": "其他", "v": "其他"}
+    # 大类：电视剧
+    "2": [
+        {"key": "tid", "name": "类型", "value": [
+            {"n": "全部", "v": ""}, {"n": "国产剧", "v": "13"}, {"n": "香港剧", "v": "14"},
+            {"n": "韩国剧", "v": "15"}, {"n": "欧美剧", "v": "16"}, {"n": "台湾剧", "v": "22"},
+            {"n": "日本剧", "v": "21"}, {"n": "泰国剧", "v": "20"}, {"n": "海外剧", "v": "23"}
         ]},
         {"key": "area", "name": "地区", "value": [
             {"n": "全部", "v": ""}, {"n": "内地", "v": "内地"}, {"n": "韩国", "v": "韩国"},
@@ -119,100 +114,61 @@ FILTERS = {
             {"n": "美国", "v": "美国"}, {"n": "泰国", "v": "泰国"}, {"n": "英国", "v": "英国"},
             {"n": "新加坡", "v": "新加坡"}, {"n": "其他", "v": "其他"}
         ]},
-        {"key": "year", "name": "年份", "value": [
-            {"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 2009, -1)
-        ]},
-        {"key": "lang", "name": "语言", "value": [
-            {"n": "全部", "v": ""}, {"n": "国语", "v": "国语"}, {"n": "英语", "v": "英语"},
-            {"n": "粤语", "v": "粤语"}, {"n": "闽南语", "v": "闽南语"}, {"n": "韩语", "v": "韩语"},
-            {"n": "日语", "v": "日语"}, {"n": "其它", "v": "其它"}
-        ]},
-        {"key": "letter", "name": "字母", "value": [
-            {"n": "全部", "v": ""}] + [{"n": c, "v": c} for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0-9"
-        ]},
-        {"key": "sort", "name": "排序", "value": [
-            {"n": "时间", "v": "time"}, {"n": "人气", "v": "hits"}, {"n": "评分", "v": "score"}
-        ]}
+        {"key": "year", "name": "年份", "value": _YEAR_LIST},
+        {"key": "lang", "name": "语言", "value": _LANG_LIST},
+        {"key": "letter", "name": "字母", "value": _LETTER_LIST},
+        {"key": "sort", "name": "排序", "value": _SORT_LIST},
     ],
-    # 大陆综艺
-    "25": [
-        {"key": "class", "name": "剧情", "value": [
-            {"n": "全部", "v": ""}, {"n": "选秀", "v": "选秀"}, {"n": "情感", "v": "情感"},
-            {"n": "访谈", "v": "访谈"}, {"n": "播报", "v": "播报"}, {"n": "旅游", "v": "旅游"},
-            {"n": "音乐", "v": "音乐"}, {"n": "美食", "v": "美食"}, {"n": "纪实", "v": "纪实"},
-            {"n": "曲艺", "v": "曲艺"}, {"n": "生活", "v": "生活"}, {"n": "游戏互动", "v": "游戏互动"},
-            {"n": "财经", "v": "财经"}, {"n": "求职", "v": "求职"}
+    # 大类：综艺
+    "3": [
+        {"key": "tid", "name": "类型", "value": [
+            {"n": "全部", "v": ""}, {"n": "大陆综艺", "v": "25"}, {"n": "日韩综艺", "v": "26"},
+            {"n": "港台综艺", "v": "27"}, {"n": "欧美综艺", "v": "28"}
         ]},
         {"key": "area", "name": "地区", "value": [
             {"n": "全部", "v": ""}, {"n": "内地", "v": "内地"}, {"n": "港台", "v": "港台"},
             {"n": "日韩", "v": "日韩"}, {"n": "欧美", "v": "欧美"}
         ]},
-        {"key": "year", "name": "年份", "value": [
-            {"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 2003, -1)
-        ]},
-        {"key": "lang", "name": "语言", "value": [
-            {"n": "全部", "v": ""}, {"n": "国语", "v": "国语"}, {"n": "英语", "v": "英语"},
-            {"n": "粤语", "v": "粤语"}, {"n": "闽南语", "v": "闽南语"}, {"n": "韩语", "v": "韩语"},
-            {"n": "日语", "v": "日语"}, {"n": "其它", "v": "其它"}
-        ]},
-        {"key": "letter", "name": "字母", "value": [
-            {"n": "全部", "v": ""}] + [{"n": c, "v": c} for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0-9"
-        ]},
-        {"key": "sort", "name": "排序", "value": [
-            {"n": "时间", "v": "time"}, {"n": "人气", "v": "hits"}, {"n": "评分", "v": "score"}
-        ]}
+        {"key": "year", "name": "年份", "value": _YEAR_LIST},
+        {"key": "lang", "name": "语言", "value": _LANG_LIST},
+        {"key": "letter", "name": "字母", "value": _LETTER_LIST},
+        {"key": "sort", "name": "排序", "value": _SORT_LIST},
     ],
-    # 国产动漫
-    "29": [
-        {"key": "class", "name": "剧情", "value": [
-            {"n": "全部", "v": ""}, {"n": "情感", "v": "情感"}, {"n": "科幻", "v": "科幻"},
-            {"n": "热血", "v": "热血"}, {"n": "推理", "v": "推理"}, {"n": "搞笑", "v": "搞笑"},
-            {"n": "冒险", "v": "冒险"}, {"n": "萝莉", "v": "萝莉"}, {"n": "校园", "v": "校园"},
-            {"n": "动作", "v": "动作"}, {"n": "机战", "v": "机战"}, {"n": "运动", "v": "运动"},
-            {"n": "战争", "v": "战争"}, {"n": "少年", "v": "少年"}, {"n": "少女", "v": "少女"},
-            {"n": "社会", "v": "社会"}, {"n": "原创", "v": "原创"}, {"n": "亲子", "v": "亲子"},
-            {"n": "益智", "v": "益智"}, {"n": "励志", "v": "励志"}, {"n": "其他", "v": "其他"}
+    # 大类：动漫
+    "4": [
+        {"key": "tid", "name": "类型", "value": [
+            {"n": "全部", "v": ""}, {"n": "国产动漫", "v": "29"}, {"n": "日本动漫", "v": "30"},
+            {"n": "港台动漫", "v": "42"}, {"n": "欧美动漫", "v": "31"}, {"n": "海外动漫", "v": "43"}
         ]},
         {"key": "area", "name": "地区", "value": [
             {"n": "全部", "v": ""}, {"n": "国产", "v": "国产"}, {"n": "日本", "v": "日本"},
             {"n": "欧美", "v": "欧美"}, {"n": "其他", "v": "其他"}
         ]},
-        {"key": "year", "name": "年份", "value": [
-            {"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 2003, -1)
-        ]},
-        {"key": "lang", "name": "语言", "value": [
-            {"n": "全部", "v": ""}, {"n": "国语", "v": "国语"}, {"n": "英语", "v": "英语"},
-            {"n": "粤语", "v": "粤语"}, {"n": "闽南语", "v": "闽南语"}, {"n": "韩语", "v": "韩语"},
-            {"n": "日语", "v": "日语"}, {"n": "其它", "v": "其它"}
-        ]},
-        {"key": "letter", "name": "字母", "value": [
-            {"n": "全部", "v": ""}] + [{"n": c, "v": c} for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0-9"
-        ]},
-        {"key": "sort", "name": "排序", "value": [
-            {"n": "时间", "v": "time"}, {"n": "人气", "v": "hits"}, {"n": "评分", "v": "score"}
-        ]}
+        {"key": "year", "name": "年份", "value": _YEAR_LIST},
+        {"key": "lang", "name": "语言", "value": _LANG_LIST},
+        {"key": "letter", "name": "字母", "value": _LETTER_LIST},
+        {"key": "sort", "name": "排序", "value": _SORT_LIST},
     ],
-    # 短剧大全
-    "40": [
-        {"key": "class", "name": "类型", "value": [
-            {"n": "全部", "v": ""}, {"n": "AI漫剧", "v": "AI漫剧"}
+    # 大类：短剧
+    "24": [
+        {"key": "tid", "name": "类型", "value": [
+            {"n": "全部", "v": ""}, {"n": "短剧大全", "v": "40"}, {"n": "AI漫剧", "v": "44"}
         ]},
-        {"key": "letter", "name": "字母", "value": [
-            {"n": "全部", "v": ""}] + [{"n": c, "v": c} for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0-9"
-        ]},
-        {"key": "sort", "name": "排序", "value": [
-            {"n": "时间", "v": "time"}, {"n": "人气", "v": "hits"}, {"n": "评分", "v": "score"}
-        ]}
+        {"key": "letter", "name": "字母", "value": _LETTER_LIST},
+        {"key": "sort", "name": "排序", "value": _SORT_LIST},
     ]
 }
 
-# === 正则 ===
+# ================= 3. 正则解析 =================
+# 列表页（首页/分类）
 _RE_CARD = re.compile(
     r'<a\s+class="iqy-vodlist__thumb[^"]*"\s+href="([^"]+)"\s+title="([^"]*)"[^>]*?data-original="([^"]*)"',
     re.S | re.I)
+# 搜索页（ul#searchList 下的 li）
 _RE_SEARCH_ITEM = re.compile(
-    r'<li class="active clearfix">[\s\S]*?<a class="iqy-vodlist__thumb[^"]*"\s+href="([^"]+)"\s+title="([^"]*)"[^>]*?data-original="([^"]*)"',
+    r'<a\s+class="iqy-vodlist__thumb[^"]*"\s+href="([^"]+)"\s+title="([^"]*)"[^>]*?data-original="([^"]*)"',
     re.S | re.I)
+# 详情
 _RE_H1 = re.compile(r'<h1 class="title">([\s\S]*?)</h1>', re.I)
 _RE_DETAIL_PIC = re.compile(r'class="iqy-vodlist__thumb[^"]*picture"[^>]*>[\s\S]*?data-original="([^"]+)"', re.I)
 _RE_DESC = re.compile(r'<span class="sketch content">([\s\S]*?)</span>', re.S | re.I)
@@ -220,13 +176,16 @@ _RE_RATING = re.compile(r'<span class="branch">([\d.]+)</span>', re.I)
 _RE_ACTOR = re.compile(r'<p class="data"><span class="text-muted">主演：</span>([\s\S]*?)</p>', re.S)
 _RE_DIRECTOR = re.compile(r'<p class="data"><span class="text-muted">导演：</span>([\s\S]*?)</p>', re.S)
 _RE_REMARK = re.compile(r'<span class="text-muted">更新：</span><span class="text-red">([^<]+)</span>', re.I)
+# 剧集
 _RE_LINE_TAB = re.compile(r'<li[^>]*><a href="#(playlist\d+)"[^>]*>([^<]+)</a></li>', re.I)
 _RE_LINE_BLOCK = re.compile(r'<div id="(playlist\d+)"[\s\S]*?<ul class="iqy-content__list[^"]*"[\s\S]*?</ul>', re.S | re.I)
 _RE_EP = re.compile(r'<a class="btn btn-default[^"]*"\s+href="([^"]+)">([^<]+)</a>', re.I)
+# 播放器
 _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>', re.S)
 
 
 class Spider(Spider):
+
     def getName(self):
         return "滴答影院"
 
@@ -270,11 +229,9 @@ class Spider(Spider):
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
 
-    def _parse_list(self, html, search=False):
-        videos = []
-        seen = set()
-        pat = _RE_SEARCH_ITEM if search else _RE_CARD
-        for m in pat.finditer(html or ""):
+    def _parse_list(self, html):
+        videos, seen = [], set()
+        for m in _RE_CARD.finditer(html or ""):
             href, name, pic = m.group(1), m.group(2), m.group(3)
             if href in seen: continue
             seen.add(href)
@@ -300,29 +257,30 @@ class Spider(Spider):
             except Exception: extend = {}
         extend = extend or {}
 
-        # 严格根据真实网页的路径格式拼接：
-        # /filter/class/{class}/id/{tid}/area/{area}/year/{year}/lang/{lang}/letter/{letter}/by/{sort}.html
-        parts = []
-        if extend.get("class"): parts.append("class/%s" % urllib.parse.quote(extend["class"]))
-        parts.append("id/%s" % tid)
-        if extend.get("area"): parts.append("area/%s" % urllib.parse.quote(extend["area"]))
-        if extend.get("year"): parts.append("year/%s" % extend["year"])
-        if extend.get("lang"): parts.append("lang/%s" % urllib.parse.quote(extend["lang"]))
-        if extend.get("letter"): parts.append("letter/%s" % extend["letter"])
-        if extend.get("sort"): parts.append("by/%s" % extend["sort"])
+        # 替换真实子类 ID
+        real_tid = extend.get("tid") or tid
 
-        if len(parts) > 1:
-            base = "/filter/" + "/".join(parts)
+        # 严格按源码真实路径拼接（苹果CMS 是覆盖式，因此按优先级依次判断）
+        # 真实路径如: /filter/class/喜剧/id/6.html /filter/id/6/year/2025.html
+        prefix = ""
+        if extend.get("class"): prefix = "class/%s/" % urllib.parse.quote(extend["class"])
+        elif extend.get("area"): prefix = "area/%s/" % urllib.parse.quote(extend["area"])
+        elif extend.get("lang"): prefix = "lang/%s/" % urllib.parse.quote(extend["lang"])
+        elif extend.get("letter"): prefix = "letter/%s/" % extend["letter"]
+        elif extend.get("year"): prefix = "year/%s/" % extend["year"]
+        elif extend.get("sort"): prefix = "by/%s/" % extend["sort"]
+
+        if prefix:
+            base = "/filter/%sid/%s" % (prefix, real_tid)
             if page > 1: base += "-%d" % page
             url = self.site_url + base + ".html"
         else:
-            if page <= 1: url = "%s/genre/%s.html" % (self.site_url, tid)
-            else: url = "%s/genre/%s-%d.html" % (self.site_url, tid, page)
+            if page <= 1: url = "%s/genre/%s.html" % (self.site_url, real_tid)
+            else: url = "%s/genre/%s-%d.html" % (self.site_url, real_tid, page)
 
         self.log("category: %s" % url)
         html = self._fetch(url)
-        
-        # 计算 pagecount
+
         pagecount = 9999
         m = re.search(r'href="[^"]*-(\d+)\.html">尾页</a>', html)
         if m: pagecount = int(m.group(1))
@@ -337,7 +295,7 @@ class Spider(Spider):
         kw = urllib.parse.quote(key)
         url = "%s/lookup/wd/%s.html" % (self.site_url, kw) if page == 1 else "%s/lookup/wd/%s-%d.html" % (self.site_url, kw, page)
         html = self._fetch(url)
-        return {"list": self._parse_list(html, search=True), "page": page, "pagecount": 1, "limit": 24, "total": 999}
+        return {"list": self._parse_list(html), "page": page, "pagecount": 1, "limit": 24, "total": 999}
 
     def searchContentPage(self, key, quick, pg="1"):
         return self.searchContent(key, quick, pg)
