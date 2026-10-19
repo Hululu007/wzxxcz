@@ -271,7 +271,7 @@ class Spider(Spider):
                 extend[k] = urllib.parse.unquote(extend[k])
 
         sub_tid = extend.get("tid")
-        # 关键致命 Bug 修复：TVBox 默认会传空字符串，必须过滤掉！
+        # 关键修复：过滤掉空字符串，否则会拼接出 /genre/.html 导致404
         real_tid = sub_tid if (sub_tid and sub_tid.strip()) else tid
 
         # 核心修复：严格贴合苹果CMS真实格式 `/filter/id/13/year/2026.html`
