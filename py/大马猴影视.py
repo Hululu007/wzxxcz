@@ -151,6 +151,7 @@ class Spider(Spider):
             "x-client": CLIENT_ID,
         }
         self._home_cache = None
+        self._tid2name = {}       # 分类type_id -> 中文分类名（filter/vod 用 type_name 过滤）
         self._last_vod_id = ""
         self._label_to_from = {}  # 线路显示名 -> 站点 from 代号（详情时填充）
         # 详情时缓存各线路原始剧集地址，用于解码失败时同集数回退（实测样本见下）
@@ -294,6 +295,8 @@ class Spider(Spider):
             if not tid:
                 continue
             classes.append({"type_id": tid, "type_name": tname})
+            if tname:
+                self._tid2name[tid] = tname
 
             fo = c.get("filter_options") or {}
             fl = []
@@ -361,6 +364,15 @@ class Spider(Spider):
         return {"list": videos}
 
     # ================= 分类 =================
+    def _type_name_of(self, tid):
+        """type_id -> 中文分类名；映射未建立时先拉一次首页分类表（惰性初始化）。
+        实测无论电视端是先调 homeContent 还是直接调 categoryContent，
+        都必须保证此处拿到中文名，否则接口会忽略分类过滤返回全站混合列表。"""
+        tid = str(tid).strip()
+        if tid not in self._tid2name:
+            self._build_classes_and_filters()
+        return self._tid2name.get(tid) or tid
+
     def categoryContent(self, tid, pg, filter, extend):
         page = int(pg) if str(pg).isdigit() else 1
         if page < 1:
@@ -374,8 +386,13 @@ class Spider(Spider):
         if not isinstance(extend, dict):
             extend = {}
 
+        # 【实测】filter/vod 的分类过滤参数是 type_name（中文）而非 type_id：
+        #   传 type_id=22/23/24/25 服务端一律忽略，返回同一份列表；
+        #   传 type_name=剧集/电影/动漫/综艺 才返回对应分类。
+        #   且 type_name 可与 class/area/year/sort 组合使用。
+        tname = self._type_name_of(tid)
         params = {
-            "type_id": str(tid),
+            "type_name": tname,
             "page": page,
             "sort": extend.get("sort") or "hits",
         }
