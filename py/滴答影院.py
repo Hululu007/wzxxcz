@@ -258,11 +258,11 @@ class Spider(Spider):
             except Exception: extend = {}
         extend = extend or {}
 
-        # 关键修复点：TVBox 可能会传空的 tid，此时必须回退到当前大类 tid
+        # 关键修复点：排除 tid 干扰，提取真正的筛选前缀
         sub_tid = extend.get("tid")
         real_tid = sub_tid if (sub_tid and sub_tid.strip()) else tid
 
-        # 真实网页的筛选路径（/filter/[area|year|lang|...]/id/[tid].html）
+        # 真实网页的筛选路径，除 tid 外的其他参数作为前缀
         prefix = ""
         if extend.get("area"): prefix = "area/%s/" % urllib.parse.quote(extend["area"])
         elif extend.get("lang"): prefix = "lang/%s/" % urllib.parse.quote(extend["lang"])
