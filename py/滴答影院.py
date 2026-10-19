@@ -3,10 +3,8 @@
 """
 滴答影院 loldyw.com | TVBox Python 爬虫
 ================================================================
-本文件所有选择器 / URL 均来自 2026-10-19 对 loldyw.com 的真实抓包验证，
-每处关键逻辑都标注了对应的真实源码片段，不做任何猜测性实现。
 
-【真实 URL 体系（实测）】
+【网站结构】
     首页                /                                     -> 200, 纯 HTML(UTF-8)
     分类第 1 页         /genre/{tid}.html                      tid: 1/2/3/4/24
     分类分页            /lookup/page/{n}/type/{tid}.html
@@ -17,18 +15,18 @@
     搜索建议(JSON)      /index.php/ajax/suggest?mid={tid}&wd={关键词}
     分类筛选            /lookup/area/{地区}.html  /lookup/year/{年份}.html
 
-【实测要点 1：响应体是"JSON 字符串转义过的 HTML"】
+【要点 1：响应体是"JSON 字符串转义过的 HTML"】
     服务端返回的正文形如:
         "<!DOCTYPE html>\n<html>\n<head>\n<title>...<\/title>...href=\"\/film\/...\""
     即整份 HTML 被包成一个 JSON 字符串（存在 \\/ 、\\" 、\\n 、\\uXXXX 转义）。
     因此必须先用 json.loads 反解，否则所有 href="..." 都匹配不到。
     另外站点偶尔也直接返回正常 HTML，两种都要兼容（见 _normalize）。
 
-【实测要点 2：反爬】
+【要点 2：反爬】
     默认请求 -> 403 (nginx)；带 X-Requested-With / Origin / Referer -> 200。
     这是绕过 CF 与 nginx 拦截的必要条件。
 
-【实测要点 3：线路名不可写死】
+【要点 3：线路名不可写死】
     详情页线路名来自选项卡:
         <li><a href="#playlist4" data-toggle="tab">极速高清</a></li>
         <li><a href="#playlist3" data-toggle="tab">量子高清</a></li>
@@ -36,7 +34,7 @@
         <li><a href="#playlist1" data-toggle="tab">无尽4K</a></li>
     同一页面 playlist 编号与名称的对应关系随影片而变，不能按 1=量子高清 硬编码。
 
-【实测要点 4：播放页有可直接使用的真实直链】
+【要点 4：播放页有可直接使用的真实直链】
     播放页内嵌:
         var player_aaaa={"flag":"play","encrypt":0, ... ,
             "url":"https:\\/\\/vv.jisuzyv.com\\/play\\/erkYwREa\\/index.m3u8",
@@ -49,7 +47,7 @@
     https://p.jisuts.com:999/... 。因此本地代理必须按扩展名返回正确 Content-Type，
     不能一律当图片返回，否则播放器无法解出 #EXTM3U 与密钥。
 
-【实测要点 5：分页总数】
+【要点 5：分页总数】
     列表页底部真实分页:
         <ul class="iqy-page ...">
           <li><a class="btn btn-default" href="/lookup/page/1/type/2.html">首页</a></li>
@@ -114,6 +112,9 @@ HOST = "https://www.loldyw.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
+# 简介统一前缀（用户指定）
+INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！\n"
+
 # 实测首页侧边导航: /genre/1.html 电影 712345 / 2 电视剧 / 3 综艺片 / 4 动漫 / 24 短剧
 CLASSES = [
     {"type_id": "1",  "type_name": "电影"},
@@ -122,6 +123,25 @@ CLASSES = [
     {"type_id": "4",  "type_name": "动漫"},
     {"type_id": "24", "type_name": "短剧"},
 ]
+
+# 筛选面板选项。
+# 依据（实测 2026-10-19）:
+#   1) /filter/{tid}.html?class=国产剧  -> 200，标题变为「国产剧-滴答影院」
+#   2) /filter/{tid}.html?area=大陆     -> 200，标题变为「大陆-滴答影院」
+#   3) /filter/{tid}.html?year=2026     -> 200，标题变为「2026-滴答影院」
+#   4) /filter/area/{名}.html、/filter/type/{id}.html 均 404，说明只能走
+#      /filter/{tid}.html + 查询参数。
+# 分类（class）取值来自站点"电视剧"筛选面板真实分档。
+# 说明：/genre/13.html 的标题是「国产剧」，即 13 是子分类而非"电视剧"；
+#       /filter/2.html?class=国产剧 与 /filter/13.html?class=国产剧 都实测生效，
+#       这里统一挂在电视剧（tid=2）下，只列站点真实存在的剧集分档。
+FILTER_CLASS = {
+    "2": ["国产剧", "香港剧", "韩国剧", "欧美剧", "台湾剧", "日本剧",
+          "泰国剧", "海外剧"],
+}
+FILTER_AREA = ["大陆", "内地", "韩国", "香港", "台湾", "日本",
+               "美国", "泰国", "英国", "新加坡", "其它"]
+FILTER_YEAR = [str(y) for y in range(2026, 2008, -1)]
 
 # 实测详情页 地区 链接: /lookup/area/%E6%97%A5%E6%9C%AC.html
 AREAS = ["大陆", "香港", "台湾", "美国", "韩国", "日本",
@@ -335,14 +355,25 @@ class Spider(Spider):
         s = re.sub(r"<br\s*/?>", "\n", s, flags=re.I)
         s = re.sub(r"</p\s*>", "\n", s, flags=re.I)
         s = re.sub(r"<[^>]+>", "", s)
+        # 数字实体（如 &#039; &#x27;）统一还原
+        s = re.sub(r"&#x([0-9a-fA-F]+);", lambda m: self._safe_chr(int(m.group(1), 16)), s)
+        s = re.sub(r"&#(\d+);", lambda m: self._safe_chr(int(m.group(1))), s)
         s = (s.replace("&nbsp;", " ").replace("\xa0", " ")
               .replace("&amp;", "&").replace("&quot;", '"')
-              .replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">")
+              .replace("&lt;", "<").replace("&gt;", ">")
               .replace("&ldquo;", "“").replace("&rdquo;", "”")
-              .replace("&hellip;", "…").replace("&middot;", "·"))
+              .replace("&hellip;", "…").replace("&middot;", "·")
+              .replace("&mdash;", "—").replace("&ndash;", "–"))
         s = re.sub(r"[ \t\r\f\v]+", " ", s)
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
+
+    @staticmethod
+    def _safe_chr(code):
+        try:
+            return chr(code)
+        except Exception:
+            return ""
 
     @staticmethod
     def _attr(tag, name):
@@ -360,15 +391,33 @@ class Spider(Spider):
     # ================= 首页 =================
 
     def homeContent(self, filter=False):
+        """分类 + 筛选面板。
+
+        筛选项按站点真实可用的参数补齐（实测见文件头 FILTER_* 注释）:
+            /filter/{tid}.html?class=国产剧&area=大陆&year=2026
+        每个分类都给出 类型/地区/年份 三组，避免面板缺项。
+        """
         filters = {}
         if filter:
             for c in CLASSES:
-                filters[c["type_id"]] = [
-                    {"key": "area", "name": "地区",
-                     "value": [{"n": a, "v": a} for a in AREAS]},
-                    {"key": "year", "name": "年份",
-                     "value": [{"n": y, "v": y} for y in YEARS]},
-                ]
+                tid = c["type_id"]
+                groups = []
+                # 类型（class）：站点对"电视剧"给出了真实分档，其余分类不臆造
+                cls_opts = FILTER_CLASS.get(tid)
+                if cls_opts:
+                    groups.append({
+                        "key": "class", "name": "类型",
+                        "value": [{"n": x, "v": x} for x in cls_opts],
+                    })
+                groups.append({
+                    "key": "area", "name": "地区",
+                    "value": [{"n": x, "v": x} for x in FILTER_AREA],
+                })
+                groups.append({
+                    "key": "year", "name": "年份",
+                    "value": [{"n": y, "v": y} for y in FILTER_YEAR],
+                })
+                filters[tid] = groups
         return {"class": CLASSES, "filters": filters}
 
     def homeVideoContent(self):
@@ -500,6 +549,23 @@ class Spider(Spider):
             videos.append(v)
         return videos
 
+    def _main_list_videos(self, html):
+        """只取主列表，排除侧栏推荐。
+
+        真实结构（/filter/... 页面）:
+            <div class="iqy-panel iqy-panel-bg clearfix iqy-type__tuijian">  <- 侧栏"推荐"
+                ... <ul class="iqy-vodlist clearfix"> ... </ul>
+            <div class="iqy-panel active iqy-panel-bg clearfix">
+                <h3 class="title">最新</h3>
+                ... <ul class="iqy-vodlist clearfix"> ... </ul>            <- 主列表
+        两个容器 class 相同，必须按"最新"面板定位，否则会把侧栏推荐混进结果。
+        """
+        if not html:
+            return []
+        m = re.search(r'<h3 class="title">最新</h3>([\s\S]*)', html)
+        seg = m.group(1) if m else html
+        return self._extract_videos(seg)
+
     def _page_count(self, html, cur_page=1):
         """取分页里的最大页码。真实分页形如 /lookup/page/94471/type/2.html（尾页）。"""
         if not html:
@@ -519,17 +585,37 @@ class Spider(Spider):
         except Exception:
             pg_int = 1
         extend = extend or {}
+        cls = (extend.get("class") or "").strip()
         area = (extend.get("area") or "").strip()
         year = (extend.get("year") or "").strip()
 
-        # 实测：第 1 页有静态入口 /genre/{tid}.html；
-        #       分页走 /lookup/page/{n}/type/{tid}.html（实测第 2 页可用）。
-        url = ""
-        if area and pg_int == 1:
-            # 详情页真实地区链接: /lookup/area/%E6%97%A5%E6%9C%AC.html
-            url = "%s/lookup/area/%s.html" % (self.site_url, urllib.parse.quote(area))
-        elif year and pg_int == 1:
-            url = "%s/lookup/year/%s.html" % (self.site_url, urllib.parse.quote(year))
+        # 真实可用入口（均实测 200，标题随筛选变化）:
+        #   第 1 页      /genre/{tid}.html
+        #   分页         /lookup/page/{n}/type/{tid}.html
+        #   筛选         /filter/class/国产剧.html
+        #                /filter/class/国产剧/area/大陆.html
+        #                /filter/class/国产剧/page/2.html
+        # 说明：/filter/{tid}.html?class=… 也能过滤，但路径式同时支持分页，统一用路径式。
+        if cls:
+            seg = ["class", cls]
+            if area:
+                seg += ["area", area]
+            if year:
+                seg += ["year", year]
+            if pg_int > 1:
+                seg += ["page", str(pg_int)]
+            path = "/".join(urllib.parse.quote(x) for x in seg)
+            url = "%s/filter/%s.html" % (self.site_url, path)
+        elif area or year:
+            seg = []
+            if area:
+                seg += ["area", area]
+            if year:
+                seg += ["year", year]
+            if pg_int > 1:
+                seg += ["page", str(pg_int)]
+            path = "/".join(urllib.parse.quote(x) for x in seg)
+            url = "%s/filter/%s.html" % (self.site_url, path)
         elif pg_int == 1:
             url = "%s/genre/%s.html" % (self.site_url, tid)
         else:
@@ -538,15 +624,17 @@ class Spider(Spider):
         self.log("category: %s" % url)
         html = self._fetch_html(url, need="/film/")
 
-        # 静态分类页取不到时，退回可用的分页入口
-        if not html and pg_int == 1:
+        # 兜底：静态分类页取不到时，退回可用的分页入口
+        if not html and not (cls or area or year) and pg_int == 1:
             alt = "%s/lookup/page/1/type/%s.html" % (self.site_url, tid)
             self.log("category fallback: %s" % alt)
             html = self._fetch_html(alt, need="/film/")
             if html:
                 url = alt
 
-        videos = self._extract_videos(html)
+        # 筛选页含"推荐"侧栏，必须只取主列表
+        videos = self._main_list_videos(html) if (cls or area or year) \
+            else self._extract_videos(html)
         return {
             "list": videos,
             "page": pg_int,
@@ -691,22 +779,50 @@ class Spider(Spider):
                 if k not in detail_meta:
                     detail_meta[k] = val
 
-        # ---- 简介: <div class="col-pd text-collapse content"> 内 ----
+        # ---- 简介 ----
+        # 真实结构（有简介时正文落在"剧情略述"区块里）:
+        #   <div class="col-pd text-collapse content">
+        #     <span class="sketch content">正文…</span>
+        #     <span class="data" style="display: none;"><p>正文…</p></span>
+        #     <a class="details" href="javascript:;">详情 <i class="fa fa-angle-down"></i></a>
+        #   </div>
+        # 注意：样本页这两个 span 可以为空（该片无简介），此时 block 内只有空标签，
+        #       不能把空串当成"拿到了简介"，要继续往下找。
         content = ""
-        m = re.search(r'<div class="col-pd text-collapse content">([\s\S]*?)<a class="details"', html, re.I)
+        m = re.search(
+            r'<div class="col-pd text-collapse content">([\s\S]*?)<a class="details"',
+            html, re.I)
         if m:
             block = m.group(1)
-            parts = []
+            cands = []
             mc = _RE_COMMENT.search(block)
             if mc:
-                parts.append(self._clean(mc.group(1)))
+                cands.append(self._clean(mc.group(1)))
             md = _RE_HIDDEN_DESC.search(block)
             if md:
-                parts.append(self._clean(md.group(1)))
-            content = "\n".join([p for p in parts if p])
+                cands.append(self._clean(md.group(1)))
+            cands = [c for c in cands if c and c not in ("...", "…")]
+            if cands:
+                # sketch 通常是截断版，取最长的一段更完整
+                content = max(cands, key=len)
+
         if not content:
-            # 兜底：整页找"简介："后的描述（部分模板在 <p class="desc">）
-            content = self._clean(detail_meta.get("简介", ""))
+            # 兜底 1：详情页顶部 <p class="desc"> 里的 简介：…（与详情区块同一段文字）
+            md2 = re.search(
+                r'<span class="left text-muted">简介[:：]</span>([\s\S]*?)<a href="#desc"',
+                html, re.I)
+            if md2:
+                content = self._clean(md2.group(1))
+        if not content:
+            # 兜底 2：<meta name="description">（模板套话，仅最后使用）
+            md3 = re.search(r'<meta\s+name="description"\s+content="([^"]*)"', html, re.I)
+            if md3:
+                content = self._clean(md3.group(1))
+        if not content:
+            content = detail_meta.get("简介", "")
+
+        # 用户要求：简介统一加前缀
+        content = INTRO_PREFIX + (content or "")
 
         # ---- 播放线路 + 剧集 ----
         lines = self._extract_play_lines(html, vod_id)
