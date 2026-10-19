@@ -77,7 +77,6 @@ _LANG_LIST = [
 ]
 
 FILTERS = {
-    # 大类：电影
     "1": [
         {"key": "tid", "name": "类型", "value": [
             {"n": "全部", "v": ""}, {"n": "动作片", "v": "6"}, {"n": "喜剧片", "v": "7"},
@@ -101,7 +100,6 @@ FILTERS = {
         {"key": "letter", "name": "字母", "value": _LETTER_LIST},
         {"key": "sort", "name": "排序", "value": _SORT_LIST},
     ],
-    # 大类：电视剧
     "2": [
         {"key": "tid", "name": "类型", "value": [
             {"n": "全部", "v": ""}, {"n": "国产剧", "v": "13"}, {"n": "香港剧", "v": "14"},
@@ -124,7 +122,6 @@ FILTERS = {
         {"key": "letter", "name": "字母", "value": _LETTER_LIST},
         {"key": "sort", "name": "排序", "value": _SORT_LIST},
     ],
-    # 大类：综艺
     "3": [
         {"key": "tid", "name": "类型", "value": [
             {"n": "全部", "v": ""}, {"n": "大陆综艺", "v": "25"}, {"n": "日韩综艺", "v": "26"},
@@ -144,7 +141,6 @@ FILTERS = {
         {"key": "letter", "name": "字母", "value": _LETTER_LIST},
         {"key": "sort", "name": "排序", "value": _SORT_LIST},
     ],
-    # 大类：动漫
     "4": [
         {"key": "tid", "name": "类型", "value": [
             {"n": "全部", "v": ""}, {"n": "国产动漫", "v": "29"}, {"n": "日本动漫", "v": "30"},
@@ -164,7 +160,6 @@ FILTERS = {
         {"key": "letter", "name": "字母", "value": _LETTER_LIST},
         {"key": "sort", "name": "排序", "value": _SORT_LIST},
     ],
-    # 大类：短剧
     "24": [
         {"key": "tid", "name": "类型", "value": [
             {"n": "全部", "v": ""}, {"n": "短剧大全", "v": "40"}, {"n": "AI漫剧", "v": "44"}
@@ -175,7 +170,6 @@ FILTERS = {
 }
 
 # ================= 3. 正则解析 =================
-# 列表页（首页/分类/搜索）
 _RE_CARD = re.compile(
     r'<a\s+[^>]*class="[^"]*iqy-vodlist__thumb[^"]*"[^>]*'
     r'href="([^"]+)"[^>]*'
@@ -183,7 +177,6 @@ _RE_CARD = re.compile(
     r'(?:data-original|data-src|src)="([^"]*)"',
     re.S | re.I)
 
-# 详情
 _RE_H1 = re.compile(r'<h1 class="title">([\s\S]*?)</h1>', re.I)
 _RE_DETAIL_PIC = re.compile(r'class="iqy-vodlist__thumb[^"]*picture"[^>]*>[\s\S]*?data-original="([^"]+)"', re.I)
 _RE_DESC = re.compile(r'<span class="sketch content">([\s\S]*?)</span>', re.S | re.I)
@@ -191,11 +184,9 @@ _RE_RATING = re.compile(r'<span class="branch">([\d.]+)</span>', re.I)
 _RE_ACTOR = re.compile(r'<p class="data"><span class="text-muted">主演：</span>([\s\S]*?)</p>', re.S)
 _RE_DIRECTOR = re.compile(r'<p class="data"><span class="text-muted">导演：</span>([\s\S]*?)</p>', re.S)
 _RE_REMARK = re.compile(r'<span class="text-muted">更新：</span><span class="text-red">([^<]+)</span>', re.I)
-# 剧集
 _RE_LINE_TAB = re.compile(r'<li[^>]*><a href="#(playlist\d+)"[^>]*>([^<]+)</a></li>', re.I)
 _RE_LINE_BLOCK = re.compile(r'<div id="(playlist\d+)"[\s\S]*?<ul class="iqy-content__list[^"]*"[\s\S]*?</ul>', re.S | re.I)
 _RE_EP = re.compile(r'<a class="btn btn-default[^"]*"\s+href="([^"]+)">([^<]+)</a>', re.I)
-# 播放器
 _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>', re.S)
 
 
@@ -272,31 +263,24 @@ class Spider(Spider):
             except Exception: extend = {}
         extend = extend or {}
 
-        # 修复双重 URL 编码问题，防止服务器因乱码返回空列表
         for k in list(extend.keys()):
             if isinstance(extend[k], str) and "%" in extend[k]:
                 extend[k] = urllib.parse.unquote(extend[k])
 
-        # 提取真实的子分类 ID，排除空字符串
         sub_tid = extend.get("tid")
         real_tid = sub_tid if (sub_tid and sub_tid.strip()) else tid
 
-        # 真实网页的筛选路径，按优先级提取参数
-        prefix = ""
-        if extend.get("class"): prefix = "class/%s/" % urllib.parse.quote(extend["class"])
-        elif extend.get("area"): prefix = "area/%s/" % urllib.parse.quote(extend["area"])
-        elif extend.get("lang"): prefix = "lang/%s/" % urllib.parse.quote(extend["lang"])
-        elif extend.get("letter"): prefix = "letter/%s/" % extend["letter"]
-        elif extend.get("year"): prefix = "year/%s/" % extend["year"]
-        elif extend.get("sort"): prefix = "by/%s/" % extend["sort"]
+        # 严格按照真实网页源码规则：/filter/[参数]/[值]/id/[分类].html
+        base = ""
+        if extend.get("class"): base = "/filter/class/%s/id/%s" % (urllib.parse.quote(extend["class"]), real_tid)
+        elif extend.get("area"): base = "/filter/area/%s/id/%s" % (urllib.parse.quote(extend["area"]), real_tid)
+        elif extend.get("lang"): base = "/filter/lang/%s/id/%s" % (urllib.parse.quote(extend["lang"]), real_tid)
+        elif extend.get("letter"): base = "/filter/letter/%s/id/%s" % (extend["letter"], real_tid)
+        elif extend.get("year"): base = "/filter/id/%s/year/%s" % (real_tid, extend["year"])
+        elif extend.get("sort"): base = "/filter/by/%s/id/%s" % (extend["sort"], real_tid)
+        elif sub_tid and sub_tid.strip() != tid: base = "/filter/id/%s" % real_tid
 
-        # 判断走 /filter/ 还是 /genre/
-        if prefix or (sub_tid and sub_tid.strip() != tid):
-            if not prefix:
-                base = "/filter/id/%s" % real_tid
-            else:
-                base = "/filter/%sid/%s" % (prefix, real_tid)
-            
+        if base:
             if page > 1: base += "-%d" % page
             url = self.site_url + base + ".html"
         else:
