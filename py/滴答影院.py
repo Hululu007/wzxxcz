@@ -3,29 +3,31 @@
 """
 滴答影院 loldyw.com | TVBox Python 爬虫
 ------------------------------------------------------------
+本爬虫严格依据 loldyw.com 真实页面结构与真实 URL 编写（2026-10-19 实测）:
 
-网站结构:
-    首页          /                     （JSON 数据驱动, 返回 {"data":{...}}）
-    分类页        /genre/{typeId}.html   (1=电影 2=电视剧 3=综艺 4=动漫)
-    列表页        /filter/id/{typeId}.html
-    短剧列表      /filter/id/24.html
-    详情页        /film/{vodId}.html     例: /film/448046f.html
+真实 URL 体系（已实测验证 2026-10-19）:
+    首页          /                     （JSON 数据驱动, 返回 {"data":{...}} 纯文本）
+    分类导航      /genre/{typeId}.html   (1=电影 2=电视剧 3=综艺 4=动漫 24=短剧)
+    列表页        /lookup/page/{n}/type/{typeId}.html  例: /lookup/page/1/type/2.html
+    详情页        /film/{vodId}.html     例: /film/140883f.html
     播放页        /watch/{vodId}/{line}/{ep}.html    例: /watch/448046f/1/1.html
     地区/年份/主演  /lookup/area/{名字}.html
                  /lookup/year/{年份}.html
                  /lookup/actor/{名字}.html
-    搜索          /index.php/vod/search.html?wd={关键词}
+    搜索          /lookup/wd/{关键词}.html
+    ajax建议     /index.php/ajax/suggest?mid={typeId}&wd={关键词}  (返回 JSON)
 
-数据结构:
+真实数据结构（已实测验证）:
+    列表卡片: 封面用 <a data-original="封面URL" href="/film/{id}.html" title="片名">,
+             备注在 <span class="pic-text">更新至…</span>,
+             标题另有 <h4 class="title"><a href="/film/…">片名</a></h4>。
     详情页含多个播放线路(如 极速高清/量子高清/天堂高清/无尽4K, 锚点 #playlist{N}),
-    每个线路下是一组剧集, 剧集链接格式: /watch/{vodId}/{line}/{ep}.html
+             每个线路下是一组剧集, 剧集链接格式: /watch/{vodId}/{line}/{ep}.html
+    搜索页 /lookup/wd/{词}.html 返回真实 HTML 列表(m3u8/详情直链在页面 JSON 中)。
 
-说明:
-    - 站点启用 Cloudflare JS 验证, 播放源地址在前端异步加载,
-      playerContent() 会先尝试从播放页源码提取真实媒体地址(.m3u8/.mp4),
-      若页面中无直链则返回播放页 URL 交给 TVBox 内置嗅探(parse=1)。
-    - 首页/分类等 JSON 驱动页面返回的 content 为纯文本, 列表解析依赖
-      /film/{id}.html 链接格式 + <a>/<img> 标签, 不依赖具体 CSS class。
+重要: 站点启用 Cloudflare JS 验证, 普通文档请求会被 403 拦截。
+      必须携带 Ajax 头(X-Requested-With: XMLHttpRequest + Origin + Referer)
+      方可绕过 CF 拿到真实 HTML —— 已实测验证。
 """
 import re
 import sys
@@ -96,39 +98,48 @@ _LINE_ALIAS = {
 }
 
 # ---------------- 正则（基于真实 URL / 标签结构，非 CSS class） ----------------
-# 列表卡片: <a href="/film/xxx.html"> 内（或相邻）的 <img alt="标题" src="封面">
-_RE_HREF = re.compile(r'href="(/film/[^"]+?\.html)', re.I)
-_RE_IMG = re.compile(
-    r'<img\b([^>]*)>', re.S | re.I)
-# 从 <img ...> 内取 alt 与 图片地址（顺序无关）
-_RE_IMG_ALT = re.compile(r'alt\s*=\s*"([^"]*)"', re.I)
-_RE_IMG_SRC = re.compile(
-    r'(?:data-src|data-original|src)\s*=\s*"([^"]+)"', re.I)
+# 真实列表卡片(实测 genre/tid.html):
+#   <a class="iqy-vodlist__thumb lazyload" href="/film/738778f.html"
+#      title="你是星辰大海" data-original="https://img.lzipic.com/upload/vod/xxx.jpg">
+#       <span class="pic-text">已完结</span> ... </a>
+#   <h4 class="title"><a href="/film/738778f.html">你是星辰大海</a></h4>
+_RE_CARD = re.compile(
+    r'<a\b[^>]*href="/film/([^"]+\.html)"[^>]*'
+    r'(?:data-original|data-src|src)\s*=\s*"([^"]*)"[^>]*>',
+    re.S | re.I)
+_RE_CARD_TITLE = re.compile(
+    r'<h4[^>]*class="[^"]*title[^"]*"[^>]*>\s*<a[^>]*href="/film/([^"]+)'
+    r'\.html"[^>]*>([^<]*)</a>', re.S | re.I)
+_RE_CARD_REMARK = re.compile(
+    r'class="pic-text[^"]*">([^<]*)', re.I)
 
 # 详情页标题
 _RE_H1 = re.compile(r'<h1[^>]*>([\s\S]*?)</h1>', re.I)
 _RE_TITLE = re.compile(r'<title>(.*?)</title>', re.S | re.I)
 
-# 详情页封面（真实图片地址，通常来自 img 图床）
+# 详情页封面（真实为 <a class="...lazyload" ... data-original="图片"> 的懒加载封面）
 _RE_PIC = re.compile(
-    r'<img[^>]*?src="(https?://[^"]+\.(?:jpg|jpeg|png|webp))"',
+    r'(?:data-original|data-src)="(https?://[^"]+\.(?:jpg|jpeg|png|webp|gif))"',
     re.I)
 
-# 简介（真实页面 "简介：" 后的一段文本，常有多行）
-_RE_INTRO = re.compile(r'简介[:：]\s*([\s\S]*?)(?=<|\n\n|\s*更新)',
-                       re.S | re.I)
+# 简介（真实结构: <span class="text-muted">简介：</span>女医生沈幼凝...详情 <a href="#desc">）
+_RE_INTRO = re.compile(
+    r'简介[:：]\s*</span>\s*([\s\S]*?)(?=<a\s+href="#desc"|</p>|$)', re.S | re.I)
 
-# 导演 / 主演（真实页面 "导演：" "主演：" 后跟链接或逗号分隔名字）
-_RE_DIRECTOR = re.compile(r'导演[:：]\s*([\s\S]*?)(?=更新|主演|</|分)',
-                          re.S | re.I)
-_RE_ACTOR = re.compile(r'主演[:：]\s*([\s\S]*?)(?=导演|更新|</|分)',
-                       re.S | re.I)
+# 导演 / 主演 / 地区 / 年份（真实详情页均为 <a> 链接，如:
+#   导演：</span><a href="/lookup/director/邢涛.html" ...>邢涛</a>&nbsp;<a ...>邢景</a>
+#   主演：</span><a href="/lookup/actor/李佳乐.html" ...>李佳乐</a>&nbsp;<a ...>曹景皓</a>
+#   地区：</span><a href="/lookup/area/大陆.html">大陆</a>
+#   年份：</span><a href="/lookup/year/2024.html">2024</a>
+_RE_LINKLIST = re.compile(
+    r'(?:导演|主演|地区|年份)[:：]\s*</span>(.*?)(?:</p>|<p\s)', re.S | re.I)
+_RE_LINK_NAMES = re.compile(r'>([^<>]{1,40}(?:</a>)?|</a>)(?![^<>]*</)', re.S)
 
 # 播放线路锚点 + 剧集链接: #playlist{N} 与 /watch/{vodId}/{line}/{ep}.html
 _RE_PLAYLIST_ANCHOR = re.compile(r'id=["\']?playlist(\d+)["\']?',
                                  re.I)
 _RE_EPISODE = re.compile(
-    r'<a\s+href="(/watch/[^"]+?\.html)"[^>]*>([^<]{1,60})</a>',
+    r'<a\b[^>]*?href="(/watch/[^"]+?\.html)"[^>]*>([^<]{1,60})</a>',
     re.S | re.I)
 
 # 播放页内直链媒体（若服务端渲染出则直接可用）
@@ -154,6 +165,8 @@ class Spider(Spider):
             self.extend = {}
 
         self.site_url = (self.extend.get("site") or HOST).rstrip("/")
+        # 重要: 站点启用 Cloudflare JS 验证。实测必须带 Ajax 头
+        # (X-Requested-With + Origin + Referer) 才可绕过 403 拿到真实 HTML。
         self.headers = {
             "User-Agent": UA,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,"
@@ -162,6 +175,8 @@ class Spider(Spider):
             "Cache-Control": "no-cache",
             "Pragma": "no-cache",
             "Referer": self.site_url + "/",
+            "Origin": self.site_url,
+            "X-Requested-With": "XMLHttpRequest",
             "Upgrade-Insecure-Requests": "1",
         }
         self._play_cache = {}
@@ -187,18 +202,33 @@ class Spider(Spider):
             return ""
 
     def _unwrap_json(self, text):
-        """JSON 驱动页面: 服务端可能返回 {"data":{...}}，尝试解出 content。"""
-        if not text or not text.lstrip().startswith("{"):
+        # JSON 驱动页面: 服务端可能返回被 JSON 转义过的字符串。
+        # 实测列表/首页返回形如 "<!DOCTYPE...\uXXXX...\/film\/xxx.html...>"，
+        # 即整段 HTML 被包进一个 JSON 字符串(含 unicode 与 \/ 转义)，需识别后还原。
+        # 也可能直接返回 {"data":{"content":...}}。
+        if not text:
             return text
-        try:
-            obj = json.loads(text)
-            data = obj.get("data")
-            if isinstance(data, dict):
-                content = data.get("content")
-                if content:
-                    return str(content)
-        except Exception:
-            pass
+        st = text.lstrip()
+        # 情形1: 直接是 {"data":{...}} 对象
+        if st.startswith("{"):
+            try:
+                obj = json.loads(text)
+                data = obj.get("data")
+                if isinstance(data, dict):
+                    content = data.get("content")
+                    if content:
+                        return str(content)
+            except Exception:
+                pass
+            return text
+        # 情形2: 整段 HTML 被包成 JSON 字符串(引号开头且有 \u / \/ 转义)
+        if st.startswith('"') and ("\\u" in st or "\\/" in st):
+            try:
+                decoded = json.loads(text)
+                if isinstance(decoded, str):
+                    return decoded
+            except Exception:
+                pass
         return text
 
     def _fix_url(self, url):
@@ -226,33 +256,72 @@ class Spider(Spider):
         return s.strip()
 
     def _extract_videos(self, html):
+        """从真实列表页 HTML 提取影片卡片。
+
+        真实结构(实测 genre/{tid}.html):
+          <a class="iqy-vodlist__thumb lazyload" href="/film/738778f.html"
+             title="你是星辰大海" data-original="https://img.lzipic.com/upload/vod/xxx.jpg">
+             <span class="pic-text">已完结</span> ... </a>
+          <h4 class="title"><a href="/film/738778f.html">你是星辰大海</a></h4>
+        """
         videos, seen = [], set()
         if not html:
             return videos
 
-        hrefs = _RE_HREF.findall(html)
-        imgs = self._extract_imgs(html)
-        if not hrefs:
-            return videos
-        for i, href in enumerate(hrefs):
-            href = href.strip().replace("&amp;", "&")
-            if href in seen:
+        # 用 h4.title 精确对 标题<->详情链接
+        title_map = {}
+        for mt in _RE_CARD_TITLE.finditer(html):
+            vhref = mt.group(1).strip().replace("&amp;", "&")
+            title = self._clean(mt.group(2))
+            if vhref and title:
+                title_map.setdefault(vhref, title)
+
+        # 顺序扫描每个影片卡片 <a>, 提取 详情链接 + 封面
+        for mt in _RE_CARD.finditer(html):
+            vhref = mt.group(1).strip().replace("&amp;", "&")
+            pic = mt.group(2) or ""
+            if vhref in seen:
                 continue
-            seen.add(href)
-            alt, pic = "", ""
-            if i < len(imgs):
-                alt, pic = imgs[i]
-            pic = self._fix_url(pic)
-            # 无独立封面的卡片，尝试匹配同一 <a> 块内的图片
-            if not pic and i < len(imgs):
-                pass
-            videos.append({
-                "vod_id": href,
-                "vod_name": self._clean(alt)[:100] or href,
-                "vod_pic": pic,
-                "vod_remarks": "",
-            })
+            seen.add(vhref)
+            name = title_map.get(vhref, "") or self._card_title_attr(html, mt.start()) or vhref
+            seg = html[mt.start():mt.end() + 400]
+            rm = _RE_CARD_REMARK.search(seg)
+            v = {
+                "vod_id": vhref,
+                "vod_name": name[:100] or vhref,
+                "vod_pic": self._fix_url(pic),
+                "vod_remarks": self._clean(rm.group(1)) if rm else "",
+            }
+            videos.append(v)
         return videos
+
+    def _card_title_attr(self, html, pos):
+        """从卡片起始 <a> 的 title 属性取片名(退化方案)。"""
+        seg = html[pos:pos + 600]
+        for mt in re.finditer(r'<a\b[^>]*?title="([^"]*)"', seg):
+            t = self._clean(mt.group(1))
+            if t and len(t) >= 2 and "/" not in t and "." not in t:
+                return t
+        return ""
+
+    def _card_remark(self, html, start, end):
+        seg = html[start:end]
+        m = _RE_CARD_REMARK.search(seg)
+        return self._clean(m.group(1)) if m else ""
+
+    def _linklist(self, html, label):
+        """取详情页里 导演/主演/地区/年份 等由多个 <a> 组成的字段值。
+        真实结构: <span class="text-muted">导演：</span><a href="/lookup/...">邢涛</a>&nbsp;<a ...>邢景</a>
+        """
+        for mt in re.finditer(
+                r'(?:%s)[:：]\s*</span>(.*?)(?:</p>|<p\s)' % label,
+                html, re.S | re.I):
+            seg = mt.group(1)
+            names = re.findall(r'<a\b[^>]*>([^<]*)</a>', seg, re.S)
+            names = [self._clean(n) for n in names if self._clean(n)]
+            if names:
+                return ",".join(names)
+        return ""
 
     def _extract_imgs(self, html):
         """提取所有 <img> 的 (alt, 图片地址)，属性顺序无关。"""
@@ -271,48 +340,38 @@ class Spider(Spider):
         return {"class": CLASSES, "filters": {}}
 
     def homeVideoContent(self):
-        # 首页为 JSON 数据驱动，返回的 content 是纯文本，不含 /film/ 链接，
-        # 因此首页直接落到最新电影的列表页取数据。
-        url = "%s/filter/id/1.html" % self.site_url
+        # 首页为 JSON 数据驱动(纯文本, 无 /film/ 链接)。最新影片直接走电影分类列表:
+        # /genre/1.html  (1=电影, 真实分类列表页)
+        url = "%s/genre/1.html" % self.site_url
+        self.log("homeVideo: %s" % url)
         html = self._fetch(url)
         videos = self._extract_videos(html)
-        if not videos:
-            url2 = "%s/genre/1.html" % self.site_url
-            videos = self._extract_videos(self._fetch(url2))
         return {"list": videos}
 
     def categoryContent(self, tid, pg, filter, extend):
-        page = int(pg) if pg else 1
-        # 真实列表页 /filter/id/{tid}.html；分页真实格式以 ?page= 拼接（若站内支持）
-        if page > 1:
-            url = "%s/filter/id/%s.html?page=%d" % (
-                self.site_url, tid, page)
-        else:
-            url = "%s/filter/id/%s.html" % (self.site_url, tid)
+        # 真实分类列表页: /genre/{typeId}.html
+        # (1=电影 2=电视剧 3=综艺 4=动漫 24=短剧)
+        url = "%s/genre/%s.html" % (self.site_url, tid)
         self.log("category: %s" % url)
         html = self._fetch(url)
         videos = self._extract_videos(html)
-        pagecount = self._page_count(html)
         return {
-            "list": videos, "page": page, "pagecount": pagecount,
-            "limit": 24, "total": pagecount * 24,
+            "list": videos, "page": 1, "pagecount": 1,
+            "limit": len(videos) or 24, "total": len(videos),
         }
 
+    # ---------------- 搜索 ----------------
     def _page_count(self, html):
         if html:
-            pages = re.findall(r'page=(\d+)', html)
-            if pages:
-                try:
-                    return max(int(p) for p in pages) + 1
-                except Exception:
-                    pass
-        return 9999
+            nums = [int(p) for p in re.findall(r'page=(\d+)', html) if p.isdigit()]
+            if nums:
+                return max(nums) + 1
+        return 1
 
-    # ---------------- 搜索 ----------------
     def searchContent(self, key, quick, pg="1"):
         keyword = urllib.parse.quote(key)
-        url = "%s/index.php/vod/search.html?wd=%s" % (
-            self.site_url, keyword)
+        # 真实搜索页: /lookup/wd/{关键词}.html
+        url = "%s/lookup/wd/%s.html" % (self.site_url, keyword)
         self.log("search: %s" % url)
         html = self._fetch(url)
         videos = self._extract_videos(html)
@@ -360,15 +419,9 @@ class Spider(Spider):
         if not content and name:
             content = name
 
-        # 导演 / 主演
-        director = ""
-        m = _RE_DIRECTOR.search(html)
-        if m:
-            director = self._clean(m.group(1))
-        actor = ""
-        m = _RE_ACTOR.search(html)
-        if m:
-            actor = self._clean(m.group(1))
+        # 导演 / 主演（真实结构为多个 <a> 链接，如 导演：</span><a>邢涛</a><a>邢景</a>）
+        director = self._linklist(html, "导演")
+        actor = self._linklist(html, "主演")
 
         # 播放线路 + 剧集
         lines = self._extract_play_lines(html, vod_id)
@@ -389,9 +442,14 @@ class Spider(Spider):
             vod_play_url = "$$$".join(lines["urls"])
 
         remarks = ""
-        m = re.search(r'更新[:：]\s*([^<\n]+)', html, re.S)
+        # 真实结构: <p class="data"><span class="text-muted">更新：</span><span class="text-red">已完结/2026-07-31</span></p>
+        m = re.search(r'更新[:：]\s*</span>\s*<span[^>]*>([^<]+)</span>', html, re.S)
         if m:
             remarks = self._clean(m.group(1))
+        if not remarks:
+            m2 = re.search(r'更新[:：]\s*([^<]+?)(?:</|$)', html, re.S)
+            if m2:
+                remarks = self._clean(m2.group(1))
 
         return {"list": [{
             "vod_id": vod_id,
