@@ -247,7 +247,7 @@ class Spider(Spider):
                 "vod_id": href,
                 "vod_name": self._clean(name),
                 "vod_pic": self._fix(pic) or self.default_pic,
-                "vod_remarks": self._clean(remark),
+                "vod_remarks": self._clean(remark),  # 补全了副标题（如：第17集）
             })
         return videos
 
@@ -265,10 +265,12 @@ class Spider(Spider):
             except Exception: extend = {}
         extend = extend or {}
 
+        # 修复 TVBox 多重传参导致的 URL 编码问题
         for k in list(extend.keys()):
             if isinstance(extend[k], str) and "%" in extend[k]:
                 extend[k] = urllib.parse.unquote(extend[k])
 
+        # 提取真实的子分类 ID，过滤空字符串
         sub_tid = extend.get("tid")
         real_tid = sub_tid if (sub_tid and sub_tid.strip()) else tid
 
@@ -279,9 +281,14 @@ class Spider(Spider):
         y_val = extend.get("year", "").strip()
         s_val = extend.get("sort", "").strip()
 
-        # 严格按照源码真实路径格式组装
-        if c_val:
+        # 严格按照真实网页源码格式拼接（支持覆盖式筛选）
+        base = ""
+        if c_val and y_val:
+            base = "/filter/class/%s/id/%s/year/%s" % (urllib.parse.quote(c_val), real_tid, y_val)
+        elif c_val:
             base = "/filter/class/%s/id/%s" % (urllib.parse.quote(c_val), real_tid)
+        elif a_val and y_val:
+            base = "/filter/area/%s/id/%s/year/%s" % (urllib.parse.quote(a_val), real_tid, y_val)
         elif a_val:
             base = "/filter/area/%s/id/%s" % (urllib.parse.quote(a_val), real_tid)
         elif l_val:
@@ -294,8 +301,6 @@ class Spider(Spider):
             base = "/filter/by/%s/id/%s" % (s_val, real_tid)
         elif real_tid != tid:
             base = "/filter/id/%s" % real_tid
-        else:
-            base = ""
 
         if base:
             if page > 1: base += "-%d" % page
