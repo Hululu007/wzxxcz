@@ -260,21 +260,28 @@ class Spider(Spider):
         # 替换真实子类 ID
         real_tid = extend.get("tid") or tid
 
-        # 严格按源码真实路径拼接（苹果CMS 是覆盖式，因此按优先级依次判断）
-        # 真实路径如: /filter/class/喜剧/id/6.html /filter/id/6/year/2025.html
+        # 严格按截图真实路径拼接（苹果CMS 是覆盖式，单条件，不能全混在一起）
         prefix = ""
-        if extend.get("class"): prefix = "class/%s/" % urllib.parse.quote(extend["class"])
-        elif extend.get("area"): prefix = "area/%s/" % urllib.parse.quote(extend["area"])
+        if extend.get("area"): prefix = "area/%s/" % urllib.parse.quote(extend["area"])
         elif extend.get("lang"): prefix = "lang/%s/" % urllib.parse.quote(extend["lang"])
         elif extend.get("letter"): prefix = "letter/%s/" % extend["letter"]
         elif extend.get("year"): prefix = "year/%s/" % extend["year"]
         elif extend.get("sort"): prefix = "by/%s/" % extend["sort"]
+        elif extend.get("class"): prefix = "class/%s/" % urllib.parse.quote(extend["class"])
 
-        if prefix:
-            base = "/filter/%sid/%s" % (prefix, real_tid)
+        # 如果有任何筛选，或者选了子分类（如选了国产剧 13）
+        if prefix or real_tid != tid:
+            if not prefix:
+                # 只有子分类，真实路径如 /filter/id/13.html
+                base = "/filter/id/%s" % real_tid
+            else:
+                # 加了筛选条件，真实路径如 /filter/id/13/year/2026.html
+                base = "/filter/%sid/%s" % (prefix, real_tid)
+            
             if page > 1: base += "-%d" % page
             url = self.site_url + base + ".html"
         else:
+            # 无任何筛选，走 /genre/ 
             if page <= 1: url = "%s/genre/%s.html" % (self.site_url, real_tid)
             else: url = "%s/genre/%s-%d.html" % (self.site_url, real_tid, page)
 
