@@ -490,13 +490,7 @@ class Spider(Spider):
     # ================= 首页 =================
 
     def homeContent(self, filter=False):
-        """分类 + 筛选面板。
-
-        面板结构严格照抄真实站点的六行维度（见 SUB_TYPES / CLAZZ / AREA /
-        YEAR / LANG / LETTER / SORT_BY 注释）。每个大类一套，绝不共用，
-        因为四大类的剧情/地区/年份/语言取值完全不同。
-        短剧真实页面只有 类型 / 字母 / 排序 三行，故只给这三组。
-        """
+        """分类 + 筛选面板。"""
         filters = {}
         if filter:
             for c in CLASSES:
@@ -506,7 +500,8 @@ class Spider(Spider):
                 # 1) 类型 —— 真实是子分类，点击后跳到 /filter/id/{tid}.html
                 subs = SUB_TYPES.get(tid) or []
                 if subs:
-                    val_list = [{"n": "全部", "v": ""}]
+                    # 注意：这里的 v 设置为 "全部" 而不是 ""，防止前端过滤掉
+                    val_list = [{"n": "全部", "v": "全部"}]
                     val_list.extend([{"n": n, "v": v} for v, n in subs])
                     groups.append({
                         "key": "id", "name": "类型",
@@ -514,7 +509,7 @@ class Spider(Spider):
                     })
                 # 2) 剧情
                 if CLAZZ.get(tid):
-                    val_list = [{"n": "全部", "v": ""}]
+                    val_list = [{"n": "全部", "v": "全部"}]
                     val_list.extend([{"n": x, "v": x} for x in CLAZZ[tid]])
                     groups.append({
                         "key": "class", "name": "剧情",
@@ -522,7 +517,7 @@ class Spider(Spider):
                     })
                 # 3) 地区
                 if AREA.get(tid):
-                    val_list = [{"n": "全部", "v": ""}]
+                    val_list = [{"n": "全部", "v": "全部"}]
                     val_list.extend([{"n": x, "v": x} for x in AREA[tid]])
                     groups.append({
                         "key": "area", "name": "地区",
@@ -530,7 +525,7 @@ class Spider(Spider):
                     })
                 # 4) 年份
                 if YEAR.get(tid):
-                    val_list = [{"n": "全部", "v": ""}]
+                    val_list = [{"n": "全部", "v": "全部"}]
                     val_list.extend([{"n": y, "v": y} for y in YEAR[tid]])
                     groups.append({
                         "key": "year", "name": "年份",
@@ -538,21 +533,21 @@ class Spider(Spider):
                     })
                 # 5) 语言
                 if LANG.get(tid):
-                    val_list = [{"n": "全部", "v": ""}]
+                    val_list = [{"n": "全部", "v": "全部"}]
                     val_list.extend([{"n": x, "v": x} for x in LANG[tid]])
                     groups.append({
                         "key": "lang", "name": "语言",
                         "value": val_list,
                     })
                 # 6) 字母（全站统一 27 项，短剧也有）
-                val_list = [{"n": "全部", "v": ""}]
+                val_list = [{"n": "全部", "v": "全部"}]
                 val_list.extend([{"n": x, "v": x} for x in LETTER])
                 groups.append({
                     "key": "letter", "name": "字母",
                     "value": val_list,
                 })
                 # 7) 排序
-                val_list = [{"n": "全部", "v": ""}]
+                val_list = [{"n": "全部", "v": "全部"}]
                 val_list.extend([{"n": n, "v": v} for v, n in SORT_BY])
                 groups.append({
                     "key": "by", "name": "排序",
@@ -569,15 +564,7 @@ class Spider(Spider):
     # ================= 列表解析 =================
 
     def _meta_value(self, body, start_pos):
-        """取字段值：到 split-line / 下一个标签 / 段落结束为止。
-
-        真实同一行：
-            分类：</span><a href="/genre/4.html">动漫</a>
-            <span class="split-line"></span><span class="text-muted hidden-xs">地区：</span>
-            <a href="/lookup/area/...">日本</a>&nbsp;
-            <span class="split-line"></span><span class="text-muted hidden-xs">年份：</span>
-            <a href="/lookup/year/2026.html">2026</a>
-        """
+        """取字段值：到 split-line / 下一个标签 / 段落结束为止。"""
         rest = body[start_pos:]
         m = re.search(r'<span[^>]*class="[^"]*split-line|<(?!a\b)', rest, re.I)
         chunk = rest[:m.start()] if m else rest
@@ -600,41 +587,7 @@ class Spider(Spider):
         return out
 
     def _extract_videos(self, html):
-        """解析列表卡片。
-
-        真实结构（首页网格）:
-            <li class="col-lg-6 ...">
-              <div class="iqy-vodlist__box">
-                <a class="iqy-vodlist__thumb lazyload" href="/film/969201f.html"
-                   title="一碗炒面，暖了我一生" data-original="https://...jpg">
-                  <span class="pic-tag pic-tag-top">0.0分</span>
-                  <span class="pic-text text-right">已完结</span>
-                </a>
-                <div class="iqy-vodlist__detail">
-                  <h4 class="title text-overflow"><a href="/film/969201f.html" title="...">片名</a></h4>
-                  <p class="text text-overflow text-muted hidden-xs">主演：内详</p>
-                </div>
-              </div>
-            </li>
-
-        真实结构（搜索/筛选媒体列表）:
-            <li class="active clearfix">
-              <div class="thumb">
-                <a class="iqy-vodlist__thumb img-lg-150 ... lazyload" href="/film/857985f.html"
-                   title="青之箱第二季" data-original="https://...jpg">
-                  <span class="pic-text text-right">第3集</span>
-                </a>
-              </div>
-              <div class="detail">
-                <h4 class="title"><a href="/film/857985f.html">青之箱第二季</a></h4>
-                <p><span class="text-muted">导演：</span>内详</p>
-                <p><span class="text-muted">主演：</span>内详</p>
-                <p><span class="text-muted">分类：</span>喜剧,爱情,动画,运动
-                   <span class="split-line"></span><span class="text-muted hidden-xs">地区：</span>日本
-                   <span class="split-line"></span><span class="text-muted hidden-xs">年份：</span>2026</p>
-              </div>
-            </li>
-        """
+        """解析列表卡片。"""
         videos, seen = [], set()
         if not html:
             return videos
@@ -691,30 +644,7 @@ class Spider(Spider):
         return videos
 
     def _main_list_videos(self, html):
-        """只取主列表，排除左侧"xx推荐"侧栏。
-
-        真实结构（/genre/6-2.html 原文，顺序固定）:
-            <div class="col-xs-1 padding-0">
-              <div class="iqy-panel iqy-panel-bg clearfix iqy-type__tuijian">
-                 <h3 class="title">动作片推荐</h3>            <- 侧栏推荐，要排除
-                 ... <ul class="iqy-vodlist clearfix"> ...
-              </div>
-            </div>
-            <div class="col-xs-1 padding-0">
-              <div class="iqy-panel iqy-panel-bg2 clearfix">    <- 筛选面板
-                 <h3 class="title">动作片</h3>
-                 ... <div class="slideDown-box"> ...
-              </div>
-              <div class="iqy-panel active iqy-panel-bg clearfix">  <- 主列表
-                 <h3 class="title">最新动作片</h3>
-                 ... <ul class="iqy-vodlist clearfix"> ...
-              </div>
-            </div>
-
-        定位方式：主列表标题恒为「最新」，且其外层是 <div class="iqy-panel active">。
-        侧栏推荐标题是「xx推荐」，不含"最新"，因此用"最新"锚点即可干净切分。
-        若页面无该锚点（首页 / 搜索页），退回全页解析。
-        """
+        """只取主列表，排除左侧"xx推荐"侧栏。"""
         if not html:
             return []
         m = re.search(r'<div class="iqy-panel active iqy-panel-bg clearfix">([\s\S]*)',
@@ -729,14 +659,7 @@ class Spider(Spider):
         return self._extract_videos(seg)
 
     def _page_count(self, html, cur_page=1):
-        """取总页数。
-
-        真实分页（/genre/6-2.html）有两种可用信息:
-            <li class="visible-xs"><a class="btn btn-warm">2/820</a></li>   <- 最可靠
-            <li><a class="btn btn-default" href="/genre/6-820.html">尾页</a></li>
-        优先解析 "当前页/总页数"，其次取"尾页"链接里的页码。
-        注意不能再用 /lookup/page/ 正则，该路径在本站不存在（上一版 bug 根因）。
-        """
+        """取总页数。"""
         if not html:
             return cur_page
         # 方式 1: 2/820
@@ -772,21 +695,7 @@ class Spider(Spider):
     # ================= 分类 =================
 
     def _build_filter_url(self, tid, extend, pg_int):
-        """按真实顺序拼接筛选 URL。
-
-        真实 href 归纳（六份页面原文）:
-            /filter/id/6.html                                  仅类型
-            /filter/class/%E5%96%9C%E5%89%A7/id/6.html          类型+剧情
-            /filter/area/%E5%A4%A7%E9%99%86/id/6.html           类型+地区
-            /filter/id/6/year/2010.html                        类型+年份
-            /filter/id/6/lang/%E5%9B%BD%E8%AF%AD.html           类型+语言
-            /filter/id/6/letter/A.html                         类型+字母
-            /filter/by/time/id/6.html                          排序+类型
-        由此确定顺序恒为:
-            /filter/ [by]/ [class]/ [area]/ id/{tid} [/year] [/lang] [/letter]
-                    [/page/{n}].html
-        返回 None 表示"没有任何筛选"，应走 /genre/。
-        """
+        """按真实顺序拼接筛选 URL。"""
         sub = (extend.get("id") or "").strip()    # 子分类 tid（类型维度）
         by = (extend.get("by") or "").strip()
         clz = (extend.get("class") or "").strip()
@@ -795,9 +704,22 @@ class Spider(Spider):
         lang = (extend.get("lang") or "").strip()
         letter = (extend.get("letter") or "").strip()
 
-        # 只传了"全部"或空值时视作未筛选
+        # 将 "全部" 或空值视作未筛选
         if sub in ("", "全部"):
             sub = ""
+        if clz in ("", "全部"):
+            clz = ""
+        if area in ("", "全部"):
+            area = ""
+        if year in ("", "全部"):
+            year = ""
+        if lang in ("", "全部"):
+            lang = ""
+        if letter in ("", "全部"):
+            letter = ""
+        if by in ("", "全部"):
+            by = ""
+
         # by=time 是默认排序，若只选了 time 且无其它条件，仍走 genre 更轻
         effective = [x for x in (sub, clz, area, year, lang, letter) if x]
         if not effective:
@@ -865,15 +787,7 @@ class Spider(Spider):
     # ================= 搜索 =================
 
     def searchContent(self, key, quick, pg="1"):
-        """搜索。
-
-        优先用真实 ajax 接口（实测返回标准 JSON，含真实 total/pagecount）:
-            /index.php/ajax/suggest?mid={tid}&wd={关键词}
-            -> {"code":1,"page":1,"pagecount":3,"limit":20,"total":43,
-                "list":[{"id":944786,"name":"...","pic":"..."}]}
-        该接口实测忽略 page 参数（page=2 仍返回第 1 页），因此仅在 pg==1 时使用。
-        其它页走真实 HTML 搜索页 /lookup/page/{n}/wd/{关键词}.html。
-        """
+        """搜索。"""
         key = (key or "").strip()
         pg = str(pg or "1")
         try:
@@ -962,7 +876,7 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # ---- 标题: <h1 class="title">青之箱第二季</h1> ----
+        # ---- 标题 ----
         name = ""
         m = _RE_H1.search(html)
         if m:
@@ -972,7 +886,7 @@ class Spider(Spider):
             if m:
                 name = self._clean(m.group(1).split("-")[0].split("_")[0])
 
-        # ---- 封面: 懒加载真实地址在 data-original（src 是 load.gif 占位） ----
+        # ---- 封面 ----
         pic = ""
         m = _RE_DETAIL_PIC.search(html)
         if m:
@@ -984,13 +898,7 @@ class Spider(Spider):
                     pic = self._fix_url(u)
                     break
 
-        # ---- 分类/地区/年份/主演/导演/更新: 都在 <p class="data"> 内 ----
-        #   <p class="data"><span class="text-muted">分类：</span><a href="/genre/4.html">动漫</a>
-        #     <span class="split-line"></span><span class="text-muted hidden-xs">地区：</span>
-        #     <a href="/lookup/area/%E6%97%A5%E6%9C%AC.html">日本</a>&nbsp;
-        #     <span class="split-line"></span><span class="text-muted hidden-xs">年份：</span>
-        #     <a href="/lookup/year/2026.html">2026</a></p>
-        #   <p class="data"><span class="text-muted">主演：</span>未知</p>
+        # ---- 详细数据 ----
         detail_meta = {}
         for pm in re.finditer(r'<p[^>]*class="[^"]*data[^"]*"[^>]*>([\s\S]*?)</p>',
                               html, re.I):
@@ -999,14 +907,6 @@ class Spider(Spider):
                     detail_meta[k] = val
 
         # ---- 简介 ----
-        # 真实结构（有简介时正文落在"剧情略述"区块里）:
-        #   <div class="col-pd text-collapse content">
-        #     <span class="sketch content">正文…</span>
-        #     <span class="data" style="display: none;"><p>正文…</p></span>
-        #     <a class="details" href="javascript:;">详情 <i class="fa fa-angle-down"></i></a>
-        #   </div>
-        # 注意：样本页这两个 span 可以为空（该片无简介），此时 block 内只有空标签，
-        #       不能把空串当成"拿到了简介"，要继续往下找。
         content = ""
         m = re.search(
             r'<div class="col-pd text-collapse content">([\s\S]*?)<a class="details"',
@@ -1026,14 +926,12 @@ class Spider(Spider):
                 content = max(cands, key=len)
 
         if not content:
-            # 兜底 1：详情页顶部 <p class="desc"> 里的 简介：…（与详情区块同一段文字）
             md2 = re.search(
                 r'<span class="left text-muted">简介[:：]</span>([\s\S]*?)<a href="#desc"',
                 html, re.I)
             if md2:
                 content = self._clean(md2.group(1))
         if not content:
-            # 兜底 2：<meta name="description">（模板套话，仅最后使用）
             md3 = re.search(r'<meta\s+name="description"\s+content="([^"]*)"', html, re.I)
             if md3:
                 content = self._clean(md3.group(1))
@@ -1065,26 +963,11 @@ class Spider(Spider):
         return {"list": [vod]}
 
     def _extract_play_lines(self, html, vod_id):
-        """解析播放地址区。
-
-        真实结构:
-            <ul class="nav nav-tabs active">
-              <li><a href="#playlist4" data-toggle="tab">极速高清</a></li>
-              <li><a href="#playlist3" data-toggle="tab">量子高清</a></li>
-              ...
-            </ul>
-            <div class="tab-content iqy-panel_bd">
-              <div id="playlist4" class="tab-pane fade in clearfix">
-                <ul class="iqy-content__list sort-list scrollbar clearfix">
-                  <li><a class="btn btn-default" href="/watch/857985f/4/1.html">第1集</a></li>
-                  ...
-        线路名必须从选项卡文字里取，不能写死映射。
-        """
+        """解析播放地址区。"""
         names, urls = [], []
         if not html:
             return {"names": names, "urls": urls}
 
-        # 1) 选项卡顺序 + 真实线路名
         tabs = []
         for m in _RE_TAB.finditer(html):
             lid = m.group(1)
@@ -1092,7 +975,6 @@ class Spider(Spider):
             if lid and lid not in [t[0] for t in tabs]:
                 tabs.append((lid, nm or ("线路%s" % lid)))
 
-        # 2) 每个 playlist 块内的剧集
         panes = {}
         for m in _RE_PANE.finditer(html):
             lid, block = m.group(1), m.group(2)
@@ -1107,7 +989,6 @@ class Spider(Spider):
             if eps:
                 panes[lid] = eps
 
-        # 3) 按选项卡顺序输出；未在选项卡里出现的块，按编号补在后面
         ordered = [t for t in tabs if t[0] in panes]
         for lid in sorted(panes.keys(), key=lambda x: int(x) if x.isdigit() else 0):
             if lid not in [t[0] for t in ordered]:
@@ -1132,10 +1013,7 @@ class Spider(Spider):
         return s
 
     def _decode_play_url(self, url, encrypt):
-        """按 /static/js/player.js 的真实逻辑解密:
-             encrypt == '1' -> unescape(url)
-             encrypt == '2' -> unescape(base64decode(url))
-        """
+        """按 /static/js/player.js 的真实逻辑解密。"""
         if not url:
             return ""
         enc = str(encrypt or "0")
@@ -1162,7 +1040,6 @@ class Spider(Spider):
         media, encrypt, play_from = "", "0", ""
 
         if html:
-            # 真实: var player_aaaa={"flag":"play","encrypt":0,...,"url":"https:\/\/...m3u8",...}
             m = _RE_PLAYER.search(html)
             if m:
                 try:
@@ -1178,9 +1055,7 @@ class Spider(Spider):
                         media = self._decode_play_url(obj.get("url_next") or "", encrypt)
 
         res = None
-        # 只有真正的媒体地址才设 parse=0 直出；其余一律交回嗅探
         if media and re.search(r"\.(m3u8|mp4|flv)(\?|$)", media, re.I):
-            # 实测该 m3u8 直链可直接 200 拉取（vv.jisuzyv.com），parse=0 交给播放器
             res = {
                 "parse": 0,
                 "playUrl": "",
@@ -1192,7 +1067,6 @@ class Spider(Spider):
             }
 
         if res is None:
-            # 页面没有可直接使用的直链时，交回 TVBox 嗅探播放页
             res = {
                 "parse": 1,
                 "playUrl": "",
@@ -1249,11 +1123,7 @@ class Spider(Spider):
         return url or ""
 
     def localProxy(self, param):
-        """代理封面图 / m3u8 / 分片。
-
-        实测播放链: m3u8 -> #EXT-X-KEY URI="enc.key" -> https://p.jisuts.com:999/....ts
-        所以必须按真实扩展名返回 Content-Type，否则 m3u8 文本会被当成图片，播放必然失败。
-        """
+        """代理封面图 / m3u8 / 分片。"""
         try:
             url = self._parse_proxy_param(param)
             if not url:
@@ -1261,7 +1131,6 @@ class Spider(Spider):
             url = self._fix_url(url)
 
             ref = self.site_url + "/"
-            # 媒体文件用媒体源自身做 Referer 更稳；封面用站点 Referer
             if re.search(r"\.(m3u8|ts|m4s|key|mp4|flv|vtt)(\?|$)", url, re.I):
                 p = urllib.parse.urlparse(url)
                 ref = "%s://%s/" % (p.scheme, p.netloc)
@@ -1281,7 +1150,6 @@ class Spider(Spider):
             except Exception:
                 pass
 
-            # 媒体类：优先按扩展名判定，避免源站返回错误类型
             if re.search(r"\.(m3u8|ts|m4s|key|mp4|flv|vtt)(\?|$)", url, re.I):
                 ctype = self._guess_ctype(url, hdr_ct)
             else:
