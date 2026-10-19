@@ -245,7 +245,8 @@ LANG = {
 LETTER = [chr(x) for x in range(ord("A"), ord("Z") + 1)] + ["0-9"]
 
 # ---- 排序(by) 全站统一 ----
-SORT_BY = [("time", "时间"), ("hits", "人气"), ("score", "评分")]
+# 图1 APP端显示的是 最热 / 最新
+SORT_BY = [("hits", "最热"), ("time", "最新")]
 
 # ---------------- 真实源码对应的正则 ----------------
 
@@ -368,12 +369,7 @@ class Spider(Spider):
 
     @staticmethod
     def _normalize(text):
-        """还原"被包成 JSON 字符串的 HTML"。
-
-        实测原始响应:
-            "<!DOCTYPE html>\\n<html>...href=\\"\\/film\\/969201f.html\\"..."
-        反解后才是可用的 HTML。同时兼容直接返回 HTML 的情况。
-        """
+        """还原"被包成 JSON 字符串的 HTML"。"""
         if not text:
             return ""
         s = text.strip()
@@ -402,11 +398,7 @@ class Spider(Spider):
         return text
 
     def _fetch_html(self, url, timeout=20, headers=None, need=None, retry=3):
-        """取页面并还原为正常 HTML。
-
-        实测该站在高并发/冷连接下会随机返回 403 / 520（Cloudflare 或 nginx 拦截），
-        因此这里对"拿不到 need 标记"的情况做少量重试；重试次数刻意压低，避免拖慢 TVBox。
-        """
+        """取页面并还原为正常 HTML。"""
         attempt = 0
         while True:
             raw = self._raw(url, timeout=timeout, headers=headers)
@@ -500,7 +492,6 @@ class Spider(Spider):
                 # 1) 类型 —— 真实是子分类，点击后跳到 /filter/id/{tid}.html
                 subs = SUB_TYPES.get(tid) or []
                 if subs:
-                    # 注意：这里的 v 设置为 "全部" 而不是 ""，防止前端过滤掉
                     val_list = [{"n": "全部", "v": "全部"}]
                     val_list.extend([{"n": n, "v": v} for v, n in subs])
                     groups.append({
