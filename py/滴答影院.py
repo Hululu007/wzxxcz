@@ -231,6 +231,7 @@ class Spider(Spider):
 
     def _parse_list(self, html):
         videos, seen = [], set()
+        # 使用严格的正则提取卡片，兼容 search 页面和普通分类页面
         for m in _RE_CARD.finditer(html or ""):
             href, name, pic = m.group(1), m.group(2), m.group(3)
             if href in seen: continue
