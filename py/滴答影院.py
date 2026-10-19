@@ -247,7 +247,7 @@ class Spider(Spider):
                 "vod_id": href,
                 "vod_name": self._clean(name),
                 "vod_pic": self._fix(pic) or self.default_pic,
-                "vod_remarks": self._clean(remark),  # 补全了副标题（如：第17集）
+                "vod_remarks": self._clean(remark),
             })
         return videos
 
@@ -265,17 +265,14 @@ class Spider(Spider):
             except Exception: extend = {}
         extend = extend or {}
 
-        # 修复 TVBox 多重传参导致的 URL 编码问题
         for k in list(extend.keys()):
             if isinstance(extend[k], str) and "%" in extend[k]:
                 extend[k] = urllib.parse.unquote(extend[k])
 
+        # 彻底修复空盒子 Bug：空字符串绝对不参与 URL 拼接！
         sub_tid = extend.get("tid")
-        # 关键致命 Bug 修复：TVBox 默认会传空字符串，必须过滤掉！
         real_tid = sub_tid if (sub_tid and sub_tid.strip()) else tid
 
-        # 核心修复：严格贴合苹果CMS真实格式 `/filter/id/13/year/2026.html`
-        base = ""
         c_val = extend.get("class", "").strip()
         a_val = extend.get("area", "").strip()
         l_val = extend.get("lang", "").strip()
@@ -283,26 +280,21 @@ class Spider(Spider):
         y_val = extend.get("year", "").strip()
         s_val = extend.get("sort", "").strip()
 
-        if c_val and y_val:
-            base = "/filter/class/%s/id/%s/year/%s" % (urllib.parse.quote(c_val), real_tid, y_val)
-        elif c_val:
-            base = "/filter/class/%s/id/%s" % (urllib.parse.quote(c_val), real_tid)
-        elif a_val and y_val:
-            base = "/filter/area/%s/id/%s/year/%s" % (urllib.parse.quote(a_val), real_tid, y_val)
-        elif a_val:
-            base = "/filter/area/%s/id/%s" % (urllib.parse.quote(a_val), real_tid)
-        elif l_val:
-            base = "/filter/lang/%s/id/%s" % (urllib.parse.quote(l_val), real_tid)
-        elif e_val:
-            base = "/filter/letter/%s/id/%s" % (e_val, real_tid)
-        elif y_val:
-            base = "/filter/id/%s/year/%s" % (real_tid, y_val)
-        elif s_val:
-            base = "/filter/by/%s/id/%s" % (s_val, real_tid)
+        # 严格遵守截图真实的 URL 顺序拼接
+        parts = []
+        if c_val: parts.append("class/%s" % urllib.parse.quote(c_val))
+        if a_val: parts.append("area/%s" % urllib.parse.quote(a_val))
+        if l_val: parts.append("lang/%s" % urllib.parse.quote(l_val))
+        if e_val: parts.append("letter/%s" % e_val)
+        if y_val: parts.append("year/%s" % y_val)
+        if s_val: parts.append("by/%s" % s_val)
+
+        if parts:
+            base = "/filter/%s/id/%s" % ("/".join(parts), real_tid)
+            if page > 1: base += "-%d" % page
+            url = self.site_url + base + ".html"
         elif real_tid != tid:
             base = "/filter/id/%s" % real_tid
-
-        if base:
             if page > 1: base += "-%d" % page
             url = self.site_url + base + ".html"
         else:
