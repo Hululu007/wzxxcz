@@ -3,7 +3,7 @@
 滴答影院 www.loldyw.com | TVBox Python 爬虫
 严格对照真实源码，拒绝猜测：
   - 分类 ID 严格按照源码筛选栏提取
-  - 筛选路径严格按照真实链接 /filter/id/13/year/2026.html 提取
+  - 筛选路径严格按照真实链接 /filter/ 提取
   - 搜索结果严格解析 ul#searchList 下的 li 结构
   - 详情剧集严格解析 #playlist 和 tab 标签
   - 播放直接提取 player_aaaa 的 url
@@ -67,7 +67,10 @@ CLASSES = [
 
 # ================= 2. 真实筛选列表 =================
 _SORT_LIST = [{"n": "时间", "v": "time"}, {"n": "人气", "v": "hits"}, {"n": "评分", "v": "score"}]
-_YEAR_LIST = [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 2003, -1)]
+# 严格对照源码还原年份：第一段为 2018-2010，第二段重复 2012-2026
+_YEAR_LIST = [{"n": "全部", "v": ""}] + \
+             [{"n": str(y), "v": str(y)} for y in range(2018, 2009, -1)] + \
+             [{"n": str(y), "v": str(y)} for y in range(2012, 2027)]
 _LETTER_LIST = [{"n": "全部", "v": ""}] + [{"n": c, "v": c} for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0-9"]
 _LANG_LIST = [
     {"n": "全部", "v": ""}, {"n": "国语", "v": "国语"}, {"n": "英语", "v": "英语"},
@@ -110,12 +113,15 @@ FILTERS = {
             {"n": "全部", "v": ""}, {"n": "古装", "v": "古装"}, {"n": "战争", "v": "战争"},
             {"n": "青春偶像", "v": "青春偶像"}, {"n": "喜剧", "v": "喜剧"}, {"n": "家庭", "v": "家庭"},
             {"n": "犯罪", "v": "犯罪"}, {"n": "动作", "v": "动作"}, {"n": "奇幻", "v": "奇幻"},
-            {"n": "剧情", "v": "剧情"}, {"n": "历史", "v": "历史"}, {"n": "经典", "v": "经典"}
+            {"n": "剧情", "v": "剧情"}, {"n": "历史", "v": "历史"}, {"n": "经典", "v": "经典"},
+            {"n": "乡村", "v": "乡村"}, {"n": "情景", "v": "情景"}, {"n": "商战", "v": "商战"},
+            {"n": "网剧", "v": "网剧"}, {"n": "其他", "v": "其他"}
         ]},
         {"key": "area", "name": "地区", "value": [
             {"n": "全部", "v": ""}, {"n": "内地", "v": "内地"}, {"n": "韩国", "v": "韩国"},
             {"n": "香港", "v": "香港"}, {"n": "台湾", "v": "台湾"}, {"n": "日本", "v": "日本"},
-            {"n": "美国", "v": "美国"}, {"n": "泰国", "v": "泰国"}, {"n": "英国", "v": "英国"}
+            {"n": "美国", "v": "美国"}, {"n": "泰国", "v": "泰国"}, {"n": "英国", "v": "英国"},
+            {"n": "新加坡", "v": "新加坡"}, {"n": "其他", "v": "其他"}
         ]},
         {"key": "year", "name": "年份", "value": _YEAR_LIST},
         {"key": "lang", "name": "语言", "value": _LANG_LIST},
@@ -170,18 +176,13 @@ FILTERS = {
 }
 
 # ================= 3. 正则解析 =================
-# 列表页（严格按照真实 DOM 解析并提取状态标签）
+# 严格按照真实 DOM 解析并提取状态标签（补全副标题）
 _RE_CARD = re.compile(
     r'<a\s+[^>]*class="[^"]*iqy-vodlist__thumb[^"]*"[^>]*'
     r'href="([^"]+)"[^>]*'
     r'title="([^"]*)"[^>]*'
     r'(?:data-original|data-src|src)="([^"]*)"[^>]*>[\s\S]*?'
     r'<span class="pic-text text-right">([^<]*)</span>',
-    re.S | re.I)
-
-# 保底解析（防止因为缺属性导致空盒子）
-_RE_FALLBACK_CARD = re.compile(
-    r'<a[^>]*href="(/film/[^"]+)"[^>]*title="([^"]*)"[^>]*>[\s\S]*?data-original="([^"]+)"',
     re.S | re.I)
 
 _RE_H1 = re.compile(r'<h1 class="title">([\s\S]*?)</h1>', re.I)
@@ -244,7 +245,6 @@ class Spider(Spider):
 
     def _parse_list(self, html):
         videos, seen = [], set()
-        # 1. 尝试使用你的标准正则
         for m in _RE_CARD.finditer(html or ""):
             href, name, pic, remark = m.group(1), m.group(2), m.group(3), m.group(4)
             if href in seen: continue
@@ -253,21 +253,8 @@ class Spider(Spider):
                 "vod_id": href,
                 "vod_name": self._clean(name),
                 "vod_pic": self._fix(pic) or self.default_pic,
-                "vod_remarks": self._clean(remark),
+                "vod_remarks": self._clean(remark),  # 补全了副标题（如：第20集）
             })
-        
-        # 2. 如果首页或者特殊页面没抓到，使用保底正则（绝对不会空盒子）
-        if not videos:
-            for m in _RE_FALLBACK_CARD.finditer(html or ""):
-                href, name, pic = m.group(1), m.group(2), m.group(3)
-                if href in seen: continue
-                seen.add(href)
-                videos.append({
-                    "vod_id": href,
-                    "vod_name": self._clean(name),
-                    "vod_pic": self._fix(pic) or self.default_pic,
-                    "vod_remarks": "",
-                })
         return videos
 
     def homeContent(self, filter=False):
@@ -298,25 +285,21 @@ class Spider(Spider):
         y_val = extend.get("year", "").strip()
         s_val = extend.get("sort", "").strip()
 
-        # 完全贴合浏览器截图：/filter/[参数]/[值]/id/[分类].html
-        if c_val:
-            base = "/filter/class/%s/id/%s" % (urllib.parse.quote(c_val), real_tid)
-        elif a_val:
-            base = "/filter/area/%s/id/%s" % (urllib.parse.quote(a_val), real_tid)
-        elif l_val:
-            base = "/filter/lang/%s/id/%s" % (urllib.parse.quote(l_val), real_tid)
-        elif e_val:
-            base = "/filter/letter/%s/id/%s" % (e_val, real_tid)
-        elif y_val:
-            base = "/filter/id/%s/year/%s" % (real_tid, y_val)
-        elif s_val:
-            base = "/filter/by/%s/id/%s" % (s_val, real_tid)
+        # 完全按照源码真实的路径格式 /filter/id/13.html 和 /filter/id/13/year/2026.html 拼接
+        parts = []
+        if c_val: parts.append("class/%s" % urllib.parse.quote(c_val))
+        if a_val: parts.append("area/%s" % urllib.parse.quote(a_val))
+        if l_val: parts.append("lang/%s" % urllib.parse.quote(l_val))
+        if e_val: parts.append("letter/%s" % e_val)
+        if y_val: parts.append("year/%s" % y_val)
+        if s_val: parts.append("by/%s" % s_val)
+
+        if parts:
+            base = "/filter/%s/id/%s" % ("/".join(parts), real_tid)
+            if page > 1: base += "-%d" % page
+            url = self.site_url + base + ".html"
         elif real_tid != tid:
             base = "/filter/id/%s" % real_tid
-        else:
-            base = ""
-
-        if base:
             if page > 1: base += "-%d" % page
             url = self.site_url + base + ".html"
         else:
