@@ -231,7 +231,6 @@ class Spider(Spider):
 
     def _parse_list(self, html):
         videos, seen = [], set()
-        # 使用严格的正则提取卡片，兼容 search 页面和普通分类页面
         for m in _RE_CARD.finditer(html or ""):
             href, name, pic = m.group(1), m.group(2), m.group(3)
             if href in seen: continue
@@ -258,8 +257,9 @@ class Spider(Spider):
             except Exception: extend = {}
         extend = extend or {}
 
-        # 提取真实的子分类 ID，默认使用传入的 tid
-        real_tid = extend.get("tid") or tid
+        # 关键修复点：TVBox 可能会传空的 tid，此时必须回退到当前大类 tid
+        sub_tid = extend.get("tid")
+        real_tid = sub_tid if (sub_tid and sub_tid.strip()) else tid
 
         # 真实网页的筛选路径（/filter/[area|year|lang|...]/id/[tid].html）
         prefix = ""
@@ -271,7 +271,7 @@ class Spider(Spider):
         elif extend.get("class"): prefix = "class/%s/" % urllib.parse.quote(extend["class"])
 
         # 判断走 /filter/ 还是 /genre/
-        if prefix or real_tid != tid:
+        if prefix or (sub_tid and sub_tid.strip() != tid):
             if not prefix:
                 # 用户只选择了“子类型”（如国产剧13），不选年份等，真实路径为 /filter/id/13.html
                 base = "/filter/id/%s" % real_tid
