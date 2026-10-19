@@ -2,7 +2,7 @@
 """
 SkyKB 影视爬虫 (大马猴影视 skykb.com) - TVBox Python Spider
 
-【站点真实结构（均已实测核对，非推测）】
+【网站结构】
 1. 站点为 Vue3 SPA，首页 HTML 仅 <div id="app"></div>，不含任何影视数据；
    所有数据均通过 https://skykb.com/api.php/web/* 接口以 JSON 返回。
 2. 接口清单（取自 /assets/index-DRlQFQTh.js 中的常量表）：
@@ -23,6 +23,20 @@ SkyKB 影视爬虫 (大马猴影视 skykb.com) - TVBox Python Spider
 5. 详情接口的 vod_play_from / vod_play_url 本身已是 TVBox 格式：
      from 之间用 "$$$" 分隔，同一线路的剧集 "第01集$url" 之间用 "#" 分隔。
 6. 分页：page 从 1 开始；分类固定每页 24 条（limit=24），pageCount 由接口给出，越界页返回空数组。
+7. 【decode/url 实测结论】
+   - 网页端 ACE 播放流程（Playwright 抓包证实）：
+     POST /api.php/web/decode/url -> 解出 S3 直链 -> 浏览器 GET Range 拉流(206)。
+     注意播放页线路定位用 hash（#sid=Ace&nid=1），query 参数 from/source 不生效。
+   - 解出的 S3 直链（cmecloud EOS）：GET 一律 200/206（任意 Range 形式、任意协议版本、
+     任意 UA、无 Referer 均可）；HEAD 恒为 403（S3 签名仅允许 GET）。
+   - 直链 X-Amz-Expires=900（15 分钟），过期后一切请求 403 —— 必须播放时现解。
+   - 直链查询参数全被 AWS 签名保护（response-content-disposition=attachment 不可改 inline）。
+   - /api.php/proxy/media 站内代理对无 after_parse 配置的线路返回
+     403 "after-parse config not available"，ACE 不可走该代理（RR 才有 after-parse）。
+   - 站点前端的 mediaProxy 拼接条件（Cn()）：afterParseStatus==1 且配置了
+     UA/Headers 且 URL 命中 afterParseFeatures —— ACE 三者皆空，网页同样不走代理。
+8. 解码容错：_decode_url 内置 3 次重试（每次全新签名），结果按 TTL 缓存
+   （900s 有效期，剩余 <120s 即重解）；解码失败时按同下标回退其它直连线路同集数。
 """
 import re
 import sys
@@ -138,16 +152,29 @@ class Spider(Spider):
         }
         self._home_cache = None
         self._last_vod_id = ""
+        self._label_to_from = {}  # 线路显示名 -> 站点 from 代号（详情时填充）
+        # 详情时缓存各线路原始剧集地址，用于解码失败时同集数回退（实测样本见下）
+        self._line_eps = []       # [(from代号, [ep_url,...]), ...] 按站点顺序
+        # 解码结果缓存：实测 ACE 解出的 S3 直链 X-Amz-Expires=900（15分钟），
+        # 且过期后所有请求 403；因此缓存有效期按剩余 <120s 即重解处理
+        self._decoded_cache = {}  # (vod_from, ep_url) -> (real_url, 解码时刻)
+        self._DECODE_TTL = 900
+        self._DECODE_MARGIN = 120
         self.log("init: site=%s" % self.site_url)
 
     # ================= 签名 =================
-    def _sign_headers(self):
-        """复现前端签名：SHA256(finger=..&id=..&nonce=..&sk=..&time=..&v=..) 大写"""
+    def _sign_values(self):
+        """复现前端签名：SHA256(finger=..&id=..&nonce=..&sk=..&time=..&v=..) 大写
+        返回 (13位毫秒时间戳, 32位hex随机数, 签名)"""
         ts = str(int(time.time() * 1000))
         nonce = secrets.token_hex(16)  # 16 字节 -> 32 位 hex，同前端 getRandomValues(16)
         raw = "finger=%s&id=%s&nonce=%s&sk=%s&time=%s&v=%s" % (
             APP_FINGER, APP_ID, nonce, APP_SECRET, ts, APP_VERSION)
         sign = hashlib.sha256(raw.encode("utf-8")).hexdigest().upper()
+        return ts, nonce, sign
+
+    def _sign_headers(self):
+        ts, nonce, sign = self._sign_values()
         return {
             "x-aid": APP_ID,
             "x-ave": APP_VERSION,
@@ -448,7 +475,11 @@ class Spider(Spider):
         return result
 
     def _player_meta(self, vodplayer):
-        """vodplayer[] 是线路定义表：from -> {show显示名, decode_status, decode_mode, sort}"""
+        """vodplayer[] 是线路定义表：
+        from -> {show显示名, decode_status, decode_mode, sort, after_referer}
+        after_referer 取自 after_parse_headers（如 RR 的 "referer:https://m.yichengwlkj.com/"，
+        实测解码后的地址必须带该 Referer 才能访问）
+        """
         meta = {}
         if not isinstance(vodplayer, list):
             return meta
@@ -458,11 +489,18 @@ class Spider(Spider):
             key = str(p.get("from") or "").strip()
             if not key:
                 continue
+            after_ref = ""
+            for line in str(p.get("after_parse_headers") or "").splitlines():
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    if k.strip().lower() == "referer":
+                        after_ref = v.strip()
             meta[key] = {
                 "show": self._clean(p.get("show")) or key,
                 "status": str(p.get("decode_status", "0")).strip(),
                 "mode": str(p.get("decode_mode") or "").strip(),
                 "sort": str(p.get("sort", "") or "").strip(),
+                "after_referer": after_ref,
             }
         return meta
 
@@ -551,17 +589,28 @@ class Spider(Spider):
                 # 同一 from 已由详情提供时，保留详情版本（剧集更全），不覆盖
                 if any(f == exist[0] for exist in lines):
                     continue
+                _after_ref = ""
+                for _ln in str(a.get("after_parse_headers") or "").splitlines():
+                    if ":" in _ln:
+                        _k, _v = _ln.split(":", 1)
+                        if _k.strip().lower() == "referer":
+                            _after_ref = _v.strip()
                 meta.setdefault(f, {
                     "show": self._clean(a.get("site_name")) or _LINE_ALIAS.get(f, f),
                     "status": str(a.get("decode_status", "0")),
                     "mode": str(a.get("decode_mode") or ""),
                     "sort": str(a.get("sort", "") or ""),
+                    "after_referer": _after_ref,
                 })
                 lines.append((f, eps))
 
         if not lines:
             self.log("no play line: %s" % vod_id)
             return {"list": []}
+
+        # 记录各线路原始剧集地址（解码失败时按同下标回退用）
+        self._line_eps = [(f, [e[1] if isinstance(e, (list, tuple)) else e
+                               for e in eps]) for f, eps in lines]
 
         # 排序：完全按站点网页的真实顺序 —— vodplayer[].sort
         # （实测 云播=0 / ACE=4 / RR=5 / 极速·暴风·爱坤=99，
@@ -581,10 +630,12 @@ class Spider(Spider):
 
         play_from = []
         play_url = []
+        self._label_to_from = {}
         for f, eps in lines:
             label = meta[f]["show"] if f in meta else _LINE_ALIAS.get(f, f)
             if label in play_from:  # 同名线路去重，避免 TVBox 线路重复
                 label = "%s-%s" % (label, f)
+            self._label_to_from[label] = (f, (meta.get(f) or {}).get("after_referer") or "")
             play_from.append(label)
             play_url.append("#".join("%s$%s" % (n, u) for n, u in eps))
 
@@ -609,6 +660,201 @@ class Spider(Spider):
         }]}
 
     # ================= 播放 =================
+    # ---- protobuf 编解码（用于 /api.php/web/decode/url，结构与前端 Vt()/Ot() 一致）----
+    @staticmethod
+    def _pb_varint(n):
+        out = b""
+        while n >= 0x80:
+            out += bytes([(n & 0x7F) | 0x80])
+            n >>= 7
+        return out + bytes([n])
+
+    @classmethod
+    def _pb_str(cls, field, s):
+        b = s.encode("utf-8")
+        return cls._pb_varint(field << 3 | 2) + cls._pb_varint(len(b)) + b
+
+    @classmethod
+    def _pb_int(cls, field, n):
+        return cls._pb_varint(field << 3) + cls._pb_varint(int(n))
+
+    @staticmethod
+    def _pb_parse(data):
+        """极简 protobuf 解析，返回 [(field, wire, value)]（wire=0 为整数，2 为字节串）"""
+        out = []
+        i = 0
+        n = len(data)
+        while i < n:
+            key = 0
+            sh = 0
+            while i < n:
+                x = data[i]
+                i += 1
+                key |= (x & 0x7F) << sh
+                sh += 7
+                if x < 0x80:
+                    break
+            field, wire = key >> 3, key & 7
+            if wire == 0:
+                v = 0
+                sh = 0
+                while i < n:
+                    x = data[i]
+                    i += 1
+                    v |= (x & 0x7F) << sh
+                    sh += 7
+                    if x < 0x80:
+                        break
+                out.append((field, wire, v))
+            elif wire == 2:
+                ln = 0
+                sh = 0
+                while i < n:
+                    x = data[i]
+                    i += 1
+                    ln |= (x & 0x7F) << sh
+                    sh += 7
+                    if x < 0x80:
+                        break
+                out.append((field, wire, data[i:i + ln]))
+                i += ln
+            elif wire == 5:
+                out.append((field, wire, data[i:i + 4]))
+                i += 4
+            elif wire == 1:
+                out.append((field, wire, data[i:i + 8]))
+                i += 8
+            else:
+                break
+        return out
+
+    def _decode_url(self, ep_url, vod_from, referer, use_cache=True):
+        """
+        调用站点的 /api.php/web/decode/url 解出密文线路的真实地址。
+        请求 protobuf 字段（取自前端 Vt()，实测有效）：
+          1=剧集密文串  2=vodFrom  3=时间戳(ms)  4=nonce  5=签名
+          6=appId      7=版本号
+        响应 protobuf 字段（实测）：1=code(1成功) 2=msg(解密成功) 3=真实地址
+        【实测重要特性】
+          - 解出的 S3 直链 X-Amz-Expires=900，过期后 GET/HEAD 一律 403
+          - HEAD 请求恒为 403（S3 签名只允许 GET），GET(任意 Range 形式) 均 206
+          - 查询参数（含 response-content-disposition）全部被签名保护，不可改写
+        因此：结果做 TTL 缓存，剩余有效期不足时重新解码（每次用全新签名）。
+        """
+        ck = (vod_from, ep_url)
+        if use_cache and ck in self._decoded_cache:
+            real, t0 = self._decoded_cache[ck]
+            if time.time() - t0 < self._DECODE_TTL - self._DECODE_MARGIN:
+                return real
+            # 已过期或临近过期，重新解码（实测过期 URL 全部 403）
+            self.log("decode cache expired, re-decode")
+
+        last_err = ""
+        for attempt in range(3):  # 每次全新签名重试，规避瞬时签名/网络失败
+            real = self._decode_once(ep_url, vod_from, referer)
+            if real:
+                self._decoded_cache[ck] = (real, time.time())
+                return real
+            last_err = "attempt%d" % (attempt + 1)
+        self.log("decode FAIL after 3 %s" % last_err)
+        return ""
+
+    def _decode_once(self, ep_url, vod_from, referer):
+        """
+        调用站点的 /api.php/web/decode/url 解出密文线路的真实地址。
+        请求 protobuf 字段（取自前端 Vt()，实测有效）：
+          1=剧集密文串  2=vodFrom  3=时间戳(ms)  4=nonce  5=签名
+          6=appId      7=版本号
+        响应 protobuf 字段（实测）：1=code(1成功) 2=msg(解密成功) 3=真实地址
+        实测返回形如 https://...cmecloud.cn/xxx?...filename...01.mp4 的 video/mp4 直链。
+        """
+        ts, nonce, sg = self._sign_values()
+        body = (self._pb_str(1, ep_url) + self._pb_str(2, vod_from) +
+                self._pb_int(3, int(ts)) + self._pb_str(4, nonce) +
+                self._pb_str(5, sg) + self._pb_str(6, APP_ID) +
+                self._pb_int(7, APP_VERSION))
+
+        h = dict(self.headers)
+        h.update({
+            "Referer": referer,
+            "Content-Type": "application/x-protobuf",
+            "Accept": "application/x-protobuf",
+        })
+        h.update(self._sign_headers())
+
+        try:
+            rsp = self._post(self.site_url + "/api.php/web/decode/url",
+                             body, h)
+        except Exception as e:
+            self.log("decode FAIL: %s" % e)
+            return ""
+
+        raw = b""
+        if rsp is not None:
+            if hasattr(rsp, "content"):
+                raw = rsp.content or b""
+            elif isinstance(rsp, (bytes, bytearray)):
+                raw = bytes(rsp)
+
+        if not raw:
+            self.log("decode empty response")
+            return ""
+
+        code = None
+        url = ""
+        for field, wire, val in self._pb_parse(raw):
+            if field == 1 and wire == 0:
+                code = val
+            elif field == 3 and wire == 2:
+                try:
+                    url = val.decode("utf-8")
+                except Exception:
+                    url = ""
+        if code != 1 or not url:
+            self.log("decode rejected: code=%s" % code)
+            return ""
+        return url
+
+    def _fallback_same_episode(self, vod_from, ep_url):
+        """
+        解码失败时，在同一下标找到可直连线路（m3u8 形态）的同集数地址。
+        实测各线路集数一般一致（233460 各线路均 47 集）。
+        """
+        try:
+            idx = None
+            for f, eps in self._line_eps:
+                if f == vod_from:
+                    for i, e in enumerate(eps):
+                        if e == ep_url:
+                            idx = i
+                            break
+                    break
+            if idx is None:
+                return ""
+            for f, eps in self._line_eps:
+                if f == vod_from or idx >= len(eps):
+                    continue
+                cand = eps[idx]
+                k = self._line_kind("", {}, [(None, cand)])
+                if k == "m3u8":
+                    self.log("decode fail, fallback %s ep#%d" % (f, idx + 1))
+                    return cand
+        except Exception as e:
+            self.log("fallback err %s" % e)
+        return ""
+
+    def _post(self, url, body, headers):
+        """POST 原始字节；兼容 base.spider 与 requests 两种环境"""
+        try:
+            import requests as _rq
+            r = _rq.post(url, data=body, headers=headers,
+                         timeout=20, verify=False)
+            return r
+        except Exception:
+            import urllib.request as _ur
+            req = _ur.Request(url, data=body, headers=headers, method="POST")
+            return _ur.urlopen(req, timeout=20)
+
     def _fix_url(self, url):
         """补全协议，并对含非 ASCII（如中文『第01集』目录）的地址做路径编码。
         实测 https://p.bvvvvvvv7f.com/video/baituoliaobingxiang/第01集/index.m3u8
@@ -636,7 +882,8 @@ class Spider(Spider):
         按地址真实形态分三种（实测样本）：
           m3u8 -> https://.../index.m3u8 直出，parse=0
           page -> 网页(如 RR 的 mh.yichengwlkj.com/drama/xxx)，parse=1 交 TVBox 嗅探
-          code -> 站点密文(如 Ace_Net-xxx)，爬虫内无法解码，退回站点播放页嗅探
+          code -> 站点密文(如 Ace_Net-xxx)：实时调 /api.php/web/decode/url 解出
+                  video/mp4 直链（网页端即如此播放），失败才退回站点播放页嗅探
         """
         url = (id or "").strip()
         header = {"User-Agent": UA, "Referer": self.site_url + "/"}
@@ -649,17 +896,38 @@ class Spider(Spider):
 
         kind = self._line_kind("", {}, [(None, url)])
 
+        # 线路显示名 -> (from 代号, 线路专属 Referer)
+        vod_from, line_ref = self._label_to_from.get(
+            str(flag or "").strip(), (str(flag or "").strip(), ""))
+        ref = "%s/play/%s" % (self.site_url, self._last_vod_id) if self._last_vod_id \
+            else self.site_url + "/"
+
         if kind == "m3u8":
             return {"parse": 0, "playUrl": "", "url": self._fix_url(url), "header": header}
 
+        # page（如 RR 网页）与 code（如 ACE 密文）统一走站点解码接口：
+        # 网页端即如此播放，实测两种形态都能解出直链（mp4/m3u8）
+        real = self._decode_url(url, vod_from, ref)
+        if real:
+            out_header = {"User-Agent": UA,
+                          "Referer": line_ref or (self.site_url + "/")}
+            return {"parse": 0, "playUrl": "", "url": self._fix_url(real),
+                    "header": out_header}
+
+        # 解码失败（盒子上常见：系统时间偏差导致签名被拒、瞬时网络失败）：
+        # 按同一下标回退到其它可直连线路的同集数，保证仍能播放
+        alt = self._fallback_same_episode(vod_from, url)
+        if alt:
+            return {"parse": 0, "playUrl": "", "url": self._fix_url(alt),
+                    "header": header}
+
         if kind == "page":
-            # 网页线路：直接嗅探该网页（RR 页面会 307 跳 /pc/...，跟随即可）
+            # 解码失败：网页线路交 TVBox 嗅探（RR 页面会 307 跳 /pc/...）
             return {"parse": 1, "playUrl": "", "url": self._fix_url(url), "header": header}
 
-        # 密文线路：回退到本站播放页
+        # 密文解码失败：回退到本站播放页嗅探
         if self._last_vod_id:
-            page = "%s/play/%s" % (self.site_url, self._last_vod_id)
-            return {"parse": 1, "playUrl": "", "url": page, "header": header}
+            return {"parse": 1, "playUrl": "", "url": ref, "header": header}
 
         return {"parse": 1, "playUrl": "", "url": url, "header": header}
 
