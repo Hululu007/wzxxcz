@@ -3,7 +3,7 @@
 滴答影院 www.loldyw.com | TVBox Python 爬虫
 严格对照真实源码，拒绝猜测：
   - 分类 ID 严格按照源码筛选栏提取
-  - 筛选路径严格按照真实链接 /filter/ 提取
+  - 筛选路径严格按照真实链接 /filter/id/13/year/2026.html 提取
   - 搜索结果严格解析 ul#searchList 下的 li 结构
   - 详情剧集严格解析 #playlist 和 tab 标签
   - 播放直接提取 player_aaaa 的 url
@@ -170,11 +170,13 @@ FILTERS = {
 }
 
 # ================= 3. 正则解析 =================
+# 列表页（严格按照真实 DOM 解析并提取状态标签）
 _RE_CARD = re.compile(
     r'<a\s+[^>]*class="[^"]*iqy-vodlist__thumb[^"]*"[^>]*'
     r'href="([^"]+)"[^>]*'
     r'title="([^"]*)"[^>]*'
-    r'(?:data-original|data-src|src)="([^"]*)"',
+    r'(?:data-original|data-src|src)="([^"]*)"[^>]*>[\s\S]*?'
+    r'<span class="pic-text text-right">([^<]*)</span>',
     re.S | re.I)
 
 _RE_H1 = re.compile(r'<h1 class="title">([\s\S]*?)</h1>', re.I)
@@ -238,14 +240,14 @@ class Spider(Spider):
     def _parse_list(self, html):
         videos, seen = [], set()
         for m in _RE_CARD.finditer(html or ""):
-            href, name, pic = m.group(1), m.group(2), m.group(3)
+            href, name, pic, remark = m.group(1), m.group(2), m.group(3), m.group(4)
             if href in seen: continue
             seen.add(href)
             videos.append({
                 "vod_id": href,
                 "vod_name": self._clean(name),
                 "vod_pic": self._fix(pic) or self.default_pic,
-                "vod_remarks": "",
+                "vod_remarks": self._clean(remark),  # 补全了副标题（如：第17集）
             })
         return videos
 
@@ -263,6 +265,7 @@ class Spider(Spider):
             except Exception: extend = {}
         extend = extend or {}
 
+        # 修复 TVBox 多重传参导致的 URL 编码问题
         for k in list(extend.keys()):
             if isinstance(extend[k], str) and "%" in extend[k]:
                 extend[k] = urllib.parse.unquote(extend[k])
@@ -270,15 +273,29 @@ class Spider(Spider):
         sub_tid = extend.get("tid")
         real_tid = sub_tid if (sub_tid and sub_tid.strip()) else tid
 
-        # 严格按照真实网页源码规则：/filter/[参数]/[值]/id/[分类].html
+        # 核心修复：严格贴合苹果CMS真实格式 `/filter/id/13/year/2026.html`
         base = ""
-        if extend.get("class"): base = "/filter/class/%s/id/%s" % (urllib.parse.quote(extend["class"]), real_tid)
-        elif extend.get("area"): base = "/filter/area/%s/id/%s" % (urllib.parse.quote(extend["area"]), real_tid)
-        elif extend.get("lang"): base = "/filter/lang/%s/id/%s" % (urllib.parse.quote(extend["lang"]), real_tid)
-        elif extend.get("letter"): base = "/filter/letter/%s/id/%s" % (extend["letter"], real_tid)
-        elif extend.get("year"): base = "/filter/id/%s/year/%s" % (real_tid, extend["year"])
-        elif extend.get("sort"): base = "/filter/by/%s/id/%s" % (extend["sort"], real_tid)
-        elif sub_tid and sub_tid.strip() != tid: base = "/filter/id/%s" % real_tid
+        c_val = extend.get("class", "")
+        a_val = extend.get("area", "")
+        l_val = extend.get("lang", "")
+        e_val = extend.get("letter", "")
+        y_val = extend.get("year", "")
+        s_val = extend.get("sort", "")
+
+        if y_val:
+            base = "/filter/id/%s/year/%s" % (real_tid, y_val)
+        elif c_val:
+            base = "/filter/class/%s/id/%s" % (urllib.parse.quote(c_val), real_tid)
+        elif a_val:
+            base = "/filter/area/%s/id/%s" % (urllib.parse.quote(a_val), real_tid)
+        elif l_val:
+            base = "/filter/lang/%s/id/%s" % (urllib.parse.quote(l_val), real_tid)
+        elif e_val:
+            base = "/filter/letter/%s/id/%s" % (e_val, real_tid)
+        elif s_val:
+            base = "/filter/by/%s/id/%s" % (s_val, real_tid)
+        elif sub_tid and sub_tid.strip() != tid:
+            base = "/filter/id/%s" % real_tid
 
         if base:
             if page > 1: base += "-%d" % page
