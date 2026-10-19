@@ -6,27 +6,54 @@
 
 【网站结构】
     首页                /                                     -> 200, 纯 HTML(UTF-8)
-    分类第 1 页         /genre/{tid}.html                      tid: 1/2/3/4/24
-    分类分页            /lookup/page/{n}/type/{tid}.html
-    详情页              /film/{vodId}.html                     vodId 形如 857985f
+    分类第 1 页         /genre/{tid}.html
+    分类分页            /genre/{tid}-{page}.html               <- 真实，见【实测要点 5】
+    详情页              /film/{vodId}.html                     vodId 形如 857985f / 969279f
     播放页              /watch/{vodId}/{sid}/{nid}.html
     搜索(HTML)          /lookup/wd/{关键词}.html
-    搜索分页            /lookup/page/{n}/wd/{关键词}.html
     搜索建议(JSON)      /index.php/ajax/suggest?mid={tid}&wd={关键词}
-    分类筛选            /lookup/area/{地区}.html  /lookup/year/{年份}.html
+    筛选入口            /filter/id/{子类tid}.html                <- 注意是子类 tid，不是大类 tid
+    筛选分页            /filter/{各维度}/page/{n}.html
 
-【要点 1：响应体是"JSON 字符串转义过的 HTML"】
+    重要：/lookup/page/{n}/type/{tid}.html 在本站【不存在】（旧版 MacCMS 写法），
+          已由 /genre/{tid}-{page}.html 取代。上一版误用该路径，导致翻页全空。
+
+【实测要点 5 补充：筛选 panel 的真实 DOM 与 URL 规则】
+    六个分类页（动作片6 / 国产剧13 / 大陆综艺25 / 国产动漫29 / 短剧大全40）的
+    <div class="slideDown-box"> 内，恒为若干条:
+        <ul class="iqy-screen__list nav-slide clearfix" data-align="left">
+          <li><a class="btn text-muted">剧情</a></li>
+          <li><a class="btn btn-warm" href="/filter/id/6.html">全部</a></li>
+          <li><a class="btn" href="/filter/class/%E5%96%9C%E5%89%A7/id/6.html">喜剧</a></li>
+          ...
+    维度顺序恒为：类型(id) → 剧情(class) → 地区(area) → 年份(year) → 语言(lang)
+                  → 字母(letter)，最后一条独立 ul 是排序(by)。
+    URL 拼接顺序（由真实 href 归纳，非猜测）：
+        /filter/ [by/{time|hits|score}/] [class/{剧情}/] [area/{地区}/]
+                id/{子类tid} [/year/{年}] [/lang/{语}] [/letter/{字母}] [/page/{n}].html
+    要点：
+      * id 段出现在 area 之后、year 之前，位置固定，不是任意排列。
+      * 无任何筛选时走 /genre/{tid}.html 或 /genre/{tid}-{n}.html，不走 /filter/。
+      * 每个大类的剧情/地区/年份/语言取值【互不相同】，必须按大类分别建表：
+          电影9子类 共享 26剧情 / 15地区(大陆…) / 2010-2026 / 9语言(含法德)
+          电视剧8子类 共享 16剧情 / 10地区(内地…) / 2010-2026 / 7语言
+          综艺4子类 共享 13剧情 / 4地区(内地/港台/日韩/欧美) / 2004-2018 / 7语言
+          动漫5子类 共享 20剧情 / 4地区(国产/日本/欧美/其他) / 2004-2018 / 7语言
+          短剧2子类 只有 类型 + 字母 + 排序（无剧情/地区/年份/语言）
+      * 地区用词四个大类四套，绝不通用：电影=大陆，电视剧/综艺=内地，动漫=国产。
+
+【实测要点 1：响应体是"JSON 字符串转义过的 HTML"】
     服务端返回的正文形如:
         "<!DOCTYPE html>\n<html>\n<head>\n<title>...<\/title>...href=\"\/film\/...\""
     即整份 HTML 被包成一个 JSON 字符串（存在 \\/ 、\\" 、\\n 、\\uXXXX 转义）。
     因此必须先用 json.loads 反解，否则所有 href="..." 都匹配不到。
     另外站点偶尔也直接返回正常 HTML，两种都要兼容（见 _normalize）。
 
-【要点 2：反爬】
+【实测要点 2：反爬】
     默认请求 -> 403 (nginx)；带 X-Requested-With / Origin / Referer -> 200。
     这是绕过 CF 与 nginx 拦截的必要条件。
 
-【要点 3：线路名不可写死】
+【实测要点 3：线路名不可写死】
     详情页线路名来自选项卡:
         <li><a href="#playlist4" data-toggle="tab">极速高清</a></li>
         <li><a href="#playlist3" data-toggle="tab">量子高清</a></li>
@@ -34,7 +61,7 @@
         <li><a href="#playlist1" data-toggle="tab">无尽4K</a></li>
     同一页面 playlist 编号与名称的对应关系随影片而变，不能按 1=量子高清 硬编码。
 
-【要点 4：播放页有可直接使用的真实直链】
+【实测要点 4：播放页有可直接使用的真实直链】
     播放页内嵌:
         var player_aaaa={"flag":"play","encrypt":0, ... ,
             "url":"https:\\/\\/vv.jisuzyv.com\\/play\\/erkYwREa\\/index.m3u8",
@@ -47,14 +74,19 @@
     https://p.jisuts.com:999/... 。因此本地代理必须按扩展名返回正确 Content-Type，
     不能一律当图片返回，否则播放器无法解出 #EXTM3U 与密钥。
 
-【要点 5：分页总数】
-    列表页底部真实分页:
-        <ul class="iqy-page ...">
-          <li><a class="btn btn-default" href="/lookup/page/1/type/2.html">首页</a></li>
-          ...
-          <li><a class="btn btn-default" href="/lookup/page/94471/type/2.html">尾页</a></li>
+【实测要点 5：分页总数】
+    列表页底部真实分页（/genre/6-2.html 原文）:
+        <ul class="iqy-page text-center clearfix">
+          <li><a class="btn btn-default" href="/genre/6-1.html">首页</a></li>
+          <li><a class="btn btn-default" href="/genre/6-1.html">上一页</a></li>
+          <li class="hidden-xs"><a class="btn btn-default" href="/genre/6-1.html">1</a></li>
+          <li class="hidden-xs"><a class="btn btn-warm" href="/genre/6-2.html">2</a></li>
+          <li class="visible-xs"><a class="btn btn-warm">2/820</a></li>
+          <li><a class="btn btn-default" href="/genre/6-3.html">下一页</a></li>
+          <li><a class="btn btn-default" href="/genre/6-820.html">尾页</a></li>
         </ul>
-    取"尾页"链接最大页码即为总页数。
+    总页数有两个可靠来源，优先用 "2/820" 这种 mobile 分页串，其次用"尾页"链接。
+    实测各分类总页：动作片820 / 国产剧1314 / 大陆综艺343 / 国产动漫222 / 短剧1261。
 """
 import re
 import sys
@@ -115,7 +147,7 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 # 简介统一前缀（用户指定）
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！\n"
 
-# 实测首页侧边导航: /genre/1.html 电影 712345 / 2 电视剧 / 3 综艺片 / 4 动漫 / 24 短剧
+# 实测首页侧边导航: /genre/1.html 电影 / 2 电视剧 / 3 综艺片 / 4 动漫 / 24 短剧
 CLASSES = [
     {"type_id": "1",  "type_name": "电影"},
     {"type_id": "2",  "type_name": "电视剧"},
@@ -124,29 +156,94 @@ CLASSES = [
     {"type_id": "24", "type_name": "短剧"},
 ]
 
-# 筛选面板选项。
-# 依据（实测 2026-10-19）:
-#   1) /filter/{tid}.html?class=国产剧  -> 200，标题变为「国产剧-滴答影院」
-#   2) /filter/{tid}.html?area=大陆     -> 200，标题变为「大陆-滴答影院」
-#   3) /filter/{tid}.html?year=2026     -> 200，标题变为「2026-滴答影院」
-#   4) /filter/area/{名}.html、/filter/type/{id}.html 均 404，说明只能走
-#      /filter/{tid}.html + 查询参数。
-# 分类（class）取值来自站点"电视剧"筛选面板真实分档。
-# 说明：/genre/13.html 的标题是「国产剧」，即 13 是子分类而非"电视剧"；
-#       /filter/2.html?class=国产剧 与 /filter/13.html?class=国产剧 都实测生效，
-#       这里统一挂在电视剧（tid=2）下，只列站点真实存在的剧集分档。
-FILTER_CLASS = {
-    "2": ["国产剧", "香港剧", "韩国剧", "欧美剧", "台湾剧", "日本剧",
-          "泰国剧", "海外剧"],
-}
-FILTER_AREA = ["大陆", "内地", "韩国", "香港", "台湾", "日本",
-               "美国", "泰国", "英国", "新加坡", "其它"]
-FILTER_YEAR = [str(y) for y in range(2026, 2008, -1)]
+# ======================================================================
+#  筛选配置 —— 全部取值均抄自六份真实分类页的 <div class="slideDown-box">
+#  结构: GROUP -> 大类tid -> {类型/剧情/地区/年份/语言/字母/排序}
+#  铁律: 剧情 / 地区 / 年份 / 语言 四组取值按【大类】绑定，四大类互不通用。
+#        地区用词尤其不能混: 电影=大陆，电视剧/综艺=内地，动漫=国产。
+# ======================================================================
 
-# 实测详情页 地区 链接: /lookup/area/%E6%97%A5%E6%9C%AC.html
-AREAS = ["大陆", "香港", "台湾", "美国", "韩国", "日本",
-         "泰国", "英国", "法国", "印度", "其它"]
-YEARS = [str(y) for y in range(2026, 2009, -1)]
+# ---- 类型(id) 子分类映射，来源: 各分类页 "类型" 那一行真实 href ----
+SUB_TYPES = {
+    # /filter/id/6.html 一页
+    "1": [("6", "动作片"), ("7", "喜剧片"), ("8", "爱情片"), ("9", "科幻片"),
+          ("10", "剧情片"), ("11", "战争片"), ("41", "动画片"), ("12", "记录片"),
+          ("39", "恐怖片")],
+    # /filter/id/13.html 一页
+    "2": [("13", "国产剧"), ("14", "香港剧"), ("15", "韩国剧"), ("16", "欧美剧"),
+          ("22", "台湾剧"), ("21", "日本剧"), ("20", "泰国剧"), ("23", "海外剧")],
+    # /filter/id/25.html 一页
+    "3": [("25", "大陆综艺"), ("26", "日韩综艺"), ("27", "港台综艺"),
+          ("28", "欧美综艺")],
+    # /filter/id/29.html 一页（42/43 为后补编号，不连续，必须照抄）
+    "4": [("29", "国产动漫"), ("30", "日本动漫"), ("42", "港台动漫"),
+          ("31", "欧美动漫"), ("43", "海外动漫")],
+    # /filter/id/40.html 一页
+    "24": [("40", "短剧大全"), ("44", "AI漫剧")],
+}
+
+# ---- 剧情(class) 按大类 ----
+CLAZZ = {
+    # 动作片页（26 项，注意"恐怖"在原站重复出现两次，此处按真实顺序保留一次）
+    "1": ["喜剧", "爱情", "恐怖", "动作", "科幻", "剧情", "战争", "警匪", "犯罪",
+          "动画", "奇幻", "武侠", "冒险", "枪战", "悬疑", "惊悚", "经典", "青春",
+          "文艺", "微电影", "古装", "历史", "运动", "农村", "儿童", "网络电影"],
+    # 国产剧页（16 项）
+    "2": ["古装", "战争", "青春偶像", "喜剧", "家庭", "犯罪", "动作", "奇幻",
+          "剧情", "历史", "经典", "乡村", "情景", "商战", "网剧", "其他"],
+    # 大陆综艺页（13 项）
+    "3": ["选秀", "情感", "访谈", "播报", "旅游", "音乐", "美食", "纪实",
+          "曲艺", "生活", "游戏互动", "财经", "求职"],
+    # 国产动漫页（20 项）
+    "4": ["情感", "科幻", "热血", "推理", "搞笑", "冒险", "萝莉", "校园", "动作",
+          "机战", "运动", "战争", "少年", "少女", "社会", "原创", "亲子", "益智",
+          "励志", "其他"],
+    # 短剧页：真实页面【没有剧情维度】，留空
+    "24": [],
+}
+
+# ---- 地区(area) 按大类 ----
+AREA = {
+    # 动作片页 15 项（电影用"大陆"）
+    "1": ["大陆", "香港", "台湾", "美国", "法国", "英国", "日本", "韩国", "德国",
+          "泰国", "印度", "意大利", "西班牙", "加拿大", "其他"],
+    # 国产剧页 10 项（电视剧用"内地"，且无 法/德/印/意/西/加）
+    "2": ["内地", "韩国", "香港", "台湾", "日本", "美国", "泰国", "英国",
+          "新加坡", "其他"],
+    # 大陆综艺页 4 项
+    "3": ["内地", "港台", "日韩", "欧美"],
+    # 国产动漫页 4 项（动漫用"国产"）
+    "4": ["国产", "日本", "欧美", "其他"],
+    "24": [],
+}
+
+# ---- 年份(year) 按大类 ----
+# 电影/电视剧: 2010-2026；综艺/动漫: 站点真实只有 2004-2018（2019 年后未补数据，
+# 若强行给 2025 会得到空页，故严格照抄真实取值）。
+YEAR = {
+    "1": [str(y) for y in range(2026, 2009, -1)],
+    "2": [str(y) for y in range(2026, 2009, -1)],
+    "3": [str(y) for y in range(2018, 2003, -1)],
+    "4": [str(y) for y in range(2018, 2003, -1)],
+    "24": [],
+}
+
+# ---- 语言(lang) 按大类 ----
+LANG = {
+    # 电影 9 项（独有 法语/德语）
+    "1": ["国语", "英语", "粤语", "闽南语", "韩语", "日语", "法语", "德语", "其它"],
+    # 电视剧/综艺/动漫 均为 7 项
+    "2": ["国语", "英语", "粤语", "闽南语", "韩语", "日语", "其它"],
+    "3": ["国语", "英语", "粤语", "闽南语", "韩语", "日语", "其它"],
+    "4": ["国语", "英语", "粤语", "闽南语", "韩语", "日语", "其它"],
+    "24": [],
+}
+
+# ---- 字母(letter) 全站统一 27 项 ----
+LETTER = [chr(x) for x in range(ord("A"), ord("Z") + 1)] + ["0-9"]
+
+# ---- 排序(by) 全站统一 ----
+SORT_BY = [("time", "时间"), ("hits", "人气"), ("score", "评分")]
 
 # ---------------- 真实源码对应的正则 ----------------
 
@@ -216,7 +313,7 @@ _RE_EP = re.compile(
 # 播放页 player_aaaa = {...};
 _RE_PLAYER = re.compile(r'player_\w+\s*=\s*(\{[\s\S]*?\})\s*</script>', re.I)
 
-# 分页"尾页": href="/lookup/page/94471/type/2.html">尾页
+# 分页"尾页"（旧路径，已废弃但保留以兼容可能的旧页）
 _RE_PAGE_ANY = re.compile(r'/lookup/page/(\d+)/', re.I)
 
 # ajax suggest 的详情链接规则未在 JSON 中给出 vodId，只能用 id 拼 /film/{id}f.html
@@ -393,29 +490,57 @@ class Spider(Spider):
     def homeContent(self, filter=False):
         """分类 + 筛选面板。
 
-        筛选项按站点真实可用的参数补齐（实测见文件头 FILTER_* 注释）:
-            /filter/{tid}.html?class=国产剧&area=大陆&year=2026
-        每个分类都给出 类型/地区/年份 三组，避免面板缺项。
+        面板结构严格照抄真实站点的六行维度（见 SUB_TYPES / CLAZZ / AREA /
+        YEAR / LANG / LETTER / SORT_BY 注释）。每个大类一套，绝不共用，
+        因为四大类的剧情/地区/年份/语言取值完全不同。
+        短剧真实页面只有 类型 / 字母 / 排序 三行，故只给这三组。
         """
         filters = {}
         if filter:
             for c in CLASSES:
                 tid = c["type_id"]
                 groups = []
-                # 类型（class）：站点对"电视剧"给出了真实分档，其余分类不臆造
-                cls_opts = FILTER_CLASS.get(tid)
-                if cls_opts:
+
+                # 1) 类型 —— 真实是子分类，点击后跳到 /filter/id/{tid}.html
+                subs = SUB_TYPES.get(tid) or []
+                if subs:
                     groups.append({
-                        "key": "class", "name": "类型",
-                        "value": [{"n": x, "v": x} for x in cls_opts],
+                        "key": "id", "name": "类型",
+                        "value": [{"n": n, "v": v} for v, n in subs],
                     })
+                # 2) 剧情
+                if CLAZZ.get(tid):
+                    groups.append({
+                        "key": "class", "name": "剧情",
+                        "value": [{"n": x, "v": x} for x in CLAZZ[tid]],
+                    })
+                # 3) 地区
+                if AREA.get(tid):
+                    groups.append({
+                        "key": "area", "name": "地区",
+                        "value": [{"n": x, "v": x} for x in AREA[tid]],
+                    })
+                # 4) 年份
+                if YEAR.get(tid):
+                    groups.append({
+                        "key": "year", "name": "年份",
+                        "value": [{"n": y, "v": y} for y in YEAR[tid]],
+                    })
+                # 5) 语言
+                if LANG.get(tid):
+                    groups.append({
+                        "key": "lang", "name": "语言",
+                        "value": [{"n": x, "v": x} for x in LANG[tid]],
+                    })
+                # 6) 字母（全站统一 27 项，短剧也有）
                 groups.append({
-                    "key": "area", "name": "地区",
-                    "value": [{"n": x, "v": x} for x in FILTER_AREA],
+                    "key": "letter", "name": "字母",
+                    "value": [{"n": x, "v": x} for x in LETTER],
                 })
+                # 7) 排序
                 groups.append({
-                    "key": "year", "name": "年份",
-                    "value": [{"n": y, "v": y} for y in FILTER_YEAR],
+                    "key": "by", "name": "排序",
+                    "value": [{"n": n, "v": v} for v, n in SORT_BY],
                 })
                 filters[tid] = groups
         return {"class": CLASSES, "filters": filters}
@@ -550,32 +675,137 @@ class Spider(Spider):
         return videos
 
     def _main_list_videos(self, html):
-        """只取主列表，排除侧栏推荐。
+        """只取主列表，排除左侧"xx推荐"侧栏。
 
-        真实结构（/filter/... 页面）:
-            <div class="iqy-panel iqy-panel-bg clearfix iqy-type__tuijian">  <- 侧栏"推荐"
-                ... <ul class="iqy-vodlist clearfix"> ... </ul>
-            <div class="iqy-panel active iqy-panel-bg clearfix">
-                <h3 class="title">最新</h3>
-                ... <ul class="iqy-vodlist clearfix"> ... </ul>            <- 主列表
-        两个容器 class 相同，必须按"最新"面板定位，否则会把侧栏推荐混进结果。
+        真实结构（/genre/6-2.html 原文，顺序固定）:
+            <div class="col-xs-1 padding-0">
+              <div class="iqy-panel iqy-panel-bg clearfix iqy-type__tuijian">
+                 <h3 class="title">动作片推荐</h3>            <- 侧栏推荐，要排除
+                 ... <ul class="iqy-vodlist clearfix"> ...
+              </div>
+            </div>
+            <div class="col-xs-1 padding-0">
+              <div class="iqy-panel iqy-panel-bg2 clearfix">    <- 筛选面板
+                 <h3 class="title">动作片</h3>
+                 ... <div class="slideDown-box"> ...
+              </div>
+              <div class="iqy-panel active iqy-panel-bg clearfix">  <- 主列表
+                 <h3 class="title">最新动作片</h3>
+                 ... <ul class="iqy-vodlist clearfix"> ...
+              </div>
+            </div>
+
+        定位方式：主列表标题恒为「最新」，且其外层是 <div class="iqy-panel active">。
+        侧栏推荐标题是「xx推荐」，不含"最新"，因此用"最新"锚点即可干净切分。
+        若页面无该锚点（首页 / 搜索页），退回全页解析。
         """
         if not html:
             return []
-        m = re.search(r'<h3 class="title">最新</h3>([\s\S]*)', html)
+        m = re.search(r'<div class="iqy-panel active iqy-panel-bg clearfix">([\s\S]*)',
+                      html)
+        if not m:
+            m = re.search(r'<h3 class="title">最新[^<]*</h3>([\s\S]*)', html)
         seg = m.group(1) if m else html
+        # 主列表到分页区为止，避免把页脚友情链接之类带入
+        cut = seg.find('class="iqy-show__page')
+        if cut > 0:
+            seg = seg[:cut]
         return self._extract_videos(seg)
 
     def _page_count(self, html, cur_page=1):
-        """取分页里的最大页码。真实分页形如 /lookup/page/94471/type/2.html（尾页）。"""
+        """取总页数。
+
+        真实分页（/genre/6-2.html）有两种可用信息:
+            <li class="visible-xs"><a class="btn btn-warm">2/820</a></li>   <- 最可靠
+            <li><a class="btn btn-default" href="/genre/6-820.html">尾页</a></li>
+        优先解析 "当前页/总页数"，其次取"尾页"链接里的页码。
+        注意不能再用 /lookup/page/ 正则，该路径在本站不存在（上一版 bug 根因）。
+        """
         if not html:
-            return 1
-        nums = [int(x) for x in _RE_PAGE_ANY.findall(html) if x.isdigit()]
+            return cur_page
+        # 方式 1: 2/820
+        m = re.search(r'>\s*(\d+)\s*/\s*(\d+)\s*<', html)
+        if m:
+            try:
+                total = int(m.group(2))
+                if total >= 1:
+                    return total
+            except Exception:
+                pass
+        # 方式 2: 尾页链接 /genre/{tid}-{n}.html
+        m = re.search(r'href="/genre/\d+-(\d+)\.html"[^>]*>\s*尾页', html)
+        if m:
+            try:
+                return max(1, int(m.group(1)))
+            except Exception:
+                pass
+        # 方式 3: 筛选分页 /filter/.../page/{n}.html 里的尾页
+        m = re.search(r'href="[^"]*/page/(\d+)\.html"[^>]*>\s*尾页', html)
+        if m:
+            try:
+                return max(1, int(m.group(1)))
+            except Exception:
+                pass
+        # 方式 4: 取所有 /genre/{tid}-{n} 的页码最大值
+        nums = [int(x) for x in re.findall(r'/genre/\d+-(\d+)\.html', html)
+                if x.isdigit()]
         if nums:
             return max(nums)
         return cur_page
 
     # ================= 分类 =================
+
+    def _build_filter_url(self, tid, extend, pg_int):
+        """按真实顺序拼接筛选 URL。
+
+        真实 href 归纳（六份页面原文）:
+            /filter/id/6.html                                  仅类型
+            /filter/class/%E5%96%9C%E5%89%A7/id/6.html          类型+剧情
+            /filter/area/%E5%A4%A7%E9%99%86/id/6.html           类型+地区
+            /filter/id/6/year/2010.html                        类型+年份
+            /filter/id/6/lang/%E5%9B%BD%E8%AF%AD.html           类型+语言
+            /filter/id/6/letter/A.html                         类型+字母
+            /filter/by/time/id/6.html                          排序+类型
+        由此确定顺序恒为:
+            /filter/ [by]/ [class]/ [area]/ id/{tid} [/year] [/lang] [/letter]
+                    [/page/{n}].html
+        返回 None 表示"没有任何筛选"，应走 /genre/。
+        """
+        sub = (extend.get("id") or "").strip()    # 子分类 tid（类型维度）
+        by = (extend.get("by") or "").strip()
+        clz = (extend.get("class") or "").strip()
+        area = (extend.get("area") or "").strip()
+        year = (extend.get("year") or "").strip()
+        lang = (extend.get("lang") or "").strip()
+        letter = (extend.get("letter") or "").strip()
+
+        # 只传了"全部"或空值时视作未筛选
+        if sub in ("", "全部"):
+            sub = ""
+        # by=time 是默认排序，若只选了 time 且无其它条件，仍走 genre 更轻
+        effective = [x for x in (sub, clz, area, year, lang, letter) if x]
+        if not effective:
+            return None
+
+        target = sub or tid
+        q = urllib.parse.quote
+        parts = ["/filter"]
+        if by in ("time", "hits", "score"):
+            parts += ["by", by]
+        if clz:
+            parts += ["class", q(clz)]
+        if area:
+            parts += ["area", q(area)]
+        parts += ["id", target]
+        if year:
+            parts += ["year", q(year)]
+        if lang:
+            parts += ["lang", q(lang)]
+        if letter:
+            parts += ["letter", q(letter)]
+        if pg_int > 1:
+            parts += ["page", str(pg_int)]
+        return self.site_url + "/".join(parts) + ".html"
 
     def categoryContent(self, tid, pg, filter, extend):
         tid = str(tid or "1")
@@ -585,62 +815,35 @@ class Spider(Spider):
         except Exception:
             pg_int = 1
         extend = extend or {}
-        cls = (extend.get("class") or "").strip()
-        area = (extend.get("area") or "").strip()
-        year = (extend.get("year") or "").strip()
 
-        # 真实可用入口（均实测 200，标题随筛选变化）:
-        #   第 1 页      /genre/{tid}.html
-        #   分页         /lookup/page/{n}/type/{tid}.html
-        #   筛选         /filter/class/国产剧.html
-        #                /filter/class/国产剧/area/大陆.html
-        #                /filter/class/国产剧/page/2.html
-        # 说明：/filter/{tid}.html?class=… 也能过滤，但路径式同时支持分页，统一用路径式。
-        if cls:
-            seg = ["class", cls]
-            if area:
-                seg += ["area", area]
-            if year:
-                seg += ["year", year]
-            if pg_int > 1:
-                seg += ["page", str(pg_int)]
-            path = "/".join(urllib.parse.quote(x) for x in seg)
-            url = "%s/filter/%s.html" % (self.site_url, path)
-        elif area or year:
-            seg = []
-            if area:
-                seg += ["area", area]
-            if year:
-                seg += ["year", year]
-            if pg_int > 1:
-                seg += ["page", str(pg_int)]
-            path = "/".join(urllib.parse.quote(x) for x in seg)
-            url = "%s/filter/%s.html" % (self.site_url, path)
-        elif pg_int == 1:
-            url = "%s/genre/%s.html" % (self.site_url, tid)
+        # 真实入口:
+        #   无筛选   第1页 /genre/{tid}.html      后续页 /genre/{tid}-{n}.html
+        #   有筛选   /filter/by|class|area|id|year|lang|letter[/page/{n}].html
+        url = self._build_filter_url(tid, extend, pg_int)
+        if url:
+            filtered = True
         else:
-            url = "%s/lookup/page/%s/type/%s.html" % (self.site_url, pg_int, tid)
+            filtered = False
+            if pg_int == 1:
+                url = "%s/genre/%s.html" % (self.site_url, tid)
+            else:
+                url = "%s/genre/%s-%d.html" % (self.site_url, tid, pg_int)
 
         self.log("category: %s" % url)
         html = self._fetch_html(url, need="/film/")
 
-        # 兜底：静态分类页取不到时，退回可用的分页入口
-        if not html and not (cls or area or year) and pg_int == 1:
-            alt = "%s/lookup/page/1/type/%s.html" % (self.site_url, tid)
-            self.log("category fallback: %s" % alt)
-            html = self._fetch_html(alt, need="/film/")
-            if html:
-                url = alt
-
-        # 筛选页含"推荐"侧栏，必须只取主列表
-        videos = self._main_list_videos(html) if (cls or area or year) \
-            else self._extract_videos(html)
+        # 筛选页有"xx推荐"侧栏，必须只扫主列表；无筛选页同样有侧栏，统一走主列表更稳
+        videos = self._main_list_videos(html)
+        pc = self._page_count(html, pg_int)
+        # 防御: 若解析出的总页数小于当前页，说明页面异常，保持当前页
+        if pc < pg_int:
+            pc = pg_int
         return {
             "list": videos,
             "page": pg_int,
-            "pagecount": self._page_count(html, pg_int),
+            "pagecount": pc,
             "limit": len(videos) or 20,
-            "total": len(videos),
+            "total": pc * 20 if pc > 1 else len(videos),
         }
 
     # ================= 搜索 =================
