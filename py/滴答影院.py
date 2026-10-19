@@ -270,10 +270,12 @@ class Spider(Spider):
             if isinstance(extend[k], str) and "%" in extend[k]:
                 extend[k] = urllib.parse.unquote(extend[k])
 
-        # 提取真实的子分类 ID，过滤空字符串
         sub_tid = extend.get("tid")
+        # 关键致命 Bug 修复：TVBox 默认会传空字符串，必须过滤掉！
         real_tid = sub_tid if (sub_tid and sub_tid.strip()) else tid
 
+        # 核心修复：严格贴合苹果CMS真实格式 `/filter/id/13/year/2026.html`
+        base = ""
         c_val = extend.get("class", "").strip()
         a_val = extend.get("area", "").strip()
         l_val = extend.get("lang", "").strip()
@@ -281,8 +283,6 @@ class Spider(Spider):
         y_val = extend.get("year", "").strip()
         s_val = extend.get("sort", "").strip()
 
-        # 严格按照真实网页源码格式拼接（支持覆盖式筛选）
-        base = ""
         if c_val and y_val:
             base = "/filter/class/%s/id/%s/year/%s" % (urllib.parse.quote(c_val), real_tid, y_val)
         elif c_val:
