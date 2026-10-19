@@ -15,6 +15,8 @@
                  /lookup/year/{年份}.html
                  /lookup/actor/{名字}.html
     搜索          /lookup/wd/{关键词}.html
+    搜索分页      /lookup/page/{n}/wd/{关键词}.html
+    分类分页      /lookup/page/{n}/type/{typeId}.html
     ajax建议     /index.php/ajax/suggest?mid={typeId}&wd={关键词}  (返回 JSON)
 
 真实数据结构（已实测验证）:
@@ -136,8 +138,9 @@ _RE_LINKLIST = re.compile(
 _RE_LINK_NAMES = re.compile(r'>([^<>]{1,40}(?:</a>)?|</a>)(?![^<>]*</)', re.S)
 
 # 播放线路锚点 + 剧集链接: #playlist{N} 与 /watch/{vodId}/{line}/{ep}.html
-_RE_PLAYLIST_ANCHOR = re.compile(r'id=["\']?playlist(\d+)["\']?',
-                                 re.I)
+# 真实页面锚点有两种形态：id="playlist1" 或 <a href="#playlist1">，都要识别
+_RE_PLAYLIST_ANCHOR = re.compile(
+    r'(?:id=["\']?playlist(\d+)["\']?|href=["\']#playlist(\d+)["\'])', re.I)
 _RE_EPISODE = re.compile(
     r'<a\b[^>]*?href="(/watch/[^"]+?\.html)"[^>]*>([^<]{1,60})</a>',
     re.S | re.I)
@@ -151,6 +154,18 @@ _RE_MP4 = re.compile(r'https?://[^"\'\s<>]+\.mp4(?:\?[^"\'\s<>]*)?',
 _RE_MEDIA_URL = re.compile(
     r'(?:url|link|src)["\']?\s*[:=]\s*["\'](https?://[^"\']+)["\']',
     re.I)
+# 播放页 player_aaaa = {...} 里的 url 字段（最可靠的直链来源）
+_RE_PLAYER_JSON = re.compile(
+    r'player_\w+\s*=\s*(\{.*?\})\s*;', re.S | re.I)
+
+# img 标签（用于兜底提取）
+_RE_IMG = re.compile(r'<img\b([^>]*)>', re.S | re.I)
+_RE_IMG_ALT = re.compile(r'\balt\s*=\s*["\']([^"\']*)["\']', re.I)
+_RE_IMG_SRC = re.compile(
+    r'\b(?:data-original|data-src|src)\s*=\s*["\']([^"\']+)["\']', re.I)
+
+# 分页：真实分页链接形如 /lookup/page/{n}/type/{tid}.html
+_RE_PAGE_LINK = re.compile(r'/lookup/page/(\d+)/', re.I)
 
 
 class Spider(Spider):
@@ -337,7 +352,20 @@ class Spider(Spider):
 
     # ---------------- 首页 / 分类 ----------------
     def homeContent(self, filter=False):
-        return {"class": CLASSES, "filters": {}}
+        # 提供筛选面板（地区/年份），真实筛选走 /lookup/area|year/{值}.html
+        filters = {}
+        if filter:
+            areas = ["大陆", "香港", "台湾", "美国", "韩国", "日本",
+                     "泰国", "英国", "法国", "印度", "其它"]
+            years = [str(y) for y in range(2026, 2009, -1)]
+            for c in CLASSES:
+                filters[c["type_id"]] = [
+                    {"key": "area", "name": "地区",
+                     "value": [{"n": a, "v": a} for a in areas]},
+                    {"key": "year", "name": "年份",
+                     "value": [{"n": y, "v": y} for y in years]},
+                ]
+        return {"class": CLASSES, "filters": filters}
 
     def homeVideoContent(self):
         # 首页为 JSON 数据驱动(纯文本, 无 /film/ 链接)。最新影片直接走电影分类列表:
@@ -349,36 +377,70 @@ class Spider(Spider):
         return {"list": videos}
 
     def categoryContent(self, tid, pg, filter, extend):
-        # 真实分类列表页: /genre/{typeId}.html
-        # (1=电影 2=电视剧 3=综艺 4=动漫 24=短剧)
-        url = "%s/genre/%s.html" % (self.site_url, tid)
+        # 真实分类列表页: /genre/{typeId}.html (第1页)
+        # 分页: /lookup/page/{n}/type/{typeId}.html
+        pg = str(pg or "1")
+        extend = extend or {}
+        area = (extend.get("area") or "").strip()
+        year = (extend.get("year") or "").strip()
+
+        # 筛选优先（站点筛选页是 /lookup/area|year/{值}.html，不区分分类）
+        # 若同时给了分类，仍先用筛选页拿列表，再用分类过滤，保证可用性
+        if pg in ("1", "0", "") or pg == "1":
+            if area:
+                url = "%s/lookup/area/%s.html" % (
+                    self.site_url, urllib.parse.quote(area))
+            elif year:
+                url = "%s/lookup/year/%s.html" % (
+                    self.site_url, urllib.parse.quote(year))
+            else:
+                url = "%s/genre/%s.html" % (self.site_url, tid)
+        else:
+            url = "%s/lookup/page/%s/type/%s.html" % (
+                self.site_url, pg, tid)
+
         self.log("category: %s" % url)
         html = self._fetch(url)
         videos = self._extract_videos(html)
+        # 如果有分类筛选需求且当前是 area/year 页，按 vod_id 无法精确分类，
+        # 直接返回页面结果（站点筛选页本身已按条件列出）
+        pagecount = self._page_count(html)
         return {
-            "list": videos, "page": 1, "pagecount": 1,
-            "limit": len(videos) or 24, "total": len(videos),
+            "list": videos,
+            "page": int(pg) if str(pg).isdigit() else 1,
+            "pagecount": pagecount,
+            "limit": len(videos) or 24,
+            "total": len(videos),
         }
 
     # ---------------- 搜索 ----------------
     def _page_count(self, html):
+        """从真实分页链接 /lookup/page/{n}/... 提取最大页码作为总页数。"""
         if html:
-            nums = [int(p) for p in re.findall(r'page=(\d+)', html) if p.isdigit()]
+            nums = [int(p) for p in _RE_PAGE_LINK.findall(html) if p.isdigit()]
             if nums:
-                return max(nums) + 1
+                return max(nums)
         return 1
 
     def searchContent(self, key, quick, pg="1"):
         keyword = urllib.parse.quote(key)
+        pg = str(pg or "1")
         # 真实搜索页: /lookup/wd/{关键词}.html
-        url = "%s/lookup/wd/%s.html" % (self.site_url, keyword)
+        # 搜索分页: /lookup/page/{n}/wd/{关键词}.html
+        if pg in ("1", "0", ""):
+            url = "%s/lookup/wd/%s.html" % (self.site_url, keyword)
+        else:
+            url = "%s/lookup/page/%s/wd/%s.html" % (
+                self.site_url, pg, keyword)
         self.log("search: %s" % url)
         html = self._fetch(url)
         videos = self._extract_videos(html)
         return {
-            "list": videos, "page": 1,
+            "list": videos,
+            "page": int(pg) if pg.isdigit() else 1,
             "pagecount": self._page_count(html),
-            "limit": 24, "total": len(videos),
+            "limit": 24,
+            "total": len(videos),
         }
 
     def searchContentPage(self, key, quick, pg="1"):
@@ -466,22 +528,36 @@ class Spider(Spider):
     def _extract_play_lines(self, html, vod_id):
         """
         解析详情页播放线路（真实结构）:
-            <div id="playlist{N}"> ... </div> 内含该线路下所有
-            <a href="/watch/{vodId}/{line}/{ep}.html">第X集</a>
+            <div id="playlist{N}"> 或 <a href="#playlist{N}"> ... </div>
+            内含该线路下所有 <a href="/watch/{vodId}/{line}/{ep}.html">第X集</a>
         返回 {"names": [线路名...], "urls": [线路url串...]}
         """
-        lines_ordered = []  # [(line_id, ep_list)]
         # 先拿到锚点的出现顺序（定义页面线路顺序）
-        anchors = [(int(mm.group(1)), mm.start())
-                   for mm in _RE_PLAYLIST_ANCHOR.finditer(html)]
+        # 两种形态: id="playlistN" 或 href="#playlistN"
+        anchors = []
+        for mm in _RE_PLAYLIST_ANCHOR.finditer(html):
+            lid = mm.group(1) or mm.group(2)
+            if lid:
+                try:
+                    anchors.append((int(lid), mm.start()))
+                except ValueError:
+                    pass
+        # 去重（同一锚点可能同时命中 id 与 href，保持首次出现位置）
+        seen_anchor = {}
+        anchors_dedup = []
+        for lid, pos in sorted(anchors, key=lambda x: x[1]):
+            if lid in seen_anchor:
+                continue
+            seen_anchor[lid] = True
+            anchors_dedup.append((lid, pos))
+        anchors = anchors_dedup
+
         # 收集所有剧集与其所在的最近前置 playlist 锚点
         ep_matches = list(_RE_EPISODE.finditer(html))
         if not ep_matches:
             return {}
 
         # 为每个 ep 判定其归属线路：取它之前最近的 playlist 锚点
-        # 若没有前置锚点但有多个线路，则按片段的包络划分
-        # 简化可靠方案：按 <a> 相对位置与锚点位置归组
         import bisect
         anchor_pos = [p for _, p in anchors]
         anchor_ids = [i for i, _ in anchors]
@@ -497,6 +573,18 @@ class Spider(Spider):
             else:
                 lid = anchor_ids[idx - 1]
             url = self._fix_url(href.replace("&amp;", "&"))
+            # 过滤掉明显不属于本片 vodId 的链接（防止导航/推荐混入）
+            if vod_id and ("/watch/" in href):
+                # href 形如 /watch/{id}/{line}/{ep}.html，要求 id 与详情一致
+                seg = href.split("/")
+                if len(seg) >= 4 and vod_id not in ("", None):
+                    # 详情 vod_id 可能形如 "140883f.html" 或 "140883f"
+                    detail_key = vod_id.replace(".html", "").split("/")[-1]
+                    watch_key = seg[2].replace(".html", "")
+                    # 允许前缀匹配（站点偶尔带/不带后缀）
+                    if detail_key and not (watch_key.startswith(detail_key)
+                                           or detail_key.startswith(watch_key)):
+                        continue
             groups.setdefault(lid, []).append(
                 (self._clean(ep) or "第%s集" % (len(groups[lid]) + 1), url))
 
@@ -547,15 +635,27 @@ class Spider(Spider):
         html = self._fetch(play_page)
         media = ""
         if html:
-            m = _RE_M3U8.search(html)
-            if m:
-                media = m.group(0)
-            else:
-                m = _RE_MP4.search(html)
+            # 1) 优先解析播放器注入的 player_xxxx = {... "url":"..." ...}
+            for pm in _RE_PLAYER_JSON.finditer(html):
+                try:
+                    obj = json.loads(pm.group(1))
+                except Exception:
+                    continue
+                u = obj.get("url") or obj.get("link") or ""
+                if isinstance(u, str) and (".m3u8" in u or ".mp4" in u):
+                    media = u
+                    break
+            # 2) 退化为页面内直接出现的 m3u8 / mp4
+            if not media:
+                m = _RE_M3U8.search(html)
                 if m:
                     media = m.group(0)
+                else:
+                    m = _RE_MP4.search(html)
+                    if m:
+                        media = m.group(0)
+            # 3) 兜底：iframe / 注入 url 里含可播放媒体
             if not media:
-                # 兜底：iframe / 注入 url 里含可播放媒体
                 m = _RE_MEDIA_URL.search(html)
                 if m and (".m3u8" in m.group(1) or ".mp4" in m.group(1)):
                     media = m.group(1)
