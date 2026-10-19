@@ -271,16 +271,17 @@ class Spider(Spider):
                 extend[k] = urllib.parse.unquote(extend[k])
 
         sub_tid = extend.get("tid")
+        # 关键致命 Bug 修复：TVBox 默认会传空字符串，必须过滤掉！
         real_tid = sub_tid if (sub_tid and sub_tid.strip()) else tid
 
         # 核心修复：严格贴合苹果CMS真实格式 `/filter/id/13/year/2026.html`
         base = ""
-        c_val = extend.get("class", "")
-        a_val = extend.get("area", "")
-        l_val = extend.get("lang", "")
-        e_val = extend.get("letter", "")
-        y_val = extend.get("year", "")
-        s_val = extend.get("sort", "")
+        c_val = extend.get("class", "").strip()
+        a_val = extend.get("area", "").strip()
+        l_val = extend.get("lang", "").strip()
+        e_val = extend.get("letter", "").strip()
+        y_val = extend.get("year", "").strip()
+        s_val = extend.get("sort", "").strip()
 
         if y_val:
             base = "/filter/id/%s/year/%s" % (real_tid, y_val)
@@ -294,7 +295,7 @@ class Spider(Spider):
             base = "/filter/letter/%s/id/%s" % (e_val, real_tid)
         elif s_val:
             base = "/filter/by/%s/id/%s" % (s_val, real_tid)
-        elif sub_tid and sub_tid.strip() != tid:
+        elif real_tid != tid:
             base = "/filter/id/%s" % real_tid
 
         if base:
