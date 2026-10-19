@@ -144,7 +144,7 @@ HOST = "https://www.loldyw.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
-# 简介统一前缀（用户指定）
+# 简介统一前缀
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！\n"
 
 # 实测首页侧边导航: /genre/1.html 电影 / 2 电视剧 / 3 综艺片 / 4 动漫 / 24 短剧
@@ -555,14 +555,20 @@ class Spider(Spider):
     # ================= 列表解析 =================
 
     def _meta_value(self, body, start_pos):
-        """取字段值：到 split-line / 下一个标签 / 段落结束为止。"""
+        """取字段值：到 split-line / 段落结束 / 下一页标签为止。"""
         rest = body[start_pos:]
-        m = re.search(r'<span[^>]*class="[^"]*split-line|<(?!a\b)', rest, re.I)
+        # 重点修复：遇到 </p> 或 <p> 或者是下一个 split-line 就停止
+        m = re.search(r'</p\s*>|<p\b|<span[^>]*class="[^"]*split-line', rest, re.I)
         chunk = rest[:m.start()] if m else rest
+        
+        # 提取所有 <a> 标签里的文字，用逗号连接（针对主演这种多个标签的情况）
         names = [self._clean(x) for x in re.findall(r'<a\b[^>]*>([^<]*)</a>', chunk, re.I)]
         names = [x for x in names if x]
         if names:
+            # 如果全是逗号连接，可能不太好看，我们用 "/" 或者 "," 都行，这里选 ,
             return ",".join(names)
+        
+        # 如果没找到 <a>，就清理掉标签直接返回
         return self._clean(re.sub(r'<a\b[^>]*>([^<]*)</a>', r'\1', chunk))
 
     def _parse_meta(self, seg):
@@ -891,8 +897,8 @@ class Spider(Spider):
 
         # ---- 详细数据 ----
         detail_meta = {}
-        for pm in re.finditer(r'<p[^>]*class="[^"]*data[^"]*"[^>]*>([\s\S]*?)</p>',
-                              html, re.I):
+        # 专门匹配详情页的 <p class="data"> 提取精准信息
+        for pm in re.finditer(r'<p[^>]*class="[^"]*data[^"]*"[^>]*>([\s\S]*?)</p>', html, re.I):
             for k, val in self._parse_meta(pm.group(1)).items():
                 if k not in detail_meta:
                     detail_meta[k] = val
@@ -928,6 +934,9 @@ class Spider(Spider):
                 content = self._clean(md3.group(1))
         if not content:
             content = detail_meta.get("简介", "")
+
+        # 清理简介文本中可能出现的多余换行和空格
+        content = re.sub(r'\s+', ' ', content).strip()
 
         # 用户要求：简介统一加前缀
         content = INTRO_PREFIX + (content or "")
