@@ -247,7 +247,7 @@ class Spider(Spider):
                 "vod_id": href,
                 "vod_name": self._clean(name),
                 "vod_pic": self._fix(pic) or self.default_pic,
-                "vod_remarks": self._clean(remark),  # 补全了副标题（如：第17集）
+                "vod_remarks": self._clean(remark),
             })
         return videos
 
@@ -265,17 +265,13 @@ class Spider(Spider):
             except Exception: extend = {}
         extend = extend or {}
 
-        # 修复 TVBox 多重传参导致的 URL 编码问题
         for k in list(extend.keys()):
             if isinstance(extend[k], str) and "%" in extend[k]:
                 extend[k] = urllib.parse.unquote(extend[k])
 
         sub_tid = extend.get("tid")
-        # 关键修复：过滤掉空字符串，否则会拼接出 /genre/.html 导致404
         real_tid = sub_tid if (sub_tid and sub_tid.strip()) else tid
 
-        # 核心修复：严格贴合苹果CMS真实格式 `/filter/id/13/year/2026.html`
-        base = ""
         c_val = extend.get("class", "").strip()
         a_val = extend.get("area", "").strip()
         l_val = extend.get("lang", "").strip()
@@ -283,9 +279,8 @@ class Spider(Spider):
         y_val = extend.get("year", "").strip()
         s_val = extend.get("sort", "").strip()
 
-        if y_val:
-            base = "/filter/id/%s/year/%s" % (real_tid, y_val)
-        elif c_val:
+        # 严格按照源码真实路径格式组装
+        if c_val:
             base = "/filter/class/%s/id/%s" % (urllib.parse.quote(c_val), real_tid)
         elif a_val:
             base = "/filter/area/%s/id/%s" % (urllib.parse.quote(a_val), real_tid)
@@ -293,10 +288,14 @@ class Spider(Spider):
             base = "/filter/lang/%s/id/%s" % (urllib.parse.quote(l_val), real_tid)
         elif e_val:
             base = "/filter/letter/%s/id/%s" % (e_val, real_tid)
+        elif y_val:
+            base = "/filter/id/%s/year/%s" % (real_tid, y_val)
         elif s_val:
             base = "/filter/by/%s/id/%s" % (s_val, real_tid)
         elif real_tid != tid:
             base = "/filter/id/%s" % real_tid
+        else:
+            base = ""
 
         if base:
             if page > 1: base += "-%d" % page
