@@ -76,7 +76,6 @@ _LANG_LIST = [
     {"n": "其它", "v": "其它"}
 ]
 
-# 严格依据分类页源码中的 ul.iqy-screen__list，恢复了完整的“剧情（class）”配置
 FILTERS = {
     # 大类：电影
     "1": [
@@ -90,22 +89,19 @@ FILTERS = {
             {"n": "全部", "v": ""}, {"n": "喜剧", "v": "喜剧"}, {"n": "爱情", "v": "爱情"},
             {"n": "恐怖", "v": "恐怖"}, {"n": "动作", "v": "动作"}, {"n": "科幻", "v": "科幻"},
             {"n": "剧情", "v": "剧情"}, {"n": "战争", "v": "战争"}, {"n": "警匪", "v": "警匪"},
-            {"n": "犯罪", "v": "犯罪"}, {"n": "动画", "v": "动画"}, {"n": "奇幻", "v": "奇幻"},
-            {"n": "武侠", "v": "武侠"}, {"n": "冒险", "v": "冒险"}, {"n": "枪战", "v": "枪战"},
-            {"n": "悬疑", "v": "悬疑"}, {"n": "惊悚", "v": "惊悚"}
+            {"n": "犯罪", "v": "犯罪"}, {"n": "动画", "v": "动画"}, {"n": "奇幻", "v": "奇幻"}
         ]},
         {"key": "area", "name": "地区", "value": [
             {"n": "全部", "v": ""}, {"n": "大陆", "v": "大陆"}, {"n": "香港", "v": "香港"},
             {"n": "台湾", "v": "台湾"}, {"n": "美国", "v": "美国"}, {"n": "法国", "v": "法国"},
-            {"n": "英国", "v": "英国"}, {"n": "日本", "v": "日本"}, {"n": "韩国", "v": "韩国"},
-            {"n": "德国", "v": "德国"}, {"n": "泰国", "v": "泰国"}, {"n": "印度", "v": "印度"}
+            {"n": "英国", "v": "英国"}, {"n": "日本", "v": "日本"}, {"n": "韩国", "v": "韩国"}
         ]},
         {"key": "year", "name": "年份", "value": _YEAR_LIST},
         {"key": "lang", "name": "语言", "value": _LANG_LIST},
         {"key": "letter", "name": "字母", "value": _LETTER_LIST},
         {"key": "sort", "name": "排序", "value": _SORT_LIST},
     ],
-    # 大类：电视剧 (含有你截图里的 古装、战争、青春偶像等)
+    # 大类：电视剧
     "2": [
         {"key": "tid", "name": "类型", "value": [
             {"n": "全部", "v": ""}, {"n": "国产剧", "v": "13"}, {"n": "香港剧", "v": "14"},
@@ -116,15 +112,12 @@ FILTERS = {
             {"n": "全部", "v": ""}, {"n": "古装", "v": "古装"}, {"n": "战争", "v": "战争"},
             {"n": "青春偶像", "v": "青春偶像"}, {"n": "喜剧", "v": "喜剧"}, {"n": "家庭", "v": "家庭"},
             {"n": "犯罪", "v": "犯罪"}, {"n": "动作", "v": "动作"}, {"n": "奇幻", "v": "奇幻"},
-            {"n": "剧情", "v": "剧情"}, {"n": "历史", "v": "历史"}, {"n": "经典", "v": "经典"},
-            {"n": "乡村", "v": "乡村"}, {"n": "情景", "v": "情景"}, {"n": "商战", "v": "商战"},
-            {"n": "网剧", "v": "网剧"}, {"n": "其他", "v": "其他"}
+            {"n": "剧情", "v": "剧情"}, {"n": "历史", "v": "历史"}, {"n": "经典", "v": "经典"}
         ]},
         {"key": "area", "name": "地区", "value": [
             {"n": "全部", "v": ""}, {"n": "内地", "v": "内地"}, {"n": "韩国", "v": "韩国"},
             {"n": "香港", "v": "香港"}, {"n": "台湾", "v": "台湾"}, {"n": "日本", "v": "日本"},
-            {"n": "美国", "v": "美国"}, {"n": "泰国", "v": "泰国"}, {"n": "英国", "v": "英国"},
-            {"n": "新加坡", "v": "新加坡"}, {"n": "其他", "v": "其他"}
+            {"n": "美国", "v": "美国"}, {"n": "泰国", "v": "泰国"}, {"n": "英国", "v": "英国"}
         ]},
         {"key": "year", "name": "年份", "value": _YEAR_LIST},
         {"key": "lang", "name": "语言", "value": _LANG_LIST},
@@ -253,7 +246,6 @@ class Spider(Spider):
 
     def _parse_list(self, html):
         videos, seen = [], set()
-        # 使用严格的正则提取卡片，兼容 search 页面和普通分类页面
         for m in _RE_CARD.finditer(html or ""):
             href, name, pic = m.group(1), m.group(2), m.group(3)
             if href in seen: continue
@@ -280,7 +272,12 @@ class Spider(Spider):
             except Exception: extend = {}
         extend = extend or {}
 
-        # 关键修复：提取真实的子分类 ID，排除空字符串
+        # 修复双重 URL 编码问题，防止服务器因乱码返回空列表
+        for k in list(extend.keys()):
+            if isinstance(extend[k], str) and "%" in extend[k]:
+                extend[k] = urllib.parse.unquote(extend[k])
+
+        # 提取真实的子分类 ID，排除空字符串
         sub_tid = extend.get("tid")
         real_tid = sub_tid if (sub_tid and sub_tid.strip()) else tid
 
@@ -296,16 +293,13 @@ class Spider(Spider):
         # 判断走 /filter/ 还是 /genre/
         if prefix or (sub_tid and sub_tid.strip() != tid):
             if not prefix:
-                # 用户只选择了“子类型”（如国产剧13），不选年份等，真实路径为 /filter/id/13.html
                 base = "/filter/id/%s" % real_tid
             else:
-                # 用户选择了年份等筛选，真实路径为 /filter/id/13/year/2026.html
                 base = "/filter/%sid/%s" % (prefix, real_tid)
             
             if page > 1: base += "-%d" % page
             url = self.site_url + base + ".html"
         else:
-            # 未选筛选且未选子类型，走默认 /genre/
             if page <= 1: url = "%s/genre/%s.html" % (self.site_url, real_tid)
             else: url = "%s/genre/%s-%d.html" % (self.site_url, real_tid, page)
 
