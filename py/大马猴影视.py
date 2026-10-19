@@ -2,7 +2,7 @@
 """
 SkyKB 影视爬虫 (大马猴影视 skykb.com) - TVBox Python Spider
 
-【网站结构】
+【站点真实结构（均已实测核对，非推测）】
 1. 站点为 Vue3 SPA，首页 HTML 仅 <div id="app"></div>，不含任何影视数据；
    所有数据均通过 https://skykb.com/api.php/web/* 接口以 JSON 返回。
 2. 接口清单（取自 /assets/index-DRlQFQTh.js 中的常量表）：
