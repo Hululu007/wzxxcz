@@ -6,6 +6,7 @@
 关键:
   - 详情页视频列表: resource-box-nav 线路名 + rb-item 剧集列表
   - 播放页 player_aaaa 对象，url 为 URL 编码的真实 m3u8 地址
+  - 简介前添加指定前缀
 """
 import re
 import sys
@@ -167,8 +168,9 @@ _RE_THUMB = re.compile(
     re.I)
 
 # 详情页信息字段 (类型 / 导演 / 主演 / 年份 / 地区 / 资源 / 豆瓣)
+# 【修改处1】：放宽标签匹配，解决源码内标签自带全角冒号导致无法匹配的问题
 _RE_INFO_LABEL = re.compile(
-    r'<p><label>([^：]+)：</label><span>([\s\S]*?)</span></p>',
+    r'<p><label>([^<]+?)</label><span>([\s\S]*?)</span></p>',
     re.S | re.I)
 
 # 详情页简介
@@ -534,7 +536,8 @@ class Spider(Spider):
         # 信息字段
         info = {}
         for m in _RE_INFO_LABEL.finditer(html):
-            label = self._clean(m.group(1))
+            # 【修改处2】：匹配出的 label 可能带冒号，去掉冒号再存入字典
+            label = self._clean(m.group(1)).replace("：", "").strip()
             value = self._clean(m.group(2))
             if label and value:
                 info[label] = value
