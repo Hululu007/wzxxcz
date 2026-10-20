@@ -3,7 +3,7 @@
 泡泡影院 www.zhonganedu.com | TVBox Python 爬虫
 ==================================================
 
-【网站结构】
+【真实结构依据】
 1) 频道导航：/class/1.html 电影、/class/2.html 电视剧、/class/3.html 综艺片、
    /class/4.html 动漫、/class/24.html 短剧
 
@@ -897,8 +897,24 @@ class Spider(Spider):
 
         html = self._fetch(url)
         self.log("  HTML: %d" % len(html))
+
+        # 【关键】详情页是“能不能播”的第一道门。
+        # 站点源站回源不稳，同一详情页实测有连续 6 次全 520 的情况
+        # （/celluloid/z3133105.html：几分钟前 200，缓存过期后连 6 次 520）。
+        # 原来这里只取一次，一旦 520 就 return 空列表 ——
+        # 表现为“刚还能播，清缓存重进就播不了”。
+        # 故这里做多轮重试，退避拉长，尽量熬过抖动窗口。
         if not html or self._is_error_page(html):
-            self.log("  详情页不可用")
+            for i, wait in enumerate((1.5, 3.0, 5.0), 1):
+                self.log("  详情页错误，%.1fs 后第 %d 次重试" % (wait, i))
+                time.sleep(wait)
+                html = self._fetch(url, retry=0)
+                self.log("    -> HTML: %d" % len(html))
+                if html and not self._is_error_page(html):
+                    break
+
+        if not html or self._is_error_page(html):
+            self.log("  详情页连续失败，返回空（站点故障，非无此片）")
             return {"list": []}
 
         # 标题：优先 <a class="ff-text">片名</a>，其次 <title>
@@ -1132,13 +1148,20 @@ class Spider(Spider):
             if now - ts < 600:
                 return res
 
-        # 播放页偶发 520（源站回源抖动），重试一次，别直接丢给嗅探
-        html = self._fetch(play_url)
-        m3u8 = self._parse_player(html)
-        if not m3u8:
-            time.sleep(0.6)
-            html = self._fetch(play_url)
+        # 播放页不稳（源站回源抖动，实测有连续多次 520）。
+        # 不能只试一次就把播放页地址丢给嗅探——播放页本身没有视频流，
+        # 嗅探必然失败，用户看到的就是“点了没反应/一直转圈”。
+        # 这里多轮重试，每次重新抓播放页并重新解析 player_aaaa。
+        m3u8 = ""
+        waits = (0.0, 1.2, 2.5, 4.0)
+        for i, w in enumerate(waits):
+            if w:
+                time.sleep(w)
+            html = self._fetch(play_url, retry=0)
             m3u8 = self._parse_player(html)
+            if m3u8:
+                break
+            self.log("  第 %d 次未取到 player_aaaa（HTML=%d）" % (i + 1, len(html)))
 
         if m3u8 and m3u8.startswith("http"):
             m3u8 = self._normalize_play_url(m3u8, play_url)
@@ -1164,7 +1187,10 @@ class Spider(Spider):
                 },
             }
 
-        self._play_cache[play_url] = (now, res)
+        # 只在成功拿到直链时缓存，失败结果绝不缓存
+        # （否则用户重试也会一直拿到失败结果，看起来像“彻底不能播了”）
+        if res["parse"] == 0:
+            self._play_cache[play_url] = (now, res)
         return res
 
     def localProxy(self, param):
