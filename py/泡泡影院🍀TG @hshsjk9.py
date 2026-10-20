@@ -9,8 +9,8 @@
   - 详情页: 剧集按 tab-pane id="playurl-tab-{sid}" 分组，链接 /playurl/z{vid}/{sid}/{nid}.html
   - 播放页: var player_aaaa={...} 中 url 为 m3u8 直链，parse=0 直接返回
   - 简介添加指定前缀
-  - 筛选逻辑: 严格依据真实源码 /explore/ 路由格式，修复类型、地区、年份的组合与翻页
-  - 图片修复: 直接返回原图，由 TVBox 默认加载
+  - 筛选逻辑: 严格依据真实源码的 /explore/ 路由结构拼接（支持组合筛选与翻页）
+  - 图片修复: 返回真实直链，规避代理路径解析失败导致全占位符的问题
 """
 import re
 import sys
@@ -279,44 +279,39 @@ class Spider(Spider):
         if area == "全部": area = ""
         if year == "全部": year = ""
 
-        # 严格根据真实源码结构构建 URL
+        # 1. 无筛选
         if not cls and not area and not year:
-            # 无筛选
             if page == 1:
                 url = "%s/class/%s.html" % (self.site_url, tid)
             else:
                 url = "%s/class/%s-%d.html" % (self.site_url, tid, page)
         else:
-            # 有筛选，严格复现 /explore/ 路径
+            # 2. 有筛选（严格按源码真实存在的 URL 结构来拼）
             parts = ["explore"]
             
-            # 1. 分类 (如果选择了子分类，取其中文名)
-            cname = ""
-            for cn, cid in _FILTERS_MAP.get(tid, []):
-                if cid == cls:
-                    cname = cn
-                    break
+            # 分类
+            if cls:
+                cname = ""
+                for cn, cid in _FILTERS_MAP.get(tid, []):
+                    if cid == cls:
+                        cname = cn
+                        break
+                if cname and cname != "全部":
+                    parts.append("class/%s" % urllib.parse.quote(cname))
             
-            if cname and cname != "全部":
-                parts.append("class/%s" % urllib.parse.quote(cname))
-            
-            # 2. 地区 (源码格式: /explore/area/大陆/id/7.html)
+            # 地区
             if area:
                 parts.append("area/%s" % urllib.parse.quote(area))
             
-            # 3. 年份 (源码格式: /explore/id/7/year/2010.html)
-            if year:
-                # 注意：年份在 id 之后，这是源码的格式
-                pass # 先跳过，统一在 id 后面处理
-
-            # 4. ID (必须放在路径中)
-            parts.append("id/%s" % (cls if cls else tid))
+            # ID 必须放在这里（用于确认大类）
+            c_id = cls if cls else tid
+            parts.append("id/%s" % c_id)
             
-            # 5. 年份 (接在 id 后面)
+            # 年份（源码里年份是放在 id 之后的，比如 /explore/id/7/year/2010.html）
             if year:
                 parts.append("year/%s" % year)
-            
-            # 6. 翻页
+                
+            # 页码（如果是 explore 路由，翻页一般插在 .html 之前）
             if page > 1:
                 parts.append("page/%d" % page)
                 
