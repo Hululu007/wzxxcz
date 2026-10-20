@@ -218,6 +218,7 @@ def _aes_cbc_decrypt(key: bytes, iv: bytes, data: bytes) -> bytes:
     return _pure_cbc_decrypt(key, iv, data)
 SITE = "https://hongguoduanju.com"
 EPISODE_PREFIX = "hg-episode-v1:"
+INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 # 红果每集视频模型按清晰度返回多条独立线路（360/480/540/720/1080），
 # 每条带 main_url + backup_url 双 CDN 与独立加密材料。这里把清晰度作为
 # TVBox 多线路暴露；内封音/视轨在解密 _rewrite_moov 时天然全部保留。
@@ -518,6 +519,10 @@ class HongguoPluginError(RuntimeError):
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+def _intro_with_prefix(text: Any) -> str:
+    """给简介统一加提示前缀。"""
+    return INTRO_PREFIX + _text(text)
 
 def _first(*values: Any) -> str:
     for value in values:
@@ -3996,7 +4001,7 @@ class Spider(_BaseSpider):
             "vod_name": name,
             "vod_pic": cover,
             "vod_remarks": episode_text or ("全%s集" % episode_cnt if episode_cnt else ""),
-            "vod_content": intro,
+            "vod_content": _intro_with_prefix(intro),
             "vod_tag": "",
         }
 
@@ -4036,7 +4041,7 @@ class Spider(_BaseSpider):
             "vod_name": _s(x.get("title")),
             "vod_pic": _s(x.get("cover")),
             "vod_remarks": " ".join(t for t in [_s(x.get("statusTags")), _s(x.get("scoreText"))] if t),
-            "vod_content": _s(x.get("description")),
+            "vod_content": _intro_with_prefix(x.get("description")),
             "vod_tag": "",
         }
 
@@ -4251,7 +4256,7 @@ class Spider(_BaseSpider):
                 "vod_id": str(sd.get("series_id", "")),
                 "vod_name": sd.get("series_name") or sd.get("series_title", ""),
                 "vod_pic": sd.get("series_cover", ""),
-                "vod_content": sd.get("series_intro", ""),
+                "vod_content": _intro_with_prefix(sd.get("series_intro", "")),
                 "vod_remarks": sd.get("episode_right_text", ""),
                 "vod_year": "",
                 "vod_area": "",
@@ -4357,7 +4362,7 @@ class Spider(_BaseSpider):
                     "vod_name": name,
                     "vod_pic": cover,
                     "vod_remarks": remark,
-                    "vod_content": intro,
+                    "vod_content": _intro_with_prefix(intro),
                     "vod_tag": "",
                 })
             for e in pend:
@@ -4373,7 +4378,7 @@ class Spider(_BaseSpider):
                     "vod_name": sd.get("series_name") or sd.get("series_title") or e["name"],
                     "vod_pic": sd.get("series_cover") or e["cover"],
                     "vod_remarks": sd.get("episode_right_text") or e["remark"],
-                    "vod_content": sd.get("series_intro") or e["intro"],
+                    "vod_content": _intro_with_prefix(sd.get("series_intro") or e["intro"]),
                     "vod_tag": "",
                 })
             result["list"] = items
