@@ -1,12 +1,12 @@
 # coding=utf-8
 """
-枫叶影院 926dy.com | TVBox Python 爬虫 (V1.3 真实结构版)
+枫叶影院 926dy.com | TVBox Python 爬虫 
 关键:
-  - 真实分类结构：顶级分类走 /type/{id}.html，并在其下支持 ?area=&year= 筛选
+  - 真实分类结构：完美还原 /type/{id}/area/{area}/year/{year}/page/{page}.html 的拼接逻辑
+  - 真实筛选栏：严格根据顶级分类动态生成真实的“地区”和“年份”选项
   - 真实卡片提取：解析静态 HTML (匹配 a.thumb、img[data-original]、span.state)
   - 真实播放页：解析 JS 变量 player_aaaa，提取 url 字段并用 unquote 解码真实的 m3u8 直链
   - 真实搜索接口：POST 提交到 /search/-------------.html，参数 wd
-  - 简介添加指定前缀
 """
 import re
 import sys
@@ -73,30 +73,45 @@ CLASSES = [
     {"type_id": "34", "type_name": "短剧"},
 ]
 
-# 严格按照真实页面存在的筛选条件（去掉了不存在的地区限制）
-FILTERS = {
-    "1": [
-        {"key": "area", "name": "地区", "value": [{"n": "全部", "v": ""}, {"n": "大陆", "v": "大陆"}, {"n": "香港", "v": "香港"}, {"n": "台湾", "v": "台湾"}, {"n": "美国", "v": "美国"}, {"n": "日本", "v": "日本"}, {"n": "韩国", "v": "韩国"}]},
-        {"key": "year", "name": "年份", "value": [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]}
-    ],
-    "2": [
-        {"key": "area", "name": "地区", "value": [{"n": "全部", "v": ""}, {"n": "内地", "v": "内地"}, {"n": "韩国", "v": "韩国"}, {"n": "香港", "v": "香港"}, {"n": "台湾", "v": "台湾"}, {"n": "日本", "v": "日本"}, {"n": "美国", "v": "美国"}]},
-        {"key": "year", "name": "年份", "value": [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]}
-    ],
-    "3": [
-        {"key": "area", "name": "地区", "value": [{"n": "全部", "v": ""}, {"n": "内地", "v": "内地"}, {"n": "港台", "v": "港台"}, {"n": "日韩", "v": "日韩"}, {"n": "欧美", "v": "欧美"}]},
-        {"key": "year", "name": "年份", "value": [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]}
-    ],
-    "4": [
-        {"key": "area", "name": "地区", "value": [{"n": "全部", "v": ""}, {"n": "国产", "v": "国产"}, {"n": "日本", "v": "日本"}, {"n": "欧美", "v": "欧美"}]},
-        {"key": "year", "name": "年份", "value": [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]}
-    ],
-    "34": [
-        {"key": "year", "name": "年份", "value": [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]}
-    ]
+# 严格提取自真实网页的筛选选项
+_FILTERS_MAP = {
+    "1": {
+        "area": ["大陆", "香港", "台湾", "美国", "法国", "英国", "日本", "韩国", "德国", "泰国", "印度", "意大利", "西班牙", "加拿大", "其他"],
+        "year": [str(y) for y in range(2026, 1999, -1)]
+    },
+    "2": {
+        "area": ["内地", "韩国", "香港", "台湾", "日本", "美国", "泰国", "英国", "新加坡", "其他"],
+        "year": [str(y) for y in range(2026, 1999, -1)]
+    },
+    "3": {
+        "area": ["内地", "港台", "日韩", "欧美"],
+        "year": [str(y) for y in range(2026, 1999, -1)]
+    },
+    "4": {
+        "area": ["国产", "日本", "欧美", "其他"],
+        "year": [str(y) for y in range(2026, 1999, -1)]
+    },
+    "34": {
+        "year": [str(y) for y in range(2026, 2020, -1)]
+    }
 }
 
-# 真实列表卡片结构：a.thumb > img[data-original] + span.state + h5.subject
+FILTERS = {}
+for tid in _FILTERS_MAP:
+    f_list = []
+    if "area" in _FILTERS_MAP[tid]:
+        f_list.append({
+            "key": "area", "name": "地区",
+            "value": [{"n": "全部", "v": ""}] + [{"n": a, "v": a} for a in _FILTERS_MAP[tid]["area"]]
+        })
+    if "year" in _FILTERS_MAP[tid]:
+        f_list.append({
+            "key": "year", "name": "年份",
+            "value": [{"n": "全部", "v": ""}] + [{"n": y, "v": y} for y in _FILTERS_MAP[tid]["year"]]
+        })
+    FILTERS[tid] = f_list
+
+# 真实列表卡片结构
 _RE_CARD = re.compile(
     r'<a\s+href="(/post/\d+\.html)"\s+class="thumb"[^>]*>\s*'
     r'<img[^>]*?data-original="([^"]+)"[^>]*>\s*'
@@ -169,13 +184,14 @@ class Spider(Spider):
         area = extend.get("area", "")
         year = extend.get("year", "")
         
-        # 真实结构拼接: /type/2/area/内地/year/2025.html
+        # 严格按照真实网页 URL 结构拼接
         url = f"{HOST}/type/{tid}"
         if area: url += f"/area/{urllib.parse.quote(area)}"
         if year: url += f"/year/{year}"
         if page > 1: url += f"/page/{page}"
         url += ".html"
 
+        self.log(f"Category URL: {url}")
         html = self._fetch(url)
         videos = self._extract_videos(html)
 
@@ -194,7 +210,6 @@ class Spider(Spider):
         }
 
     def searchContent(self, key, quick, pg="1"):
-        # 真实 POST 搜索接口
         url = f"{HOST}/search/-------------.html"
         post_data = {"wd": key}
         html = self._fetch(url, post_data=post_data)
@@ -211,26 +226,30 @@ class Spider(Spider):
         html = self._fetch(url)
         if not html: return {"list": []}
 
-        # 真实详情页提取
+        # 标题
         name = ""
         m = re.search(r'<h1 class="article-subject-m">([^<]+)</h1>', html)
         if m: name = self._clean(m.group(1))
 
+        # 封面
         pic = ""
         m = re.search(r'<meta property="og:image" content="([^"]+)"', html)
         if m: pic = m.group(1)
 
+        # 简介
         content = ""
         m = re.search(r'<div style="text-indent: 28px;">([\s\S]*?)</div>', html)
         if m: content = self._clean(m.group(1))
         content = INTRO_PREFIX + "\n" + content if content else INTRO_PREFIX
 
+        # 导演与演员
         director, actor = "", ""
         m = re.search(r'<label>导演：</label><span>([^<]+)</span>', html)
         if m: director = self._clean(m.group(1))
         m = re.search(r'<label>主演：</label><span>([^<]+)</span>', html)
         if m: actor = self._clean(m.group(1))
 
+        # 线路与剧集
         play_from = []
         play_url = []
         
@@ -266,7 +285,6 @@ class Spider(Spider):
         url = id if id.startswith("http") else HOST + id
         html = self._fetch(url, headers={"Referer": HOST + "/"})
 
-        # 解析 JS 变量并反转义 URL
         m = re.search(r'var player_aaaa=(\{.*?\})</script>', html, re.S)
         if m:
             try:
