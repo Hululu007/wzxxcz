@@ -2,11 +2,11 @@
 """
 枫叶影院 926dy.com | TVBox Python 爬虫 
 关键:
-  - 真实分类结构：完美还原 /type/{id}/area/{area}/year/{year}/page/{page}.html 的拼接逻辑
-  - 真实筛选栏：严格根据顶级分类动态生成真实的“地区”和“年份”选项
-  - 真实卡片提取：解析静态 HTML (匹配 a.thumb、img[data-original]、span.state)
-  - 真实播放页：解析 JS 变量 player_aaaa，提取 url 字段并用 unquote 解码真实的 m3u8 直链
-  - 真实搜索接口：POST 提交到 /search/-------------.html，参数 wd
+  - 完美还原顶级分类筛选（第一行：子分类如“国产剧”、“港台剧”，第二行：地区，第三行：年份）
+  - 解析静态 HTML 列表卡片 (匹配 a.thumb 和 img[data-original])
+  - 详情页通过 ul.nav-tabs 提取线路名，rb-item 提取剧集节点
+  - 播放页解析 JS 变量 player_aaaa，提取 url 字段并用 urllib.parse.unquote 解码 m3u8 直链
+  - 搜索接口为 POST 提交到 /search/-------------.html，参数 wd
 """
 import re
 import sys
@@ -73,43 +73,41 @@ CLASSES = [
     {"type_id": "34", "type_name": "短剧"},
 ]
 
-# 严格提取自真实网页的筛选选项
-_FILTERS_MAP = {
-    "1": {
-        "area": ["大陆", "香港", "台湾", "美国", "法国", "英国", "日本", "韩国", "德国", "泰国", "印度", "意大利", "西班牙", "加拿大", "其他"],
-        "year": [str(y) for y in range(2026, 1999, -1)]
-    },
-    "2": {
-        "area": ["内地", "韩国", "香港", "台湾", "日本", "美国", "泰国", "英国", "新加坡", "其他"],
-        "year": [str(y) for y in range(2026, 1999, -1)]
-    },
-    "3": {
-        "area": ["内地", "港台", "日韩", "欧美"],
-        "year": [str(y) for y in range(2026, 1999, -1)]
-    },
-    "4": {
-        "area": ["国产", "日本", "欧美", "其他"],
-        "year": [str(y) for y in range(2026, 1999, -1)]
-    },
-    "34": {
-        "year": [str(y) for y in range(2026, 2020, -1)]
-    }
+# 严格按照真实网页 /type/xxx.html 提取的精准筛选项
+FILTERS = {
+    "1": [
+        {"key": "class", "name": "类型", "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in ["动作片", "喜剧片", "爱情片", "科幻片", "恐怖片", "剧情片", "战争片", "悬疑片", "冒险片", "奇幻片", "惊悚片", "动画片", "纪录片", "其他片"]]},
+        {"key": "area", "name": "地区", "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in ["大陆", "香港", "台湾", "美国", "法国", "英国", "日本", "韩国", "德国", "泰国", "印度", "意大利", "西班牙", "加拿大", "其他"]]},
+        {"key": "year", "name": "年份", "value": [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]}
+    ],
+    "2": [
+        {"key": "class", "name": "子分类", "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in ["国产剧", "港台剧", "日韩剧", "欧美剧", "海外剧"]]},
+        {"key": "area", "name": "地区", "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in ["内地", "韩国", "香港", "台湾", "日本", "美国", "泰国", "英国", "新加坡", "其他"]]},
+        {"key": "year", "name": "年份", "value": [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]}
+    ],
+    "3": [
+        {"key": "class", "name": "子分类", "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in ["大陆综艺", "日韩综艺", "港台综艺", "欧美综艺", "海外综艺"]]},
+        {"key": "area", "name": "地区", "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in ["内地", "港台", "日韩", "欧美"]]},
+        {"key": "year", "name": "年份", "value": [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]}
+    ],
+    "4": [
+        {"key": "class", "name": "子分类", "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in ["国产动漫", "日本动漫", "欧美动漫", "海外动漫"]]},
+        {"key": "area", "name": "地区", "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in ["国产", "日本", "欧美", "其他"]]},
+        {"key": "year", "name": "年份", "value": [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]}
+    ],
+    "34": [
+        {"key": "year", "name": "年份", "value": [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 2020, -1)]}
+    ]
 }
 
-FILTERS = {}
-for tid in _FILTERS_MAP:
-    f_list = []
-    if "area" in _FILTERS_MAP[tid]:
-        f_list.append({
-            "key": "area", "name": "地区",
-            "value": [{"n": "全部", "v": ""}] + [{"n": a, "v": a} for a in _FILTERS_MAP[tid]["area"]]
-        })
-    if "year" in _FILTERS_MAP[tid]:
-        f_list.append({
-            "key": "year", "name": "年份",
-            "value": [{"n": "全部", "v": ""}] + [{"n": y, "v": y} for y in _FILTERS_MAP[tid]["year"]]
-        })
-    FILTERS[tid] = f_list
+# 真实分类映射：为了完美拼接真实网站的子分类路径 (/sort/20.html)
+SORT_MAP = {
+    "动作片": 6, "喜剧片": 7, "爱情片": 8, "科幻片": 9, "恐怖片": 10, "剧情片": 11, 
+    "战争片": 12, "悬疑片": 13, "冒险片": 14, "奇幻片": 15, "惊悚片": 16, "动画片": 17, "纪录片": 18, "其他片": 19,
+    "国产剧": 20, "港台剧": 21, "日韩剧": 22, "欧美剧": 23, "海外剧": 24,
+    "大陆综艺": 25, "日韩综艺": 26, "港台综艺": 27, "欧美综艺": 28, "海外综艺": 29,
+    "国产动漫": 30, "日本动漫": 31, "欧美动漫": 32, "海外动漫": 33
+}
 
 # 真实列表卡片结构
 _RE_CARD = re.compile(
@@ -181,11 +179,17 @@ class Spider(Spider):
             try: extend = json.loads(extend)
             except Exception: extend = {}
         
+        class_name = extend.get("class", "")
         area = extend.get("area", "")
         year = extend.get("year", "")
         
-        # 严格按照真实网页 URL 结构拼接
-        url = f"{HOST}/type/{tid}"
+        # 解析真实的子分类路径 (/sort/20.html)
+        if class_name and class_name in SORT_MAP:
+            sort_id = SORT_MAP[class_name]
+            url = f"{HOST}/sort/{sort_id}"
+        else:
+            url = f"{HOST}/type/{tid}"
+            
         if area: url += f"/area/{urllib.parse.quote(area)}"
         if year: url += f"/year/{year}"
         if page > 1: url += f"/page/{page}"
@@ -226,30 +230,26 @@ class Spider(Spider):
         html = self._fetch(url)
         if not html: return {"list": []}
 
-        # 标题
+        # 真实详情页提取
         name = ""
         m = re.search(r'<h1 class="article-subject-m">([^<]+)</h1>', html)
         if m: name = self._clean(m.group(1))
 
-        # 封面
         pic = ""
         m = re.search(r'<meta property="og:image" content="([^"]+)"', html)
         if m: pic = m.group(1)
 
-        # 简介
         content = ""
         m = re.search(r'<div style="text-indent: 28px;">([\s\S]*?)</div>', html)
         if m: content = self._clean(m.group(1))
         content = INTRO_PREFIX + "\n" + content if content else INTRO_PREFIX
 
-        # 导演与演员
         director, actor = "", ""
         m = re.search(r'<label>导演：</label><span>([^<]+)</span>', html)
         if m: director = self._clean(m.group(1))
         m = re.search(r'<label>主演：</label><span>([^<]+)</span>', html)
         if m: actor = self._clean(m.group(1))
 
-        # 线路与剧集
         play_from = []
         play_url = []
         
@@ -261,9 +261,9 @@ class Spider(Spider):
         
         rb_items = re.findall(r'<div class="rb-item"[^>]*>([\s\S]*?)</div>', html)
         for rb in rb_items:
-            eps = re.findall(r'<li><a href="(/watch/[^"]+)">([^<]+)</a></li>', rb)
+            eps = re.findall(r'<li><a href="(/watch/[^"]+)">([^<]+)</a>', rb)
             if eps:
-                play_url.append("#".join(f"{name}${HOST}{href}" for href, name in eps))
+                play_url.append("#".join(f"{ep_name}${HOST}{href}" for href, ep_name in eps))
             else:
                 play_url.append("")
 
