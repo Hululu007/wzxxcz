@@ -2,9 +2,8 @@
 """
 泡泡影院 www.zhonganedu.com | TVBox Python 爬虫
 ==================================================
-全部解析规则均来自真实抓取的页面源码，逐项标注依据。
 
-【真实结构依据】
+【网站结构】
 1) 频道导航：/class/1.html 电影、/class/2.html 电视剧、/class/3.html 综艺片、
    /class/4.html 动漫、/class/24.html 短剧
 
