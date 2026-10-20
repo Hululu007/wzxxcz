@@ -1,8 +1,9 @@
 # coding=utf-8
 """
-枫叶影院 926dy.com | TVBox Python 爬虫 
+枫叶影院 926dy.com | TVBox Python 爬虫 (V2.0 严格还原版)
 关键:
-  - 完美还原顶级分类筛选（第一行：子分类如“国产剧”、“港台剧”，第二行：地区，第三行：年份）
+  - 严格依照真实网页 UI 提取筛选条件（连续剧仅包含：地区、年份两行）
+  - 移除多余的子分类选项，避免 TVBox 筛选错位
   - 解析静态 HTML 列表卡片 (匹配 a.thumb 和 img[data-original])
   - 详情页通过 ul.nav-tabs 提取线路名，rb-item 提取剧集节点
   - 播放页解析 JS 变量 player_aaaa，提取 url 字段并用 urllib.parse.unquote 解码 m3u8 直链
@@ -73,40 +74,27 @@ CLASSES = [
     {"type_id": "34", "type_name": "短剧"},
 ]
 
-# 严格按照真实网页 /type/xxx.html 提取的精准筛选项
+# 【严格依照真实网页截图配置的筛选列表】
 FILTERS = {
     "1": [
-        {"key": "class", "name": "类型", "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in ["动作片", "喜剧片", "爱情片", "科幻片", "恐怖片", "剧情片", "战争片", "悬疑片", "冒险片", "奇幻片", "惊悚片", "动画片", "纪录片", "其他片"]]},
         {"key": "area", "name": "地区", "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in ["大陆", "香港", "台湾", "美国", "法国", "英国", "日本", "韩国", "德国", "泰国", "印度", "意大利", "西班牙", "加拿大", "其他"]]},
         {"key": "year", "name": "年份", "value": [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]}
     ],
     "2": [
-        {"key": "class", "name": "子分类", "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in ["国产剧", "港台剧", "日韩剧", "欧美剧", "海外剧"]]},
         {"key": "area", "name": "地区", "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in ["内地", "韩国", "香港", "台湾", "日本", "美国", "泰国", "英国", "新加坡", "其他"]]},
         {"key": "year", "name": "年份", "value": [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]}
     ],
     "3": [
-        {"key": "class", "name": "子分类", "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in ["大陆综艺", "日韩综艺", "港台综艺", "欧美综艺", "海外综艺"]]},
         {"key": "area", "name": "地区", "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in ["内地", "港台", "日韩", "欧美"]]},
         {"key": "year", "name": "年份", "value": [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]}
     ],
     "4": [
-        {"key": "class", "name": "子分类", "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in ["国产动漫", "日本动漫", "欧美动漫", "海外动漫"]]},
         {"key": "area", "name": "地区", "value": [{"n": "全部", "v": ""}] + [{"n": x, "v": x} for x in ["国产", "日本", "欧美", "其他"]]},
         {"key": "year", "name": "年份", "value": [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]}
     ],
     "34": [
         {"key": "year", "name": "年份", "value": [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 2020, -1)]}
     ]
-}
-
-# 真实分类映射：为了完美拼接真实网站的子分类路径 (/sort/20.html)
-SORT_MAP = {
-    "动作片": 6, "喜剧片": 7, "爱情片": 8, "科幻片": 9, "恐怖片": 10, "剧情片": 11, 
-    "战争片": 12, "悬疑片": 13, "冒险片": 14, "奇幻片": 15, "惊悚片": 16, "动画片": 17, "纪录片": 18, "其他片": 19,
-    "国产剧": 20, "港台剧": 21, "日韩剧": 22, "欧美剧": 23, "海外剧": 24,
-    "大陆综艺": 25, "日韩综艺": 26, "港台综艺": 27, "欧美综艺": 28, "海外综艺": 29,
-    "国产动漫": 30, "日本动漫": 31, "欧美动漫": 32, "海外动漫": 33
 }
 
 # 真实列表卡片结构
@@ -179,17 +167,11 @@ class Spider(Spider):
             try: extend = json.loads(extend)
             except Exception: extend = {}
         
-        class_name = extend.get("class", "")
         area = extend.get("area", "")
         year = extend.get("year", "")
         
-        # 解析真实的子分类路径 (/sort/20.html)
-        if class_name and class_name in SORT_MAP:
-            sort_id = SORT_MAP[class_name]
-            url = f"{HOST}/sort/{sort_id}"
-        else:
-            url = f"{HOST}/type/{tid}"
-            
+        # 真实顶级分类路径: /type/{tid}/area/{area}/year/{year}/page/{page}.html
+        url = f"{HOST}/type/{tid}"
         if area: url += f"/area/{urllib.parse.quote(area)}"
         if year: url += f"/year/{year}"
         if page > 1: url += f"/page/{page}"
