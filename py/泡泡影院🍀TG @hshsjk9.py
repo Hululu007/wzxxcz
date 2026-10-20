@@ -9,8 +9,8 @@
   - 详情页: 剧集按 tab-pane id="playurl-tab-{sid}" 分组，链接 /playurl/z{vid}/{sid}/{nid}.html
   - 播放页: var player_aaaa={...} 中 url 为 m3u8 直链，parse=0 直接返回
   - 简介添加指定前缀
-  - 筛选逻辑: 依据真实源码拼接 /explore/ 路由，支持按顺序累加（类型/地区/年份）和 /page/{页码} 翻页
-  - 图片修复: 增加 localProxy 代理图片并补充 Referer，解决防盗链导致的纯色大字报问题
+  - 筛选逻辑: 依据真实源码拼接 /explore/ 路由，完美还原网站筛选（类型/地区/年份/翻页）
+  - 图片修复: 直接返回原图，由 TVBox 默认加载（去除导致占位符的错误代理）
 """
 import re
 import sys
@@ -74,7 +74,7 @@ CLASSES = [
     {"type_id": "24", "type_name": "短剧"},
 ]
 
-# 依据真实源码 /explore/ 路径收集的子分类
+# 依据真实源码收集的子分类，第一位为真实中文名（用于路由拼接），第二位为ID
 _FILTERS_MAP = {
     "1": [("全部", "1"), ("动作片", "6"), ("喜剧片", "7"), ("爱情片", "8"),
           ("科幻片", "9"), ("剧情片", "10"), ("战争片", "11"),
@@ -211,13 +211,6 @@ class Spider(Spider):
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
 
-    def _proxy_image(self, pic):
-        """将图片转为 TVBox 本地代理，解决防盗链大字报问题"""
-        if not pic or not pic.startswith("http"):
-            return pic
-        # 如果图片里含有特殊字符，最好先 base64 或者 urlencode
-        return self.site_url + "/proxy?url=" + urllib.parse.quote(pic, safe='')
-
     def _extract_videos(self, html):
         videos = []
         seen = set()
@@ -231,7 +224,7 @@ class Spider(Spider):
             videos.append({
                 "vod_id":      href,
                 "vod_name":    self._clean(alt)[:100],
-                "vod_pic":     self._proxy_image(raw_pic),
+                "vod_pic":     raw_pic,
                 "vod_remarks": "",
             })
         return videos
@@ -279,7 +272,7 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
-        cls = extend.get("class") or tid
+        cls = extend.get("class") or ""
         area = extend.get("area") or ""
         year = extend.get("year") or ""
         
@@ -291,34 +284,41 @@ class Spider(Spider):
         if year == "全部":
             year = ""
 
-        # 纯常规分类（无筛选且无子分类）：走 /class/{id}-{page}.html
+        # 无筛选：走 /class/{id}-{page}.html
         if not cls and not area and not year:
             if page == 1:
                 url = "%s/class/%s.html" % (self.site_url, tid)
             else:
                 url = "%s/class/%s-%d.html" % (self.site_url, tid, page)
         else:
-            # 有筛选条件，走真实的 /explore/ 路由拼接
-            # 基础路径：/explore/
+            # 有筛选，依据真实 MacCMS 路由拼接 /explore/
             parts = ["explore"]
             
-            # 1. 分类 (如果没有选择分类，就用当前频道id代替)
-            c_id = cls if cls else tid
-            # 因为 /explore/class/动作片/id/6.html 这里的"动作片"其实是它在 URL 里的类名编码，
-            # 由于不能直接反推路由，MacCMS 标准过滤法通常用 /explore/type/6.html 或者 /explore/id/6.html
-            # 依照你提供的源码：/explore/class/喜剧/id/7.html
-            # 我们直接采用 id 筛选，MacCMS 原生支持 /explore/id/6/area/大陆.html
-            parts.append("id/%s" % c_id)
+            # 如果是纯子分类（比如没有地区年份，只选了“动作片”），它也是走 /explore/class/xx/id/xx.html
+            # 因为网页的筛选【分类】选了“动作片”，链接本身就是 /explore/id/6.html 或 /explore/class/动作片/id/6.html
+            # 为了兼容网页，我们需要从映射中找出对应的中文名称
+            cname = ""
+            for cn, cid in _FILTERS_MAP.get(tid, []):
+                if cid == cls:
+                    cname = cn
+                    break
             
-            # 2. 地区
+            if cname and cname != "全部":
+                parts.append("class/%s" % urllib.parse.quote(cname))
+            elif cls:
+                # 兜底，只用 id
+                pass
+                
             if area:
                 parts.append("area/%s" % urllib.parse.quote(area))
                 
-            # 3. 年份
             if year:
                 parts.append("year/%s" % year)
                 
-            # 4. 页码
+            # 注意：筛选时的 id 必须放在最后面（MacCMS特性）
+            parts.append("id/%s" % (cls if cls else tid))
+            
+            # 翻页追加 /page/N
             if page > 1:
                 parts.append("page/%d" % page)
                 
@@ -382,8 +382,7 @@ class Spider(Spider):
         pic = self.default_pic
         m = _RE_DETAIL_PIC.search(html)
         if m:
-            raw_pic = self._fix_url(m.group(1))
-            pic = self._proxy_image(raw_pic)
+            pic = self._fix_url(m.group(1))
 
         # 简介：优先 vod-blurb，其次 vod-content
         content = ""
@@ -509,45 +508,7 @@ class Spider(Spider):
         return res
 
     def localProxy(self, param):
-        """
-        代理图片请求，强行带上 Referer，解决防盗链展示大字报问题
-        """
-        try:
-            if isinstance(param, dict):
-                url = param.get("url", "")
-            else:
-                # TVBox 传进来格式通常是 ?url=https%3A%2F%2F...
-                url = ""
-                if "?" in param:
-                    param = param.split("?", 1)[1]
-                for pair in param.split("&"):
-                    if "=" in pair:
-                        k, v = pair.split("=", 1)
-                        if k == "url":
-                            url = v
-            
-            if not url:
-                return [404, "text/plain", b"no url", ""]
-                
-            url = urllib.parse.unquote(url) if "%" in url else url
-            url = self._fix_url(url)
-            
-            # 请求图片时带上 Referer，欺骗图床
-            rsp = self.fetch(url, headers={
-                "User-Agent": UA,
-                "Referer": self.site_url + "/"
-            }, timeout=15)
-            
-            content = rsp.content
-            ctype = rsp.headers.get("Content-Type", "image/jpeg")
-            # 如果取到的不是图片，强制改回图片类型
-            if not ctype.startswith("image/"):
-                ctype = "image/jpeg"
-                
-            return [200, ctype, content, ""]
-        except Exception as e:
-            self.log("proxy image fail: %s" % e)
-            return [500, "text/plain", b"error", ""]
+        return [200, "image/jpeg", b"", ""]
 
     def isVideoFormat(self, url):
         return ".m3u8" in url or ".mp4" in url
