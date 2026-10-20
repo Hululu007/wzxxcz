@@ -531,12 +531,16 @@
             "homePage": "https://xcz.iptv365.org/酷我音乐.html"
         },
         {
-            "key": "18jtv",
+    "key": "18jtv",
             "name": "🐲18jtv",
-            "type": 3,
-            "api": "csp_Nostr",
-            "homePage": "https://xcz.iptv365.org/18jtv.html"
-        },
+    "type": 3,
+    "jar": "/jars/web.jar",
+    "searchable": 0,
+    "quickSearch": 0,
+    "filterable": 0,
+    "ext": "https://xcz.iptv365.org/18jtv.html"
+},
+
         {
             "key": "Nostr",
             "name": "🐲Nostr推荐",
