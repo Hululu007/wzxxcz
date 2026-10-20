@@ -760,15 +760,19 @@ class Spider(Spider):
                 url = "%s/class/%s-%d.html" % (self.site_url, cid, page)
             else:
                 url = self._explore_url(cid, cat, area, year)
+            fallback = ""      # 带筛选没有等价第二路径，失败就是失败
         else:
-            # 无筛选（含只选分类）：第 1 页用 /explore/id/{id}.html，
-            # 这正是页面上「分类」组 <a> 的原样 href；
-            # 翻页用页面自己给的 /class/{id}-{N}.html。
-            # （实测 /explore/id/7.html 200 而 /class/7.html 520，
-            #   两者内容等价，但前者是页面真实入口，命中率更高。）
-            url = ("%s/class/%s-%d.html" % (self.site_url, cid, page)
-                   if page > 1
-                   else "%s/explore/id/%s.html" % (self.site_url, cid))
+            # 无筛选（含只选分类）：/class/{id}.html 与 /explore/id/{id}.html
+            # 是同一个列表（页面两种链接都有）。当前源站回源故障期间，
+            # 只有 CDN 有缓存的才能打开，而缓存分布无规律
+            # （实测同一时刻 /explore/id/7.html 200 而 /class/7.html 520；
+            #   另一时刻又反过来 /class/2.html 200 而 /explore/id/2.html 520）。
+            # 所以第 1 页做双路径回退：先 /class/，失败再 /explore/id/。
+            primary   = "%s/class/%s.html" % (self.site_url, cid)
+            secondary = "%s/explore/id/%s.html" % (self.site_url, cid)
+            fallback  = secondary
+            url = (primary if page == 1
+                   else "%s/class/%s-%d.html" % (self.site_url, cid, page))
 
         self.log("category: %s" % url)
         html = self._fetch(url)
@@ -781,6 +785,12 @@ class Spider(Spider):
             time.sleep(2.0)
             html = self._fetch(url, retry=0)
             self.log("  二次重试后 HTML: %d" % len(html))
+
+        # 双路径回退：/class/ 与 /explore/id/ 内容相同，换一条再试
+        if self._is_error_page(html) and fallback:
+            self.log("  回退备用路径: %s" % fallback)
+            html = self._fetch(fallback, retry=1)
+            self.log("  回退后 HTML: %d" % len(html))
 
         videos = self._extract_videos(html)
         pagecount = self._page_count(html, cid)
