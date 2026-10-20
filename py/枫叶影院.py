@@ -71,6 +71,8 @@ CLASSES = [
 ]
 
 # 电影分类 type id (从网站实际 type/ 路径提取)
+# 1=电影总分类, 6=动作, 7=喜剧, 8=爱情, 9=科幻, 10=恐怖, 11=剧情,
+# 12=战争, 13=悬疑, 14=冒险, 15=奇幻, 16=惊悚, 17=动画, 18=纪录片
 _MOVIE_CLASSES = [
     ("6", "动作片"), ("7", "喜剧片"), ("8", "爱情片"), ("9", "科幻片"),
     ("10", "恐怖片"), ("11", "剧情片"), ("12", "战争片"), ("13", "悬疑片"),
@@ -78,20 +80,25 @@ _MOVIE_CLASSES = [
     ("18", "纪录片"),
 ]
 # 连续剧分类
+# 2=连续剧总分类, 19=国产剧, 20=香港剧, 21=韩国剧, 22=美国剧, 23=日本剧,
+# 24=台湾剧, 25=泰国剧, 26=英国剧, 27=印度剧, 28=法国剧
 _TV_CLASSES = [
     ("19", "国产剧"), ("20", "香港剧"), ("21", "韩国剧"), ("22", "美国剧"),
     ("23", "日本剧"), ("24", "台湾剧"), ("25", "泰国剧"), ("26", "英国剧"),
     ("27", "印度剧"), ("28", "法国剧"),
 ]
 # 综艺分类
+# 3=综艺总分类, 29=国产综艺, 30=港台综艺, 31=日韩综艺, 32=欧美综艺
 _VARIETY_CLASSES = [
     ("29", "国产综艺"), ("30", "港台综艺"), ("31", "日韩综艺"), ("32", "欧美综艺"),
 ]
 # 动漫分类
+# 4=动漫总分类, 33=动漫 (具体子类需从网站确认, 先用通用)
 _ANIME_CLASSES = [
     ("33", "动漫"),
 ]
 # 短剧分类
+# 34=短剧总分类
 _SHORT_CLASSES = [
     ("35", "短剧"),
 ]
@@ -132,10 +139,13 @@ for c in CLASSES:
 
 # ============== 正则 ==============
 
+# 卡片提取: li.item 块
+# 使用非贪婪匹配，遇到下一个 li 开头停止
 _RE_LI_ITEM = re.compile(
     r'<li\s+class="item">(.*?)(?=<li\s+class="item">|</ul>)',
     re.S | re.I)
 
+# 从 li 块内提取: href, alt, pic, name, tags
 _RE_CARD_HREF = re.compile(
     r'<a\s+href="(/post/\d+\.html)"\s+class="thumb"', re.I)
 _RE_CARD_IMG = re.compile(
@@ -147,13 +157,22 @@ _RE_CARD_TAGS = re.compile(
 _RE_CARD_STATE = re.compile(
     r'<span\s+class="state">([^<]*)</span>', re.I)
 
+# 详情页标题
 _RE_H1 = re.compile(
     r'<h1\s+class="article-subject-m">([^<]+)</h1>', re.I)
 
+# 详情页封面
 _RE_THUMB = re.compile(
     r'<img[^>]*?id="movie_thumb"[^>]*?(?:data-original|src)="([^"]*)"',
     re.I)
 
+# 详情页信息字段 (类型 / 导演 / 主演 / 年份 / 地区 / 资源 / 豆瓣)
+# 【修改处1】：放宽标签匹配，解决源码内标签自带全角冒号导致无法匹配的问题
+_RE_INFO_LABEL = re.compile(
+    r'<p><label>([^<]+?)</label><span>([\s\S]*?)</span></p>',
+    re.S | re.I)
+
+# 详情页简介
 _RE_INTRO = re.compile(
     r'<h2>详情介绍</h2>[\s\S]*?'
     r'<div\s+class="box">[\s\S]*?'
@@ -161,31 +180,40 @@ _RE_INTRO = re.compile(
     r'</div>',
     re.S | re.I)
 
+# 详情页线路名
 _RE_TAB_NAV = re.compile(
     r'<a\s+href="javascript:;"\s+class="tab-nav">([^<]+)</a>',
     re.I)
 
+# 详情页剧集条目: 每个 rb-item 里的 <li><a href="/watch/xxx">yyy</a></li>
 _RE_EPISODE = re.compile(
     r'<li><a\s+href="(/watch/\d+-\d+-\d+\.html)"[^>]*>([^<]+)</a></li>',
     re.I)
 
+# rb-item 块: 从 class="rb-item" 到下一个 class="rb-item" 或 bd 结束
+# 用 episodes-list 更可靠
 _RE_EPISODES_LIST = re.compile(
     r'<ul\s+class="episodes-list[^"]*">([\s\S]*?)</ul>',
     re.S | re.I)
 
+# 播放页 player_aaaa 对象
 _RE_PLAYER_AAAA = re.compile(
     r'player_aaaa\s*=\s*(\{[\s\S]*?\});',
     re.S)
 
+# 播放页 url 字段 (URL 编码 %xx 格式)
 _RE_PLAYER_URL = re.compile(r'"url"\s*:\s*"([^"]*)"', re.I)
 _RE_PLAYER_FROM = re.compile(r'"from"\s*:\s*"([^"]*)"', re.I)
 
+# 分页: 末页链接
 _RE_LAST_PAGE = re.compile(
     r'title="末页"[^>]*href="[^"]*page/(\d+)\.html"', re.I)
 
+# 分页: 显示 "..XXX页" 的文本
 _RE_PAGE_TOTAL = re.compile(
     r'\.\.(\d+)页', re.I)
 
+# 搜索页总页数 (JS 赋值)
 _RE_SEARCH_TOTAL = re.compile(r'mac_record_total.*?text\((\d+)\)', re.I)
 
 
@@ -211,6 +239,7 @@ class Spider(Spider):
         self._play_cache = {}
         self.log("init: site=%s" % self.site_url)
 
+    # ---------- 工具方法 ----------
     def _fetch(self, url, timeout=20, headers=None):
         try:
             h = dict(self.headers)
@@ -227,6 +256,7 @@ class Spider(Spider):
             return ""
 
     def _post(self, url, data, timeout=20, headers=None):
+        """POST 请求（用于搜索）"""
         try:
             h = dict(self.headers)
             if headers:
@@ -236,8 +266,10 @@ class Spider(Spider):
             import requests as _req
             sess = getattr(self, '_sess', None)
             if sess is None:
+                # 尝试通过基类属性获取 session
                 sess = getattr(self, '_session', None)
             if sess is None:
+                # 兜底: 用 requests 模块
                 rsp = _req.post(url, data=data, headers=h,
                                 timeout=timeout, verify=False)
             else:
@@ -277,6 +309,7 @@ class Spider(Spider):
         return s.strip()
 
     def _extract_videos(self, html):
+        """从列表页 HTML 提取视频卡片"""
         videos = []
         seen = set()
         if not html:
@@ -284,10 +317,12 @@ class Spider(Spider):
 
         for li_m in _RE_LI_ITEM.finditer(html):
             block = li_m.group(1)
+
             href_m = _RE_CARD_HREF.search(block)
             if not href_m:
                 continue
             href = href_m.group(1)
+
             if href in seen:
                 continue
             seen.add(href)
@@ -314,6 +349,7 @@ class Spider(Spider):
             if state_m:
                 state = state_m.group(1).strip()
 
+            # 备注: 用状态(HD/更新至xx集) + 标签(年份/地区)
             remark = state
             if tags:
                 remark = remark + " " + tags if remark else tags
@@ -326,6 +362,7 @@ class Spider(Spider):
             })
         return videos
 
+    # ---------- 分类 ----------
     def homeContent(self, filter=False):
         return {"class": CLASSES, "filters": FILTERS}
 
@@ -345,17 +382,22 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
+        # 清理空值
         for k in list(extend.keys()):
             if extend[k] in ("", None, "全部"):
                 del extend[k]
 
+        # 如果指定了子类 (class)，用子类 type id
         use_tid = extend.get("class") or tid
 
+        # 构造 URL
+        # 基础格式: /type/{tid}.html, 第二页起: /type/{tid}/page/{page}.html
         if page <= 1:
             base_url = "%s/type/%s.html" % (self.site_url, use_tid)
         else:
             base_url = "%s/type/%s/page/%d.html" % (self.site_url, use_tid, page)
 
+        # 附加地区/年份筛选 (如果网站支持 query 参数)
         params = {}
         if extend.get("area"):
             params["area"] = extend["area"]
@@ -373,6 +415,7 @@ class Spider(Spider):
 
         videos = self._extract_videos(html)
 
+        # 总页数
         pagecount = 1
         m = _RE_LAST_PAGE.search(html)
         if m:
@@ -388,6 +431,7 @@ class Spider(Spider):
                 except Exception:
                     pagecount = 999
             else:
+                # 兜底: 看页码链接
                 pages = re.findall(r'/type/\d+/page/(\d+)\.html', html)
                 if pages:
                     try:
@@ -395,7 +439,7 @@ class Spider(Spider):
                     except Exception:
                         pagecount = 999
                 else:
-                    pagecount = 1
+                    pagecount = 1  # 没有分页(总分类聚合页)
 
         self.log("  视频: %d 条, 总页数: %d" % (len(videos), pagecount))
 
@@ -404,14 +448,18 @@ class Spider(Spider):
             "limit": 30, "total": pagecount * 30,
         }
 
+    # ---------- 搜索 ----------
     def searchContent(self, key, quick, pg="1"):
         page = int(pg) if pg else 1
         keyword = urllib.parse.quote(key)
 
+        # 第一页: POST 到 /search/-------------.html
+        # 第N页: GET  /search/{keyword}----------{page}---.html
         if page <= 1:
             url = "%s/search/-------------.html" % self.site_url
             html = self._post(url, data="wd=%s" % keyword)
         else:
+            # 分页格式: /search/关键词----------页码---.html (10个- + 页码 + 3个-)
             url = "%s/search/%s----------%d---.html" % (
                 self.site_url, keyword, page)
             html = self._fetch(url)
@@ -421,6 +469,7 @@ class Spider(Spider):
 
         videos = self._extract_videos(html)
 
+        # 总页数 (从 JS 里取)
         total = 0
         m = _RE_SEARCH_TOTAL.search(html)
         if m:
@@ -431,6 +480,7 @@ class Spider(Spider):
         else:
             total = len(videos)
 
+        # 也可以从 page_total text 里取总页数
         pagecount = max(1, (total + 29) // 30) if total > 0 else 1
         m_pt = re.search(r'mac_page_total.*?text\((\d+)\)', html)
         if m_pt:
@@ -448,6 +498,7 @@ class Spider(Spider):
     def searchContentPage(self, key, quick, pg="1"):
         return self.searchContent(key, quick, pg)
 
+    # ---------- 详情 ----------
     def detailContent(self, ids):
         if not ids:
             return {"list": []}
@@ -481,32 +532,20 @@ class Spider(Spider):
         if m:
             pic = self._fix_url(m.group(1))
 
-        # 修复：精准提取 导演/演员/年份/地区/豆瓣
-        director = ""
-        actor = ""
-        year = ""
-        area = ""
-        score = ""
-        
-        # 提取所有 info-wrap 里的 p 标签内容
-        info_blocks = re.findall(r'<div class="info-wrap low">([\s\S]*?)</div>', html)
-        if info_blocks:
-            info_html = info_blocks[0]
-            # 提取所有的 label 和 span 内容
-            infos = re.findall(r'<label>([^<]+)</label><span>([\s\S]*?)</span>', info_html)
-            for label, value in infos:
-                label = label.replace("：", "").strip()
-                value = self._clean(value)
-                if label == "导演":
-                    director = value
-                elif label == "主演":
-                    actor = value
-                elif label == "年份":
-                    year = value
-                elif label == "地区":
-                    area = value
-                elif label == "豆瓣":
-                    score = value
+        # 信息字段
+        info = {}
+        for m in _RE_INFO_LABEL.finditer(html):
+            # 【修改处2】：匹配出的 label 可能带冒号，去掉冒号再存入字典
+            label = self._clean(m.group(1)).replace("：", "").strip()
+            value = self._clean(m.group(2))
+            if label and value:
+                info[label] = value
+
+        director = info.get("导演", "")
+        actor = info.get("主演", "")
+        year = info.get("年份", "")
+        area = info.get("地区", "")
+        score = info.get("豆瓣", "")
 
         # 简介
         content = ""
@@ -514,11 +553,13 @@ class Spider(Spider):
         if m:
             content = self._clean(m.group(1))
         if not content:
+            # 兜底: meta description
             m = re.search(
                 r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']',
                 html, re.I)
             if m:
                 content = self._clean(m.group(1))
+                # 去掉前缀的 "xxx又名...简介："
                 idx = content.find("简介：")
                 if idx >= 0:
                     content = content[idx + 3:]
@@ -528,9 +569,13 @@ class Spider(Spider):
         else:
             content = INTRO_PREFIX
 
-        # 剧集提取
+        # ===== 剧集提取 =====
+        # 结构: resource-box-nav 里的 tab-nav 是线路名
+        # bd 里每个 ul.episodes-list 对应一条线路的剧集
         tab_names = [m.group(1).strip()
                      for m in _RE_TAB_NAV.finditer(html)]
+
+        # 提取所有 episodes-list (每个线路一个)
         ep_lists = _RE_EPISODES_LIST.findall(html)
 
         self.log("  线路名: %s, episodes-list: %d" % (tab_names, len(ep_lists)))
@@ -562,6 +607,7 @@ class Spider(Spider):
             eps = groups[origin]
             play_url.append("#".join("%s$%s" % (n, h) for n, h in eps))
 
+        # 备注信息
         remark_parts = []
         if year:
             remark_parts.append(year)
@@ -583,6 +629,7 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
+    # ---------- 播放 ----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -601,11 +648,13 @@ class Spider(Spider):
             self._play_cache[play_page] = (now, res)
             return res
 
+        # 解析 player_aaaa 对象
         real_url = ""
         idx = html.find("player_aaaa")
         if idx >= 0:
             start = html.find("{", idx)
             if start >= 0:
+                # 找到匹配的闭 }
                 depth = 0
                 in_str = False
                 escape = False
@@ -654,6 +703,7 @@ class Spider(Spider):
             self._play_cache[play_page] = (now, res)
             return res
 
+        # 兜底: 交给 TVBox 嗅探
         res = {"parse": 1, "playUrl": "", "url": play_page,
                "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
         self._play_cache[play_page] = (now, res)
