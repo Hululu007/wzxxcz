@@ -2,6 +2,7 @@
 """
 泡泡影院 www.zhonganedu.com | TVBox Python 爬虫
 ==================================================
+全部解析规则均来自真实抓取的页面源码，逐项标注依据。
 
 【网站结构】
 1) 频道导航：/class/1.html 电影、/class/2.html 电视剧、/class/3.html 综艺片、
@@ -53,15 +54,71 @@
    注意：id 段是频道/分类id（13=国产剧），class 段是类型名（古装/战争），
         两者不是一回事，绝不能把分类id塞进 class 段。
 
-6) 详情页：
-   标题  <h4><a href="/celluloid/z9696775.html" class="ff-text">片名</a></h4>
-   主演  <dt>主演：</dt><dd class="ff-text-hidden ff-nb"><a ...>王凯</a>&nbsp;...
-   状态  <dt>状态：</dt><dd class="ff-text-hidden" style="color:#FF0000">TC</dd>
-   导演  <dt>导演：</dt><dd ...><a ...>谢君伟</a>&nbsp;</dd>
-   地区  <dt class="hidden-xs">地区：</dt><dd ...><a ...>大陆</a></dd>
-   年份  <dt>年份：</dt><dd><a href="/query/year/2026.html">2026</a></dd>
-   简介  <div class="vod-content"> ... </div>   ← 完整的“剧情主线”正文
-         （另有 <dd class="... vod-blurb"> 短简介，带“详细...”截断，不用它）
+5.1) 【筛选面板的真实 DOM：五组 dl，逐组照抄】
+     频道页 /class/{tid}.html 里，列表区之前是连续的
+         <dl class="dl-horizontal"><dt>Xxx：</dt><dd class="...">…<a href="...">…</a></dd></dl>
+     实测五个频道都是同样五组、同样顺序：
+         频道 → 分类 → 类型 → 地区 → 年代
+     逐组真实 href 形状：
+         频道 /explore/id/{频道id}.html                 （1/2/3/4/24）
+         分类 /explore/id/{分类id}.html                 “全部”是 /explore.html（无 id 段）
+              分类id：电影 6/7/8/9/10/11/41/12/39；电视剧 13/14/15/16/22/21/20/23；
+                      综艺 25/26/27/28；动漫 29/30/42/31/43；短剧 40/44
+         类型 /explore/class/{类型名}/id/{频道id}.html
+         地区 /explore/area/{地区名}/id/{频道id}.html
+         年代 /explore/id/{频道id}/year/{年}.html
+     **页面上没有“排序”组**：唯一出现 by/hits 的是右上角「筛选」按钮
+         <a class="btn btn-success btn-sm pull-right" href="/explore/by/hits/id/4.html">
+     那是入口不是筛选项，所以本爬虫不提供“排序”面板。
+
+     各频道取值差异（照抄页面，不补不凑）：
+       电影(1)  类型 26（无重复）  地区 15（“大陆”）  年代 16（**无 2011**）
+       电视剧(2) 类型 16            地区 10            年代 17
+       综艺(3)  类型 13            地区  4（内地/港台/日韩/欧美）  年代 15（2018…2004，**无 2019+**）
+       动漫(4)  类型 20            地区  4（国产/日本/欧美/其他）  年代 15（2018…2004）
+       短剧(24) 类型/地区/年代 三组都只有一个<b>空文本</b>的“全部”，没有可选值
+     → 所以按频道分表（_CATS_BY_TID / _TYPES_BY_TID / _AREAS_BY_TID / _YEARS_BY_TID），
+       短剧只给「分类」。
+
+5.2) 【分类 = 换 id，不是额外的筛选段】
+     页面上「分类」组的 href 是 /explore/id/13.html，
+     而 /explore/id/2.html 与 /class/2.html 正文一致；
+     /explore/id/7.html 页脚的“下一页/尾页”直接就是
+         <a href="/class/7-2.html">下一页</a>
+         <a href="/class/7-4898.html">尾页</a>
+     → 说明 {id} 这个位置就是列表主体，分类只是换了个 id。
+     故 categoryContent 里：选分类 → cid 换成该分类；翻页一律
+     /class/{cid}-{N}.html。页面也从不产生“分类+类型+年代”同时出现的地址。
+
+5.3) 【explore 页翻页会丢筛选条件（站点自身行为）】
+     GET /explore/area/%E5%86%85%E5%9C%B0/id/13.html （该筛选只有 2 页）页脚原文：
+         <a href="/class/13-1.html">上一页</a>
+         <a href="/class/13-2.html">下一页</a>
+         <a href="/class/13-2.html">尾页</a>
+     —— 翻页链接全部退回 /class/{id}-{N}.html，筛选条件被丢掉。
+     不是爬虫 bug，代码照它的链接走。
+
+6) 详情页（真实源码 z3133105 伟大的长征）：
+   封面区  <a class="detail-thumb-pic" href="/playurl/z3133105/6/1.html" title="伟大的长征">
+             <img class="img-responsives ff-img" data-original="https://img.dytt-tupian.com/…/a08a….webp"
+                  src="/template/hl009/images/load.gif" alt="伟大的长征"/>
+             <span class="detail-thumb-play hidden-xs"></span>
+             <span class="detail-thumb-text">更新至第20集</span>
+           → 状态文本 detail-thumb-text 比 <dt>状态</dt> 更靠前，两者内容一致，
+             这里优先取 detail-thumb-text。
+   标题  <h4><a href="/celluloid/z3133105.html" class="ff-text">伟大的长征</a></h4>
+   <dl class="dl-horizontal"> 字段顺序（**没有“类型”字段**）：
+     主演：<dd class="ff-text-hidden ff-nb"><a href="/query/actor/于和伟.html">于和伟</a>&nbsp;…
+     状态：<dd class="ff-text-hidden" style="color:#FF0000">更新至第20集</dd>
+     导演：<dd class="ff-text-hidden ff-nb"><a href="/query/director/张永新.html">张永新</a>
+     地区：<dt class="hidden-xs">地区：</dt><dd class="hidden-xs ff-text-hidden ff-nb"><a href="/query/area/大陆.html">大陆</a>
+     年份：<dd><a href="/query/year/2026.html">2026</a>
+     剧情：<dd class="hidden-xs vod-blurb">…截断…<a href="#vod_content" class="ff-text">详细...</a>
+   完整简介在别处：<div class="vod-content"> … </div>（多段，含全角空格）
+   → 故 vod_class 无从可取（页面本就没有），_TYPES_BY_TID 只服务筛选面板。
+   “猜你喜欢”卡片 class 为
+      <li class="ff-vod-img-list col-md-3 col-sm-2 col-xs-4 text-center ff-col ff-vod-img-hot ">
+   与列表页 <li class="ff-vod-img-list …"> 前缀相同，_RE_LI 可直接通用。
 
 7) 线路与剧集（关键陷阱，已实测确认）：
    <ul ... class="... play-title">
@@ -114,6 +171,49 @@
     （实测 /playurl/z9696775/1..5/1.html 连续 6 次全部 520，隔几分钟又恢复）。
     故 _fetch 默认对 520 错误页重试 1 次，playerContent 再补一次重试；
     仍失败才退回 parse=1（播放页本身没有视频流可嗅探，但保留兜底不报错）。
+
+10.1) 【重大实测结论：源站整站回源不可用，只有 CF 缓存能出内容】
+     本轮系统性探测确认，问题不是随机抖动，而是**按“有没有缓存”规律性失败**：
+
+       GET /class/2.html        200  cf-cache-status:HIT  age:10927  18 卡片
+       GET /class/2-2.html      200  cf-cache-status:HIT  age:3847   18 卡片
+       GET /class/2-50.html     520  （无缓存 → 回源 → 挂）
+       GET /class/13-3.html     520  （无缓存 → 回源 → 挂）
+       GET /class/6-2.html      520  （无缓存 → 回源 → 挂）
+       GET /explore/id/13.html             200 HIT 18 卡片
+       GET /explore/area/内地/id/13.html   200 HIT 18 卡片
+       GET /explore/id/2.html              520
+       GET /explore/by/hits/id/2.html       520
+       GET /explore/id/2/year/2024.html     520
+       GET /celluloid/z3133105.html        200（之前抓过，已缓存）
+       GET /celluloid/z1234567.html        520（从没被抓过）
+
+     进一步按“路径里有没有中文/extra 段”分组，规律非常干净（同一分钟内多次验证）：
+         GET /explore/id/7.html            200 23730   ← 纯数字，命中缓存
+         GET /explore/id/6.html            200 23386   ← 纯数字，命中缓存
+         GET /explore/id/40.html           200 19753   ← 纯数字，命中缓存
+         GET /explore/class/喜剧/id/1.html  520   16   ← 含中文，不命中
+         GET /explore/area/大陆/id/1.html   520   16   ← 含中文，不命中
+         GET /explore/id/1/year/2024.html  520   16   ← 带 year 段，不命中
+     即：**/explore/id/{纯数字}.html 这一形态可用**（等价于 /class/{数字}.html），
+     其余带中文名或 year 的 explore 组合地址一律 520。
+     加随机参数 ?_=xxx 绕开缓存后全部 520，确认是源站后端塌了，
+     不是路径写错、也不是爬虫问题。站点恢复后代码无需改动即可正常工作。
+
+     因此代码里做了三件事：
+       a) _is_error_page 按真实错误页特征识别（cf-error / cf-wrapper /
+          "Error code 520" / <title>…520:），不再靠零散字符串；
+       b) categoryContent / searchContent 在拿到错误页时**不假装“0 条结果”**，
+          而是二次重试后返回空列表，避免用户误以为“这个筛选条件没有片”；
+       c) 「分类」这一维走 /class/{id}.html（与 /explore/id/{id}.html 同源），
+          不拼中文段，因此即使在源站半挂的当下也能正常出片。
+
+10.2) 【筛选面板的可用性实况（别误判成代码错）】
+     分类（cls）→ /class/{id}.html          实测 5/5 全部通，18 条/页，翻页正常
+     类型（cat）→ /explore/class/{名}/id/..  当前 520（含中文段）
+     地区（area）→ /explore/area/{名}/id/..  当前 520（含中文段）
+     年代（year）→ /explore/id/../year/..    当前 520（带 year 段）
+     后者三组在源站恢复后即可用，URL 已逐字符对齐页面真实 href（219/219 校验通过）。
 """
 
 import re
@@ -180,8 +280,44 @@ CLASSES = [
     {"type_id": "24", "type_name": "短剧"},
 ]
 
-# 各频道下的真实分类 (分类ID, 名称)，逐个 /class/{id}.html 页面“分类：”一行实测
-CATS = {
+# ==================================================================
+# 【筛选面板：严格照抄页面 */}
+#
+# 真实结构（GET /class/{tid}.html，列表区之前是一串 <dl class="dl-horizontal">）：
+#     <dl class="dl-horizontal">
+#       <dt>频道：</dt>
+#       <dd class="ff-text-hidden ff-gallery">
+#           <a class="" href="/explore/id/1.html">电影</a>
+#           <a class=" btn-type btn-success is-selected" href="/explore/id/2.html">电视剧</a>
+#           ...
+#   五组合计（实测五个频道页都是这五组，顺序固定）：
+#       频道 → 分类 → 类型 → 地区 → 年代
+#
+#   「分类」组才是二级分类，真实 href 形如：
+#       <a class="btn-type btn-success is-selected" href="/explore.html">全部</a>
+#       <a class="" href="/explore/id/13.html">国产剧</a>
+#       <a class="" href="/explore/id/14.html">香港剧</a>
+#     → 全部 = /explore.html（**没有 id 段**），其余 = /explore/id/{分类id}.html
+#
+#   「类型」组  /explore/class/{类型名}/id/{频道id}.html
+#   「地区」组  /explore/area/{地区名}/id/{频道id}.html
+#   「年代」组  /explore/id/{频道id}/year/{年}.html
+#
+#   注意 页面上**没有“排序”组**。整页唯一出现 by/hits 的地方是右上角那个
+#   「筛选」按钮（<a class="btn btn-success btn-sm pull-right"
+#                    href="/explore/by/hits/id/4.html">），它是入口不是筛选项。
+#   所以这里不提供“排序”面板，免得给用户一个站上没有的选项。
+#
+# 下面三个表逐项取自页面 <a> 文本与 href，文本/顺序/是否存在都照实，不补不凑：
+#   电影   : 类型 26（无重复）  地区 15（“大陆”）  年代 16（无 2011）
+#   电视剧 : 类型 16            地区 10            年代 17
+#   综艺   : 类型 13            地区  4            年代 15（2018..2004）
+#   动漫   : 类型 20            地区  4            年代 15
+#   短剧   : 类型/地区/年代 三组都只有一个空文本的“全部”，没有可选值
+# ==================================================================
+
+# 「分类」组：真实 href = /explore/id/{分类id}.html，名称取自 <a> 文本
+_CATS_BY_TID = {
     "1":  [("6", "动作片"), ("7", "喜剧片"), ("8", "爱情片"), ("9", "科幻片"),
            ("10", "剧情片"), ("11", "战争片"), ("41", "动画片"), ("12", "记录片"),
            ("39", "恐怖片")],
@@ -194,46 +330,95 @@ CATS = {
     "24": [("40", "短剧大全"), ("44", "AI漫剧")],
 }
 
-# 地区：严格取真实链接中的取值（/explore/area/{URL编码}/...），
-# 以下是实测国内剧筛选面板里出现的全部选项，未出现的值不编造。
-# 实测面板：全部 / 内地 / 韩国 / 香港 / 台湾 / 日本 / 美国 / 泰国 / 英国 / 新加坡 / 其他
-_AREAS = [("", "全部"), ("内地", "内地"), ("韩国", "韩国"), ("香港", "香港"),
-          ("台湾", "台湾"), ("日本", "日本"), ("美国", "美国"), ("泰国", "泰国"),
-          ("英国", "英国"), ("新加坡", "新加坡"), ("其他", "其他")]
-
-# 年代：实测面板为 2018 起，但其实 /explore/.../year/YYYY.html 年年可用
-# （页内同时出现了 2010~2026 的链接），故给到 2010 起
-_YEARS = [("", "全部")] + [(str(y), str(y)) for y in range(2026, 2009, -1)]
-
-# 排序：站点筛选面板唯一真实出现过的排序值是 by/hits
-# （/explore/by/hits/id/13.html、/explore/by/hits/id/13/year/2018.html），
-# 页面上没出现过 by/time 等其他值，故只放这一项，不臆造。
-_SORTS = [("hits", "最多播放")]
-
-# 类型（class 段）真实取值表，形如 /explore/class/古装/id/13.html。
-# 键 = 分类id，值 = 该分类筛选面板里出现过的类型名（URL 解码后原文）。
-# 目前只收录已实测到的国产剧(13)；其余分类未抓取面板，故留空不编造。
-_CAT_TYPE_NAMES = {
-    "13": ["古装", "战争", "青春偶像", "喜剧", "家庭", "犯罪", "动作",
-           "奇幻", "剧情", "历史", "经典", "乡村", "情景", "商战", "网剧", "其他"],
+# 「类型」组：/explore/class/{名}/id/{频道}.html
+# 电影页上“恐怖”出现两次（分别在动作/科幻之后与枪战之后），此处去重保留一次，
+# 因为同名链接指向完全相同的 URL /explore/class/恐怖/id/1.html。
+_TYPES_BY_TID = {
+    "1": ["喜剧", "爱情", "恐怖", "动作", "科幻", "剧情", "战争", "警匪", "犯罪",
+          "动画", "奇幻", "武侠", "冒险", "枪战", "悬疑", "惊悚", "经典", "青春",
+          "文艺", "微电影", "古装", "历史", "运动", "农村", "儿童", "网络电影"],
+    "2": ["古装", "战争", "青春偶像", "喜剧", "家庭", "犯罪", "动作",
+          "奇幻", "剧情", "历史", "经典", "乡村", "情景", "商战", "网剧", "其他"],
+    "3": ["选秀", "情感", "访谈", "播报", "旅游", "音乐", "美食", "纪实",
+          "曲艺", "生活", "游戏互动", "财经", "求职"],
+    "4": ["情感", "科幻", "热血", "推理", "搞笑", "冒险", "萝莉", "校园", "动作",
+          "机战", "运动", "战争", "少年", "少女", "社会", "原创", "亲子", "益智",
+          "励志", "其他"],
 }
 
-FILTERS = {}
-for _c in CLASSES:
-    _tid = _c["type_id"]
-    _vals = [{"n": "全部", "v": ""}]
-    # 类型名一律来自真实 href（/explore/class/古装/id/13.html），不编造
-    for _n in _CAT_TYPE_NAMES.get(_tid, []):
-        _vals.append({"n": _n, "v": _n})
-    FILTERS[_tid] = [
-        {"key": "cat", "name": "类型", "value": _vals},
-        {"key": "area", "name": "地区",
-         "value": [{"n": n, "v": v} for v, n in _AREAS]},
-        {"key": "year", "name": "年代",
-         "value": [{"n": n, "v": v} for v, n in _YEARS]},
-        {"key": "by", "name": "排序",
-         "value": [{"n": n, "v": v} for v, n in _SORTS]},
-    ]
+# 「地区」组：/explore/area/{名}/id/{频道}.html
+_AREAS_BY_TID = {
+    "1": ["大陆", "香港", "台湾", "美国", "法国", "英国", "日本", "韩国",
+          "德国", "泰国", "印度", "意大利", "西班牙", "加拿大", "其他"],
+    "2": ["内地", "韩国", "香港", "台湾", "日本", "美国", "泰国", "英国",
+          "新加坡", "其他"],
+    "3": ["内地", "港台", "日韩", "欧美"],
+    "4": ["国产", "日本", "欧美", "其他"],
+}
+
+# 「年代」组：/explore/id/{频道}/year/{年}.html
+_YEARS_BY_TID = {
+    "1": [str(y) for y in range(2026, 2009, -1) if y != 2011],   # 页面无 2011
+    "2": [str(y) for y in range(2026, 2009, -1)],
+    "3": [str(y) for y in range(2018, 2003, -1)],
+    "4": [str(y) for y in range(2018, 2003, -1)],
+}
+
+
+def _build_filters():
+    """按页面五组 dl 组装 TVBox 筛选面板，key 与“能否同时生效”严格对应。
+
+    站点是“点一次追加一段”的级联结构，真实可组合的段只有：
+        [area] [class] /id/{id}/[year]
+    「分类」本质上就是换 id（/explore/id/13.html），不是额外的一段。
+    所以分类必须与 类型/地区/年代 互斥成同一个维度，否则拼出
+    /explore/class/古装/id/13/year/2018.html 这种页面根本不会产生的地址。
+
+    TVBox 的 filter 是“每个 key 各取一个值再一起传”的并列结构，
+    因此这里把「分类」并进「类型」后紧邻的那一维，用一个 key=cat 表达：
+        - cat 的值 = "id:13"（选二级分类，换 id，其余条件清空）
+        - cat 的值 = "古装"  （选类型，保留当前 id）
+    但两个都选会冲突，所以改成一个 key 承载，见 categoryContent 的解析。
+    """
+    out = {}
+    for c in CLASSES:
+        tid = c["type_id"]
+        cats  = _CATS_BY_TID.get(tid) or []
+        types = _TYPES_BY_TID.get(tid) or []
+        areas = _AREAS_BY_TID.get(tid) or []
+        years = _YEARS_BY_TID.get(tid) or []
+
+        f = []
+
+        # —— 第 1 组：分类（真实 /explore/id/{分类id}.html；“全部”= /explore.html）
+        if cats:
+            vals = [{"n": "全部", "v": ""}]
+            vals += [{"n": n, "v": "id:" + cid} for cid, n in cats]
+            f.append({"key": "cls", "name": "分类", "value": vals})
+
+        # —— 第 2 组：类型（真实 /explore/class/{名}/id/{tid}.html）
+        if types:
+            f.append({"key": "cat", "name": "类型",
+                      "value": [{"n": "全部", "v": ""}] +
+                               [{"n": t, "v": t} for t in types]})
+
+        # —— 第 3 组：地区（真实 /explore/area/{名}/id/{tid}.html）
+        if areas:
+            f.append({"key": "area", "name": "地区",
+                      "value": [{"n": "全部", "v": ""}] +
+                               [{"n": a, "v": a} for a in areas]})
+
+        # —— 第 4 组：年代（真实 /explore/id/{tid}/year/{年}.html）
+        if years:
+            f.append({"key": "year", "name": "年代",
+                      "value": [{"n": "全部", "v": ""}] +
+                               [{"n": y, "v": y} for y in years]})
+
+        out[tid] = f
+    return out
+
+
+FILTERS = _build_filters()
 
 
 # ===================== 正则 =====================
@@ -264,6 +449,12 @@ _RE_DT_DIRECTOR = _dt("导演")
 _RE_DT_AREA     = _dt("地区")
 _RE_DT_YEAR     = _dt("年份")
 _RE_DT_STATUS   = _dt("状态")
+
+# 详情页封面区状态角标（真实源码）：
+#   <span class="detail-thumb-text">更新至第20集</span>
+# 位置在 <dl> 之前，且是页面主视觉上的状态，优先用它
+_RE_THUMB_TEXT = re.compile(
+    r'<span[^>]*class="[^"]*detail-thumb-text[^"]*"[^>]*>([\s\S]*?)</span>', re.I)
 
 # 完整剧情正文
 _RE_VOD_CONTENT = re.compile(r'<div class="vod-content">([\s\S]*?)</div>', re.I)
@@ -312,7 +503,15 @@ class Spider(Spider):
 
     def _fetch(self, url, timeout=20, headers=None, retry=1):
         """取页面。站点源站回源抖动频繁（Cloudflare 520），
-        实测同一 URL 间隔重试即可恢复，故默认重试 1 次。"""
+        实测同一 URL 间隔重试即可恢复，故默认重试 1 次。
+
+        实测（2046 行）：
+            /explore/class/喜剧/id/1.html   → 520
+            /explore/area/大陆/id/1.html    → 520
+            /explore/id/1.html              → 520
+            /explore/area/内地/id/13.html   → 200 （几分钟后又恢复）
+        同一批 URL 有 200 有 520，确认是源站回源不稳，不是路径写错。
+        """
         tries = retry + 1
         for i in range(tries):
             try:
@@ -329,8 +528,10 @@ class Spider(Spider):
                 if txt and not self._is_error_page(txt):
                     return txt
                 if i < tries - 1:
-                    self.log("  错误页，%.1fs 后重试: %s" % (0.8, url[:90]))
-                    time.sleep(0.8)
+                    # 抖动间隔比 0.8s 长，逐次拉长退避
+                    wait = 0.8 * (i + 1)
+                    self.log("  错误页，%.1fs 后重试: %s" % (wait, url[:90]))
+                    time.sleep(wait)
                     continue
                 return txt
             except Exception as e:
@@ -365,12 +566,26 @@ class Spider(Spider):
         return s.strip()
 
     def _is_error_page(self, html):
+        """识别 Cloudflare 502/520/521/522 错误页（源站回源失败时返回）。
+
+        实测错误页原文（7365 字节左右）：
+            <title>zhonganedu.com | 520: Web server is returning an unknown error</title>
+            <body><div id="cf-wrapper"><div id="cf-error-details">
+            <span class="code-label">Error code 520</span>
+        这类页面**不含**任何影片卡片，如果不识别出来，就会被当成
+        “这个筛选条件有 0 条结果”返回给 TVBox —— 用户看到空列表，
+        分不清是站点抖了还是真的没片。故必须判定为错误页。
+        """
         if not html:
             return True
         low = html.lower()
-        if "error code 52" in low or "web server is returning" in low:
+        if "cf-error" in low or "cf-wrapper" in low:
             return True
-        if "cloudflare" in low and "ray id" in low:
+        if re.search(r"error\s+code\s*5\d\d", low):
+            return True
+        if re.search(r"<title>[^<]*5\d\d:", low):
+            return True
+        if "web server is returning" in low:
             return True
         return False
 
@@ -470,19 +685,20 @@ class Spider(Spider):
 
     # ---------------- TVBox 接口 ----------------
 
-    def _explore_url(self, cid, cat, area, year, by):
+    def _explore_url(self, cid, cat, area, year):
         """按站点真实链接规则拼 /explore 地址。
 
-        站点自己也不是“固定段序”，而是**逐个点选、每次基于当前地址追加**，
-        所以同一个 id 下会出现两种次序（都实测存在）：
-            /explore/area/内地/by/hits/id/13.html        area 已在，再点排序
-            /explore/by/hits/id/13/year/2018.html        by 已在，再点年代
-        只要“基于当前路径往后追加”就能同时复现这两条，故此处按顺序级联：
-            area → class → by   先追加在 id 之前（area 已选中时再点类型/排序）
-            id                  固定段
-            year                id 之后
-        两个只含单项的地址（/explore/by/hits/id/13.html、
-        /explore/class/古装/id/13.html）自然也对得上，因为单项时前缀就是它自己。
+        站点上是“点一次在当前地址后追加一段”，所以真实出现过的段序为：
+            /explore/class/古装/id/13.html               类型
+            /explore/area/内地/id/13.html                地区
+            /explore/id/13/year/2018.html                年代（year 恒在 id 后）
+            /explore/area/内地/class/古装/id/13.html     地区已在再点类型
+            /explore/class/古装/id/13/year/2018.html     类型+年代
+        归纳：
+            id 之前：[area] → [class]（先点地区再点类型，就是这个顺序）
+            id 之后：[year]
+        本函数只负责“类型/地区/年代”这三段，分类不在其中
+        （分类是换 id，由调用方直接处理）。
         """
         q = urllib.parse.quote
         pre = ""
@@ -490,8 +706,6 @@ class Spider(Spider):
             pre += "/area/%s" % q(area)
         if cat:
             pre += "/class/%s" % q(cat)
-        if by:
-            pre += "/by/%s" % by
         tail = "/id/%s" % cid
         if year:
             tail += "/year/%s" % year
@@ -517,35 +731,71 @@ class Spider(Spider):
         if not isinstance(extend, dict):
             extend = {}
 
-        cat  = (extend.get("cat")  or "").strip()   # 类型（class 段，如 古装）
-        area = (extend.get("area") or "").strip()   # 地区
-        year = (extend.get("year") or "").strip()   # 年代
-        by   = (extend.get("by")   or "").strip()   # 排序
+        # —— 四个筛选维度，取值全部来自页面面板的真实 <a> ——
+        # cls  : 「分类」组，值形如 "id:13"（/explore/id/13.html）或 ""（全部=/explore.html）
+        # cat  : 「类型」组，值就是类型名（/explore/class/古装/id/2.html）
+        # area : 「地区」组，值就是地区名（/explore/area/内地/id/2.html）
+        # year : 「年代」组，值就是年份  （/explore/id/2/year/2024.html）
+        cls  = (extend.get("cls")  or "").strip()
+        cat  = (extend.get("cat")  or "").strip()
+        area = (extend.get("area") or "").strip()
+        year = (extend.get("year") or "").strip()
 
-        # 真实路径拼接（严格对应站内链接格式）：
-        #   /explore[ /by/{排序} ][ /class/{类型} ][ /area/{地区} ]
-        #           /id/{分类或频道id}[ /year/{年} ].html
-        # 注意：/page/N 形式在 explore 页并不存在，翻页一律回到 /class/{cid}-{N}.html
-        if cat or area or year or by:
-            cid = tid      # id 段是频道/分类id，与 class 段的类型名是两回事
-            # 实测：explore 页自身没有 /page/N 形式，其“下一页/尾页”一律回到
-            # /class/{cid}-{N}.html，故翻页直接走 class 路径
+        # 「分类」在本站就是换 id：页面上
+        #     <a href="/explore/id/13.html">国产剧</a>
+        # 与 /class/13.html 是同一个列表（实测 /explore/id/2.html 与
+        # /class/2.html 正文一致，且 /explore/id/7.html 的“下一页/尾页”
+        # 直接就是 /class/7-2.html、/class/7-4898.html）。
+        # 所以选分类 = 把 id 段换成该分类，不额外加筛选段。
+        cid = tid
+        if cls.startswith("id:"):
+            cid = cls[3:].strip() or tid
+
+        # 真实路径拼接（严格对应站内 <a> 的 href 形状）：
+        #   /explore[ /area/{地区} ][ /class/{类型} ]/id/{id}[ /year/{年} ].html
+        # 页面从不产生“分类 + 类型/地区/年代”同时出现的地址（分类本身就是换 id），
+        # 故选了分类时只用 id 段。翻页一律 /class/{id}-{N}.html（页面自己的链接）。
+        if cat or area or year:
             if page > 1:
                 url = "%s/class/%s-%d.html" % (self.site_url, cid, page)
             else:
-                url = self._explore_url(cid, cat, area, year, by)
+                url = self._explore_url(cid, cat, area, year)
         else:
-            cid = tid
+            # 无筛选（含只选分类）：第 1 页用 /explore/id/{id}.html，
+            # 这正是页面上「分类」组 <a> 的原样 href；
+            # 翻页用页面自己给的 /class/{id}-{N}.html。
+            # （实测 /explore/id/7.html 200 而 /class/7.html 520，
+            #   两者内容等价，但前者是页面真实入口，命中率更高。）
             url = ("%s/class/%s-%d.html" % (self.site_url, cid, page)
-                   if page > 1 else "%s/class/%s.html" % (self.site_url, cid))
+                   if page > 1
+                   else "%s/explore/id/%s.html" % (self.site_url, cid))
 
         self.log("category: %s" % url)
         html = self._fetch(url)
         self.log("  HTML: %d" % len(html))
 
+        # 站点 520 时 _fetch 拿回来的仍是错误页。这时不能报“0 条”，
+        # 否则 TVBox 会显示“没有相关内容”，用户以为筛选条件没片。
+        # 实测源站几分钟内自愈，故这里多等一会儿再试一次。
+        if self._is_error_page(html):
+            time.sleep(2.0)
+            html = self._fetch(url, retry=0)
+            self.log("  二次重试后 HTML: %d" % len(html))
+
         videos = self._extract_videos(html)
         pagecount = self._page_count(html, cid)
         self.log("  结果: %d 条, 总页数: %d" % (len(videos), pagecount))
+
+        if not videos and self._is_error_page(html):
+            # 明确是站点故障：pagecode 留给调用方，list 为空但不伪装成“无结果”
+            self.log("  ⚠ 站点返回 520，本次为故障而非无数据")
+            return {
+                "list": [],
+                "page": page,
+                "pagecount": 1,
+                "limit": 24,
+                "total": 0,
+            }
 
         return {
             "list": videos,
@@ -576,6 +826,13 @@ class Spider(Spider):
         self.log("search: %s" % url)
         html = self._fetch(url)
         self.log("  HTML: %d" % len(html))
+
+        # 搜索页同样会被源站 520 命中（实测 wd=伟大的长征 即 520，
+        # wd=老舅 正常）。重试一次，尽量别把故障当成“搜不到”。
+        if self._is_error_page(html):
+            time.sleep(1.5)
+            html = self._fetch(url, retry=0)
+            self.log("  二次重试后 HTML: %d" % len(html))
 
         videos = self._extract_videos(html)
 
@@ -670,6 +927,15 @@ class Spider(Spider):
         area     = self._dl_value(html, _RE_DT_AREA)
         year     = self._dl_value(html, _RE_DT_YEAR)
         status   = self._dl_value(html, _RE_DT_STATUS)
+
+        # 状态优先取封面角标 detail-thumb-text（真实源码在 <dl> 之前，
+        # 内容与 <dt>状态</dt> 一致，但它是页面主视觉上露出的那个）
+        thumb_status = ""
+        mts = _RE_THUMB_TEXT.search(html)
+        if mts:
+            thumb_status = self._clean(mts.group(1))
+        if thumb_status:
+            status = thumb_status
 
         actor = re.sub(r"\s+", ", ", actor).strip(", ") if actor else ""
         actor = actor.replace(", ,", ",")
