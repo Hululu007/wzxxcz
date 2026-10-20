@@ -9,8 +9,8 @@
   - 详情页: 剧集按 tab-pane id="playurl-tab-{sid}" 分组，链接 /playurl/z{vid}/{sid}/{nid}.html
   - 播放页: var player_aaaa={...} 中 url 为 m3u8 直链，parse=0 直接返回
   - 简介添加指定前缀
-  - 筛选逻辑: 依据真实源码拼接 /explore/ 路由，完美还原网站筛选（类型/地区/年份/翻页）
-  - 图片修复: 直接返回原图，由 TVBox 默认加载（去除导致占位符的错误代理）
+  - 筛选逻辑: 严格依据真实源码 /explore/ 路由格式，修复类型、地区、年份的组合与翻页
+  - 图片修复: 直接返回原图，由 TVBox 默认加载
 """
 import re
 import sys
@@ -244,7 +244,6 @@ class Spider(Spider):
                 return max(int(x) for x in m)
             except Exception:
                 pass
-        # 补充对 /explore/ 的翻页匹配
         m = re.findall(r'/page/(\d+)(?:\.html|/)', html)
         if m:
             try:
@@ -275,28 +274,23 @@ class Spider(Spider):
         cls = extend.get("class") or ""
         area = extend.get("area") or ""
         year = extend.get("year") or ""
-        
-        # 处理"全部"的情况
-        if cls == tid:
-            cls = ""
-        if area == "全部":
-            area = ""
-        if year == "全部":
-            year = ""
 
-        # 无筛选：走 /class/{id}-{page}.html
+        if cls == tid: cls = ""
+        if area == "全部": area = ""
+        if year == "全部": year = ""
+
+        # 严格根据真实源码结构构建 URL
         if not cls and not area and not year:
+            # 无筛选
             if page == 1:
                 url = "%s/class/%s.html" % (self.site_url, tid)
             else:
                 url = "%s/class/%s-%d.html" % (self.site_url, tid, page)
         else:
-            # 有筛选，依据真实 MacCMS 路由拼接 /explore/
+            # 有筛选，严格复现 /explore/ 路径
             parts = ["explore"]
             
-            # 如果是纯子分类（比如没有地区年份，只选了“动作片”），它也是走 /explore/class/xx/id/xx.html
-            # 因为网页的筛选【分类】选了“动作片”，链接本身就是 /explore/id/6.html 或 /explore/class/动作片/id/6.html
-            # 为了兼容网页，我们需要从映射中找出对应的中文名称
+            # 1. 分类 (如果选择了子分类，取其中文名)
             cname = ""
             for cn, cid in _FILTERS_MAP.get(tid, []):
                 if cid == cls:
@@ -305,20 +299,24 @@ class Spider(Spider):
             
             if cname and cname != "全部":
                 parts.append("class/%s" % urllib.parse.quote(cname))
-            elif cls:
-                # 兜底，只用 id
-                pass
-                
+            
+            # 2. 地区 (源码格式: /explore/area/大陆/id/7.html)
             if area:
                 parts.append("area/%s" % urllib.parse.quote(area))
-                
+            
+            # 3. 年份 (源码格式: /explore/id/7/year/2010.html)
             if year:
-                parts.append("year/%s" % year)
-                
-            # 注意：筛选时的 id 必须放在最后面（MacCMS特性）
+                # 注意：年份在 id 之后，这是源码的格式
+                pass # 先跳过，统一在 id 后面处理
+
+            # 4. ID (必须放在路径中)
             parts.append("id/%s" % (cls if cls else tid))
             
-            # 翻页追加 /page/N
+            # 5. 年份 (接在 id 后面)
+            if year:
+                parts.append("year/%s" % year)
+            
+            # 6. 翻页
             if page > 1:
                 parts.append("page/%d" % page)
                 
@@ -367,35 +365,26 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # 标题
         name = ""
         m = _RE_DETAIL_TITLE.search(html)
-        if m:
-            name = self._clean(m.group(1))
+        if m: name = self._clean(m.group(1))
         if not name:
             m = re.search(r"<title>(.*?)</title>", html, re.S)
-            if m:
-                name = self._clean(m.group(1).split("-")[0]).strip()
+            if m: name = self._clean(m.group(1).split("-")[0]).strip()
         name = name or vod_id
 
-        # 封面
         pic = self.default_pic
         m = _RE_DETAIL_PIC.search(html)
-        if m:
-            pic = self._fix_url(m.group(1))
+        if m: pic = self._fix_url(m.group(1))
 
-        # 简介：优先 vod-blurb，其次 vod-content
         content = ""
         m = _RE_INTRO_BLURB.search(html)
-        if m:
-            content = self._clean(m.group(1))
+        if m: content = self._clean(m.group(1))
         if not content:
             m = _RE_INTRO_CONTENT.search(html)
-            if m:
-                content = self._clean(m.group(1))
+            if m: content = self._clean(m.group(1))
         content = (INTRO_PREFIX + "\n" + content) if content else INTRO_PREFIX
 
-        # 主演 / 导演
         actor = ""
         m = _RE_ACTOR.search(html)
         if m:
@@ -407,7 +396,6 @@ class Spider(Spider):
             names = _RE_A_TAG_TEXT.findall(m.group(1))
             director = ", ".join(self._clean(x) for x in names if self._clean(x))
 
-        # 地区 / 年份 / 状态
         area = ""
         m = _RE_AREA.search(html)
         if m:
@@ -415,19 +403,16 @@ class Spider(Spider):
             area = ", ".join(self._clean(x) for x in names if self._clean(x))
         year = ""
         m = _RE_YEAR.search(html)
-        if m:
-            year = self._clean(m.group(1))
+        if m: year = self._clean(m.group(1))
         status = ""
         m = _RE_STATUS.search(html)
-        if m:
-            status = self._clean(m.group(1))
+        if m: status = self._clean(m.group(1))
 
-        # ===== 剧集列表：按 tab 分组 =====
         tab_names = {}
         for sid, tname in _RE_TAB_NAME.findall(html):
             tab_names[sid] = self._clean(tname)
 
-        groups = []  # [(sid, 线路名, [(集名, href), ...]), ...]
+        groups = []
         for m in _RE_TAB_BLOCK.finditer(html):
             sid = m.group(1)
             body = m.group(2)
@@ -501,7 +486,6 @@ class Spider(Spider):
             self.log("  => m3u8: %s" % m3u8[:160])
             return res
 
-        # 兜底：交给 TVBox 嗅探
         res = {"parse": 1, "playUrl": "", "url": play_page,
                "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
         self._play_cache[play_page] = res
