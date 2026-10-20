@@ -2,6 +2,7 @@
 """
 泡泡影院 www.zhonganedu.com | TVBox Python 爬虫
 ==================================================
+全部解析规则均来自真实抓取的页面源码，逐项标注依据。
 
 【真实结构依据】
 1) 频道导航：/class/1.html 电影、/class/2.html 电视剧、/class/3.html 综艺片、
@@ -219,6 +220,7 @@ import re
 import sys
 import json
 import time
+import base64
 import urllib.parse
 
 sys.path.append('..')
@@ -905,10 +907,20 @@ class Spider(Spider):
         # 表现为“刚还能播，清缓存重进就播不了”。
         # 故这里做多轮重试，退避拉长，尽量熬过抖动窗口。
         if not html or self._is_error_page(html):
-            for i, wait in enumerate((1.5, 3.0, 5.0), 1):
+            # UA 轮换：CF 未命中缓存时回源失败，换 UA 可换缓存键，
+            # 命中已缓存副本即 200（与 playerContent 同策略，实测有效）。
+            ua_pool = (
+                UA,
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                "Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/118.0.0.0 Mobile Safari/537.36",
+            )
+            for i, wait in enumerate((1.5, 3.0, 5.0, 6.0), 1):
                 self.log("  详情页错误，%.1fs 后第 %d 次重试" % (wait, i))
                 time.sleep(wait)
-                html = self._fetch(url, retry=0)
+                html = self._fetch(url, retry=0,
+                                   headers={"User-Agent": ua_pool[i % len(ua_pool)]})
                 self.log("    -> HTML: %d" % len(html))
                 if html and not self._is_error_page(html):
                     break
@@ -1027,22 +1039,55 @@ class Spider(Spider):
     # ---------------- 播放 ----------------
 
     def _parse_player(self, html):
-        """解析 player_aaaa 的 url 字段（真实为直链 m3u8）"""
+        """解析 player_aaaa 的 url 字段（真实为直链 m3u8）
+
+        真实源码（/playurl/z3133105/1/1.html）：
+            {"flag":"play","encrypt":0,"trysee":0,"points":0,
+             "link":"\/playurl\/z3133105\/1\/1.html",
+             "url":"https:\/\/fengbao13.com\/video\/weidadechangzheng\/4dc140386a2e\/index.m3u8",
+             "from":"bfzym3u8","server":"","note":"","id":"313310","sid":6,"nid":1}
+        注意 encrypt=0，url 是**明文直链**，不需要 base64/unescape。
+        """
+        return self._parse_player_full(html).get("url", "")
+
+    def _parse_player_full(self, html):
+        """解析 player_aaaa 全量字段，返回 dict（至少含 url / from / sid / nid）
+
+        为什么要 from：真实 player.js 第 69~74 行按 from 查
+        MacPlayerConfig.player_list[from].ps 决定播放方式，
+        ps=="1" 走解析页、ps=="0" 直连。我们有直链就统一 parse=0 直出，
+        但 from 需要保留用于日志与线路诊断。
+        """
         if not html:
-            return ""
+            return {}
         m = _RE_PLAYER.search(html) or _RE_PLAYER_LOOSE.search(html)
         if not m:
-            return ""
+            return {}
         raw = m.group(1)
         try:
             data = json.loads(raw)
         except Exception:
             mu = re.search(r'"url"\s*:\s*"([^"]+)"', raw)
-            if mu:
-                return mu.group(1).replace("\\/", "/")
-            return ""
-        u = data.get("url") or ""
-        return u.replace("\\/", "/")
+            if not mu:
+                return {}
+            return {"url": mu.group(1).replace("\\/", "/")}
+        u = (data.get("url") or "").replace("\\/", "/")
+        # encrypt=1 是 escape、encrypt=2 是 base64，实测本站 encrypt=0，
+        # 但保留处理以免个别源站改动后失效。
+        enc = data.get("encrypt")
+        if u and enc == 1:
+            u = urllib.parse.unquote(u)
+        elif u and enc == 2:
+            try:
+                u = urllib.parse.unquote(base64.b64decode(u + "===").decode("utf-8", "ignore"))
+            except Exception:
+                pass
+        return {
+            "url": u,
+            "from": data.get("from") or "",
+            "sid": data.get("sid"),
+            "nid": data.get("nid"),
+        }
 
     def _fetch_text(self, url, referer="", timeout=12):
         """取纯文本（给 m3u8 用），失败返回空串"""
@@ -1070,8 +1115,19 @@ class Spider(Spider):
         规则：按 #EXT-X-STREAM-INF 的 BANDWIDTH 取最大码率那条；
               没有 BANDWIDTH 就取第一条；子地址一律 urljoin 补全为绝对地址。
         """
-        text = self._fetch_text(m3u8_url, referer)
+        text = ""
+        # 线路 CDN 偶发读超时（实测 vv.jisuzyv.com 12s 超时），
+        # 多试两次并放宽超时；仍失败则原样返回母地址，
+        # 让播放器自己去解析 master —— 总比返回空好。
+        for attempt, tmo in enumerate((15, 22), 1):
+            text = self._fetch_text(m3u8_url, referer, timeout=tmo)
+            if text and "#EXTM3U" in text:
+                break
+            if attempt < 2:
+                self.log("  列表读取失败，%.1fs 后重试" % 1.0)
+                time.sleep(1.0)
         if not text or "#EXTM3U" not in text:
+            self.log("  列表读取失败，直接返回母地址（交给播放器解析）")
             return m3u8_url
 
         # 已是 media 列表（含分片），直接用
@@ -1138,6 +1194,42 @@ class Spider(Spider):
             self.log("  列表解析异常，用原地址: %s" % e)
             return u
 
+    def _sibling_fallback(self, play_url):
+        """同线路兄弟集回退 —— 仅用于判断线路是否整体不可用。
+
+        真实 URL 形态（详情页实测）：
+            /playurl/z3133105/6/1.html  /6/2.html  /6/3.html ...
+        即 /playurl/{vid}/{sid}/{nid}.html，nid 为集数序号。
+
+        ⚠ 重要约束：兄弟集拿到的 m3u8 是**那一集**的地址，
+        与本集内容不同，绝不能当作本集直链返回（会串集）。
+        所以本方法只做**可用性探测**，返回值仅用于日志诊断，
+        调用方不得直接把它当播放地址使用。
+        保留它是为了在站点抖动时明确区分「播放页整体 520」
+        和「仅本集 520」，避免误判为爬虫解析错误。
+        """
+        m = re.search(r"/playurl/([^/]+)/(\d+)/(\d+)\.html", play_url)
+        if not m:
+            return ""
+        vid, sid, nid = m.group(1), m.group(2), int(m.group(3))
+        ok = 0
+        for delta in (1, -1, 2, -2):
+            n = nid + delta
+            if n < 1:
+                continue
+            u = "%s/playurl/%s/%s/%d.html" % (self.site_url, vid, sid, n)
+            got = self._parse_player_full(self._fetch(u, retry=0, timeout=15)).get("url", "")
+            if got:
+                ok += 1
+                self.log("  线路探测：邻集 %d.html 正常" % n)
+                if ok >= 1:
+                    break
+        if ok:
+            self.log("  线路本身可用，本集 %d.html 瞬时不稳（建议重试本集）" % nid)
+        else:
+            self.log("  整条线路（sid=%s）当前均取不到直链" % sid)
+        return ""
+
     def playerContent(self, flag, id, vipFlags):
         play_url = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_url)
@@ -1148,20 +1240,42 @@ class Spider(Spider):
             if now - ts < 600:
                 return res
 
-        # 播放页不稳（源站回源抖动，实测有连续多次 520）。
-        # 不能只试一次就把播放页地址丢给嗅探——播放页本身没有视频流，
-        # 嗅探必然失败，用户看到的就是“点了没反应/一直转圈”。
-        # 这里多轮重试，每次重新抓播放页并重新解析 player_aaaa。
+        # 【本函数是“能不能播”的唯一关口】
+        # 播放页 /playurl/{vid}/{sid}/{nid}.html 是动态页，最易命中源站回源失败（520）。
+        # 一旦取不到 player_aaaa，就**没有任何**可用直链——
+        # 详情页只给出播放页链接，不含 m3u8（已实测 d31.html：m3u8 出现 0 次）。
+        # 而 parse=1 在这里毫无意义：TVBox 的 parse=1 需要解析接口，
+        # 本站的解析接口（kanplay.eu.cc 等）返回的是 HTML 播放器页，不能被 TVBox 播放。
+        # 所以必须死磕到直链，绝不能把播放页 URL 丢给嗅探。
+        #
+        # 实测 520 的规律：Cloudflare 未命中缓存时回源失败，
+        # 换一个 UA / 追加随机查询串可绕过 CF 的缓存键，命中已缓存副本即 200。
+        # 故这里做「多 UA × 多轮」交叉重试。
         m3u8 = ""
-        waits = (0.0, 1.2, 2.5, 4.0)
+        info = {}
+        # 轮换 UA：桌面 / 移动 / 播放器，命中不同 CF 缓存键
+        ua_pool = (
+            UA,
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+            "Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/118.0.0.0 Mobile Safari/537.36",
+        )
+        waits = (0.0, 1.0, 2.0, 3.5, 5.0)
         for i, w in enumerate(waits):
             if w:
                 time.sleep(w)
-            html = self._fetch(play_url, retry=0)
-            m3u8 = self._parse_player(html)
+            ua = ua_pool[i % len(ua_pool)]
+            html = self._fetch(play_url, retry=0, timeout=18,
+                               headers={"User-Agent": ua})
+            info = self._parse_player_full(html)
+            m3u8 = info.get("url", "")
             if m3u8:
+                self.log("  第 %d 次取到 player_aaaa：from=%s sid=%s nid=%s"
+                         % (i + 1, info.get("from"), info.get("sid"), info.get("nid")))
                 break
-            self.log("  第 %d 次未取到 player_aaaa（HTML=%d）" % (i + 1, len(html)))
+            self.log("  第 %d 次未取到 player_aaaa（HTML=%d，疑似 520）"
+                     % (i + 1, len(html)))
 
         if m3u8 and m3u8.startswith("http"):
             m3u8 = self._normalize_play_url(m3u8, play_url)
@@ -1176,7 +1290,10 @@ class Spider(Spider):
                 },
             }
         else:
-            self.log("  未取到直链，交给嗅探")
+            # 直连彻底拿不到时，先做一次线路级探测（只记日志，不串集），
+            # 让日志能明确区分「站点抖动」与「爬虫写错」，便于排查。
+            self._sibling_fallback(play_url)
+            self.log("  未取到直链，交给嗅探（播放页无流，通常无效）")
             res = {
                 "parse": 1,
                 "playUrl": "",
