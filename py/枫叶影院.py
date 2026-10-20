@@ -6,7 +6,6 @@
 关键:
   - 详情页视频列表: resource-box-nav 线路名 + rb-item 剧集列表
   - 播放页 player_aaaa 对象，url 为 URL 编码的真实 m3u8 地址
-  - 简介前添加指定前缀
 """
 import re
 import sys
@@ -168,7 +167,7 @@ _RE_THUMB = re.compile(
     re.I)
 
 # 详情页信息字段 (类型 / 导演 / 主演 / 年份 / 地区 / 资源 / 豆瓣)
-# 【修改处1】：放宽标签匹配，解决源码内标签自带全角冒号导致无法匹配的问题
+# 【微调】：放宽标签匹配，解决源码内标签自带全角冒号导致无法匹配的问题
 _RE_INFO_LABEL = re.compile(
     r'<p><label>([^<]+?)</label><span>([\s\S]*?)</span></p>',
     re.S | re.I)
@@ -355,10 +354,13 @@ class Spider(Spider):
             if tags:
                 remark = remark + " " + tags if remark else tags
 
+            real_pic = self._fix_url(pic) or self.default_pic
+
             videos.append({
                 "vod_id":      href,
                 "vod_name":    name or alt or href,
-                "vod_pic":     self._fix_url(pic) or self.default_pic,
+                # 【修复图片防盗链】：利用 TVBox 内部代理机制
+                "vod_pic":     "proxy://do=localProxy&url=" + urllib.parse.quote(real_pic),
                 "vod_remarks": remark,
             })
         return videos
@@ -532,6 +534,9 @@ class Spider(Spider):
         m = _RE_THUMB.search(html)
         if m:
             pic = self._fix_url(m.group(1))
+        
+        # 【修复封面防盗链】：代理详情图
+        pic = "proxy://do=localProxy&url=" + urllib.parse.quote(pic)
 
         # 信息字段
         info = {}
@@ -709,3 +714,36 @@ class Spider(Spider):
                "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
         self._play_cache[play_page] = (now, res)
         return res
+
+    # ---------- 图片代理 (配合 proxy:// 使用) ----------
+    def localProxy(self, param):
+        try:
+            url = ""
+            if isinstance(param, dict):
+                url = param.get("url", "")
+            else:
+                for pair in str(param).split("&"):
+                    if "=" in pair:
+                        k, v = pair.split("=", 1)
+                        if k == "url":
+                            url = v
+            if not url:
+                return [200, "image/jpeg", b"", ""]
+                
+            url = urllib.parse.unquote(url) if "%" in url else url
+            url = self._fix_url(url)
+            
+            rsp = self.fetch(url, headers={
+                "User-Agent": UA, 
+                "Referer": self.site_url + "/"
+            }, timeout=15)
+            
+            content = rsp.content
+            ctype = rsp.headers.get("Content-Type", "image/jpeg")
+            if not ctype.startswith("image/"):
+                ctype = "image/jpeg"
+                
+            return [200, ctype, content, ""]
+        except Exception as e:
+            self.log(f"localProxy FAIL: {e}")
+            return [200, "image/jpeg", b"", ""]
