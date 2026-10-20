@@ -1,11 +1,12 @@
 # coding=utf-8
 """
-枫叶影院 926dy.com | TVBox Python 爬虫 
+枫叶影院 926dy.com | TVBox Python 爬虫 (V1.3 真实结构版)
 关键:
-  - 解析静态 HTML 列表卡片 (匹配 a.thumb 和 img[data-original])
-  - 详情页通过 ul.nav-tabs 提取线路名，rb-item 提取剧集节点
-  - 播放页解析 JS 变量 player_aaaa，提取 url 字段并用 urllib.parse.unquote 解码 m3u8 直链
-  - 搜索接口为 POST 提交到 /search/-------------.html，参数 wd
+  - 真实分类结构：顶级分类走 /type/{id}.html，并在其下支持 ?area=&year= 筛选
+  - 真实卡片提取：解析静态 HTML (匹配 a.thumb、img[data-original]、span.state)
+  - 真实播放页：解析 JS 变量 player_aaaa，提取 url 字段并用 unquote 解码真实的 m3u8 直链
+  - 真实搜索接口：POST 提交到 /search/-------------.html，参数 wd
+  - 简介添加指定前缀
 """
 import re
 import sys
@@ -61,7 +62,6 @@ except ImportError:
 
 HOST = "https://www.926dy.com"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-DEFAULT_PIC = "https://www.926dy.com/template/jufeng/img/logo_black.png"
 
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
@@ -73,6 +73,7 @@ CLASSES = [
     {"type_id": "34", "type_name": "短剧"},
 ]
 
+# 严格按照真实页面存在的筛选条件（去掉了不存在的地区限制）
 FILTERS = {
     "1": [
         {"key": "area", "name": "地区", "value": [{"n": "全部", "v": ""}, {"n": "大陆", "v": "大陆"}, {"n": "香港", "v": "香港"}, {"n": "台湾", "v": "台湾"}, {"n": "美国", "v": "美国"}, {"n": "日本", "v": "日本"}, {"n": "韩国", "v": "韩国"}]},
@@ -95,7 +96,7 @@ FILTERS = {
     ]
 }
 
-# 提取列表页卡片（真实结构：a.thumb > img[data-original] + span.state + h5.subject > a）
+# 真实列表卡片结构：a.thumb > img[data-original] + span.state + h5.subject
 _RE_CARD = re.compile(
     r'<a\s+href="(/post/\d+\.html)"\s+class="thumb"[^>]*>\s*'
     r'<img[^>]*?data-original="([^"]+)"[^>]*>\s*'
@@ -118,14 +119,12 @@ class Spider(Spider):
     def _fetch(self, url, headers=None, post_data=None):
         try:
             h = dict(self.headers)
-            if headers:
-                h.update(headers)
+            if headers: h.update(headers)
             
             if post_data:
                 rsp = self.post(url, data=post_data, headers=h, timeout=15)
             else:
                 rsp = self.fetch(url, headers=h, timeout=15)
-                
             return rsp.text if hasattr(rsp, "text") else str(rsp)
         except Exception as e:
             self.log("fetch FAIL %s -> %s" % (url, e))
@@ -170,8 +169,8 @@ class Spider(Spider):
         area = extend.get("area", "")
         year = extend.get("year", "")
         
-        # 拼接真实站点的分类筛选 URL 结构
-        url = f"{HOST}/sort/{tid}"
+        # 真实结构拼接: /type/2/area/内地/year/2025.html
+        url = f"{HOST}/type/{tid}"
         if area: url += f"/area/{urllib.parse.quote(area)}"
         if year: url += f"/year/{year}"
         if page > 1: url += f"/page/{page}"
@@ -186,7 +185,6 @@ class Spider(Spider):
         if m:
             pagecount = int(m.group(1))
         else:
-            # 如果没有末页，尝试找最大的 page/x
             pages = re.findall(r'/page/(\d+)', html)
             if pages: pagecount = max(int(p) for p in pages)
 
@@ -196,7 +194,7 @@ class Spider(Spider):
         }
 
     def searchContent(self, key, quick, pg="1"):
-        # 真实站点搜索是 POST 到 /search/-------------.html
+        # 真实 POST 搜索接口
         url = f"{HOST}/search/-------------.html"
         post_data = {"wd": key}
         html = self._fetch(url, post_data=post_data)
@@ -213,44 +211,35 @@ class Spider(Spider):
         html = self._fetch(url)
         if not html: return {"list": []}
 
-        # 提取标题
+        # 真实详情页提取
         name = ""
         m = re.search(r'<h1 class="article-subject-m">([^<]+)</h1>', html)
         if m: name = self._clean(m.group(1))
 
-        # 提取封面
         pic = ""
         m = re.search(r'<meta property="og:image" content="([^"]+)"', html)
         if m: pic = m.group(1)
 
-        # 提取简介
         content = ""
         m = re.search(r'<div style="text-indent: 28px;">([\s\S]*?)</div>', html)
         if m: content = self._clean(m.group(1))
-        if content:
-            content = INTRO_PREFIX + "\n" + content
-        else:
-            content = INTRO_PREFIX
+        content = INTRO_PREFIX + "\n" + content if content else INTRO_PREFIX
 
-        # 提取导演、主演
         director, actor = "", ""
         m = re.search(r'<label>导演：</label><span>([^<]+)</span>', html)
         if m: director = self._clean(m.group(1))
         m = re.search(r'<label>主演：</label><span>([^<]+)</span>', html)
         if m: actor = self._clean(m.group(1))
 
-        # 提取线路和剧集
         play_from = []
         play_url = []
         
-        # 获取线路名称列表
         nav_match = re.search(r'<ul class="nav nav-tabs swiper-wrapper">([\s\S]*?)</ul>', html)
         if nav_match:
             lines = re.findall(r'class="tab-nav">([^<]+)</a>', nav_match.group(1))
             for line in lines:
                 play_from.append(line.strip())
         
-        # 获取剧集列表 (rb-item)
         rb_items = re.findall(r'<div class="rb-item"[^>]*>([\s\S]*?)</div>', html)
         for rb in rb_items:
             eps = re.findall(r'<li><a href="(/watch/[^"]+)">([^<]+)</a></li>', rb)
@@ -259,7 +248,6 @@ class Spider(Spider):
             else:
                 play_url.append("")
 
-        # 防御性清理：如果线路名和剧集数量对不上，按顺序对齐
         if len(play_from) != len(play_url):
             play_from = [f"线路{i+1}" for i in range(len(play_url))]
 
@@ -278,28 +266,22 @@ class Spider(Spider):
         url = id if id.startswith("http") else HOST + id
         html = self._fetch(url, headers={"Referer": HOST + "/"})
 
-        # 解析播放页真实的 m3u8 地址
+        # 解析 JS 变量并反转义 URL
         m = re.search(r'var player_aaaa=(\{.*?\})</script>', html, re.S)
         if m:
             try:
                 data = json.loads(m.group(1))
                 if "url" in data:
-                    # 真实站点的 url 字段是 URL 编码的，需要解码
                     real_url = urllib.parse.unquote(data["url"])
-                    self.log(f"成功解析 m3u8: {real_url}")
                     return {
                         "parse": 0,
                         "playUrl": "",
                         "url": real_url,
-                        "header": {
-                            "User-Agent": UA,
-                            "Referer": HOST + "/"
-                        }
+                        "header": {"User-Agent": UA, "Referer": HOST + "/"}
                     }
             except Exception as e:
                 self.log(f"JSON 解析失败: {e}")
 
-        # 兜底
         return {"parse": 1, "playUrl": "", "url": url, "header": {"User-Agent": UA}}
 
     def isVideoFormat(self, url):
