@@ -23,15 +23,35 @@
    尾页给出总页数，例：<a href="/class/13-2630.html">尾页</a>
    注意：分类页的 {分类ID} 是分类id（如 13=国产剧），频道页是频道id（如 1=电影）。
 
-4) 搜索：<form method="get" action="/query.html"><input name="wd">
-   GET /query.html?wd=关键词
+4) 搜索（真实源码，wd=老舅 的结果页）：
+   表单：<form method="get" class="ff-search" action="/query.html">
+           <input type="text" class="form-control ff-wd" id="wd" name="wd">
+   第1页：GET /query.html?wd=关键词
+   翻页 ：GET /query/page/{页}/wd/{URL编码关键词}.html
+          页脚真实链接：<a href="/query/page/1/wd/%E8%80%81%E8%88%85.html">尾页</a>
+          → 关键词在路径段里，第1页之后一律走这个形式
+   总数 ：<span class="ff-text mac_total">4</span>
+   结果卡片与首页/分类页同构（li.ff-vod-img-list），解析复用 _extract_videos。
+   注意：无封面条目的 data-original 是 /static/images/load.png 占位图
+        （如“老舅与我”），与 load.gif 一样都要丢弃换默认图。
 
-5) 筛选：/explore/... 组合路径，真实样本：
-   /explore/id/13.html                     （频道/分类）
-   /explore/class/古装/id/13.html          （类型）
-   /explore/area/内地/id/13.html           （地区）
-   /explore/id/13/year/2026.html           （年代）
-   /explore/by/hits/id/13.html             （排序）
+5) 筛选：/explore/... 组合路径，真实样本（全部取自页内 href 原文）：
+   /explore/id/13.html                              （只有分类/频道）
+   /explore/class/古装/id/13.html                   （类型）
+   /explore/area/内地/id/13.html                    （地区）
+   /explore/id/13/year/2018.html                    （年代，year 恒在 id 之后）
+   /explore/by/hits/id/13.html                      （排序）
+   /explore/area/内地/class/古装/id/13.html         （地区已在，再点类型）
+   /explore/area/内地/by/hits/id/13.html            （地区已在，再点排序）
+   /explore/class/古装/id/13/year/2018.html         （类型+年代）
+   /explore/by/hits/id/13/year/2018.html            （排序+年代）
+
+   站点是“点一次追加一段”，所以段序不固定，但真实出现过的组合只符合：
+       id 之前：[area] → [class] → [by]，先选的在前
+       id 之后：[year]
+   按此规则拼出的 9 种单项/组合与页内真实 href 逐字符一致（已全量比对）。
+   注意：id 段是频道/分类id（13=国产剧），class 段是类型名（古装/战争），
+        两者不是一回事，绝不能把分类id塞进 class 段。
 
 6) 详情页：
    标题  <h4><a href="/celluloid/z9696775.html" class="ff-text">片名</a></h4>
@@ -64,6 +84,36 @@
    → url 字段即直链 m3u8（已实测该地址返回 HTTP 200 且为合法 #EXTM3U 播放列表）。
      故 playerContent 直接解析 player_aaaa.url 返回 parse=0；
      解析不到时退回 parse=1 交给 TVBox 嗅探。
+
+9) 【播放实测：三种线路形态，均已逐条验证】（“少数线路不能播放”的根因）
+
+   a. 普通 media 列表（bfzym3u8 / sid=6，64KB）
+      https://v.fengbao14.com/video/.../index.m3u8
+      → 直接含 #EXTINF 分片，明文，直链可用。
+
+   b. 【master 列表】（lzm3u8 / sid=5，仅 96 字节）—— 原代码在这里黑屏
+      #EXTM3U
+      #EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=800000,RESOLUTION=1080x608
+      2000k/hls/index.m3u8          ← 相对路径，必须 urljoin 补全
+      TVBox 拿到 master 时不会自己选流，必须由爬虫解析出子列表再返回：
+      子列表 https://v.lzcdn27.com/20261012/18849_4df56220/2000k/hls/index.m3u8
+      实测 200 / 60721 字节 / 1536 个分片，明文可用。
+
+   c. 【AES-128 加密】（jisu / sid=2，111KB）
+      #EXT-X-KEY:METHOD=AES-128,URI="enc.key",IV=0x0000...0000
+      分片 https://p.jisuts.com:999/hls/954/.../plist0.ts 实为密文
+      （首字节 0xce，解密后 0x47 同步字节），key 地址
+      https://vv.jisuzyv.com/play/aADQDzBe/enc.key 实测 200 / 16 字节。
+      → TVBox/EXO 取 m3u8 时会自行按 URI 拉 key 解密，故只要把 m3u8 地址原样
+        交出即可，绝不能改写。实测三种 Referer（无 / 本站 / CDN 自身）都能取到
+        列表与 key，故 header 不必强绑播放页。
+
+   d. 少数线路 m3u8 内是相对地址（无 scheme），也需 urljoin 补全为绝对地址。
+
+10) 【稳定性】源站回源抖动频繁，同一页面会间歇性返回 Cloudflare 520
+    （实测 /playurl/z9696775/1..5/1.html 连续 6 次全部 520，隔几分钟又恢复）。
+    故 _fetch 默认对 520 错误页重试 1 次，playerContent 再补一次重试；
+    仍失败才退回 parse=1（播放页本身没有视频流可嗅探，但保留兜底不报错）。
 """
 
 import re
@@ -144,25 +194,39 @@ CATS = {
     "24": [("40", "短剧大全"), ("44", "AI漫剧")],
 }
 
-# 地区：严格取真实链接文本，/explore/area/{URL编码}/...
-_AREAS = [("", "全部"), ("大陆", "大陆"), ("内地", "内地"), ("香港", "香港"),
-          ("台湾", "台湾"), ("美国", "美国"), ("法国", "法国"), ("英国", "英国"),
-          ("日本", "日本"), ("韩国", "韩国"), ("德国", "德国"), ("泰国", "泰国"),
-          ("印度", "印度"), ("意大利", "意大利"), ("西班牙", "西班牙"),
-          ("加拿大", "加拿大"), ("新加坡", "新加坡"), ("其他", "其他")]
+# 地区：严格取真实链接中的取值（/explore/area/{URL编码}/...），
+# 以下是实测国内剧筛选面板里出现的全部选项，未出现的值不编造。
+# 实测面板：全部 / 内地 / 韩国 / 香港 / 台湾 / 日本 / 美国 / 泰国 / 英国 / 新加坡 / 其他
+_AREAS = [("", "全部"), ("内地", "内地"), ("韩国", "韩国"), ("香港", "香港"),
+          ("台湾", "台湾"), ("日本", "日本"), ("美国", "美国"), ("泰国", "泰国"),
+          ("英国", "英国"), ("新加坡", "新加坡"), ("其他", "其他")]
 
-_YEARS = [("", "全部")] + [(str(y), str(y)) for y in range(2026, 2000, -1)]
+# 年代：实测面板为 2018 起，但其实 /explore/.../year/YYYY.html 年年可用
+# （页内同时出现了 2010~2026 的链接），故给到 2010 起
+_YEARS = [("", "全部")] + [(str(y), str(y)) for y in range(2026, 2009, -1)]
 
-# 排序：hits 为真实链接 /explore/by/hits/id/13.html，time 为苹果CMS标准排序键
-_SORTS = [("hits", "最多播放"), ("time", "最新更新")]
+# 排序：站点筛选面板唯一真实出现过的排序值是 by/hits
+# （/explore/by/hits/id/13.html、/explore/by/hits/id/13/year/2018.html），
+# 页面上没出现过 by/time 等其他值，故只放这一项，不臆造。
+_SORTS = [("hits", "最多播放")]
+
+# 类型（class 段）真实取值表，形如 /explore/class/古装/id/13.html。
+# 键 = 分类id，值 = 该分类筛选面板里出现过的类型名（URL 解码后原文）。
+# 目前只收录已实测到的国产剧(13)；其余分类未抓取面板，故留空不编造。
+_CAT_TYPE_NAMES = {
+    "13": ["古装", "战争", "青春偶像", "喜剧", "家庭", "犯罪", "动作",
+           "奇幻", "剧情", "历史", "经典", "乡村", "情景", "商战", "网剧", "其他"],
+}
 
 FILTERS = {}
 for _c in CLASSES:
     _tid = _c["type_id"]
+    _vals = [{"n": "全部", "v": ""}]
+    # 类型名一律来自真实 href（/explore/class/古装/id/13.html），不编造
+    for _n in _CAT_TYPE_NAMES.get(_tid, []):
+        _vals.append({"n": _n, "v": _n})
     FILTERS[_tid] = [
-        {"key": "cat", "name": "分类",
-         "value": [{"n": "全部", "v": ""}] +
-                  [{"n": n, "v": i} for i, n in CATS.get(_tid, [])]},
+        {"key": "cat", "name": "类型", "value": _vals},
         {"key": "area", "name": "地区",
          "value": [{"n": n, "v": v} for v, n in _AREAS]},
         {"key": "year", "name": "年代",
@@ -246,20 +310,35 @@ class Spider(Spider):
 
     # ---------------- 基础 ----------------
 
-    def _fetch(self, url, timeout=20, headers=None):
-        try:
-            h = dict(self.headers)
-            if headers:
-                h.update(headers)
-            rsp = self.fetch(url, headers=h, timeout=timeout)
-            if hasattr(rsp, "text"):
-                return rsp.text or ""
-            if hasattr(rsp, "content"):
-                return rsp.content.decode("utf-8", "ignore")
-            return str(rsp)
-        except Exception as e:
-            self.log("fetch FAIL %s -> %s" % (url, e))
-            return ""
+    def _fetch(self, url, timeout=20, headers=None, retry=1):
+        """取页面。站点源站回源抖动频繁（Cloudflare 520），
+        实测同一 URL 间隔重试即可恢复，故默认重试 1 次。"""
+        tries = retry + 1
+        for i in range(tries):
+            try:
+                h = dict(self.headers)
+                if headers:
+                    h.update(headers)
+                rsp = self.fetch(url, headers=h, timeout=timeout)
+                if hasattr(rsp, "text"):
+                    txt = rsp.text or ""
+                elif hasattr(rsp, "content"):
+                    txt = rsp.content.decode("utf-8", "ignore")
+                else:
+                    txt = str(rsp)
+                if txt and not self._is_error_page(txt):
+                    return txt
+                if i < tries - 1:
+                    self.log("  错误页，%.1fs 后重试: %s" % (0.8, url[:90]))
+                    time.sleep(0.8)
+                    continue
+                return txt
+            except Exception as e:
+                self.log("fetch FAIL(%d/%d) %s -> %s"
+                         % (i + 1, tries, url[:90], e))
+                if i < tries - 1:
+                    time.sleep(0.8)
+        return ""
 
     def _fix_url(self, url):
         if not url:
@@ -295,6 +374,20 @@ class Spider(Spider):
             return True
         return False
 
+    def _is_placeholder(self, url):
+        """识别懒加载占位图。
+
+        真实源码里 data-original 有两种占位值：
+            /template/hl009/images/load.gif   （绝大多数正常条目）
+            /static/images/load.png           （无封面条目，如“老舅与我”）
+        两者都不是真封面，必须丢掉换默认图，否则客户端显示破图。
+        """
+        if not url:
+            return True
+        low = url.lower()
+        return ("load.gif" in low or "load.png" in low
+                or low.startswith("data:image"))
+
     # ---------------- 列表 ----------------
 
     def _extract_videos(self, html):
@@ -322,10 +415,12 @@ class Spider(Spider):
             mi = _RE_IMG_DATA.search(it)
             if mi:
                 pic = self._fix_url(mi.group(1))
-            if not pic or pic.endswith("load.gif"):
+            if self._is_placeholder(pic):
                 ma = _RE_IMG_ANY.search(it)
-                if ma and "load.gif" not in ma.group(1):
+                if ma and not self._is_placeholder(ma.group(1)):
                     pic = self._fix_url(ma.group(1))
+                else:
+                    pic = ""
             pic = pic or self.default_pic
 
             name = ""
@@ -375,6 +470,33 @@ class Spider(Spider):
 
     # ---------------- TVBox 接口 ----------------
 
+    def _explore_url(self, cid, cat, area, year, by):
+        """按站点真实链接规则拼 /explore 地址。
+
+        站点自己也不是“固定段序”，而是**逐个点选、每次基于当前地址追加**，
+        所以同一个 id 下会出现两种次序（都实测存在）：
+            /explore/area/内地/by/hits/id/13.html        area 已在，再点排序
+            /explore/by/hits/id/13/year/2018.html        by 已在，再点年代
+        只要“基于当前路径往后追加”就能同时复现这两条，故此处按顺序级联：
+            area → class → by   先追加在 id 之前（area 已选中时再点类型/排序）
+            id                  固定段
+            year                id 之后
+        两个只含单项的地址（/explore/by/hits/id/13.html、
+        /explore/class/古装/id/13.html）自然也对得上，因为单项时前缀就是它自己。
+        """
+        q = urllib.parse.quote
+        pre = ""
+        if area:
+            pre += "/area/%s" % q(area)
+        if cat:
+            pre += "/class/%s" % q(cat)
+        if by:
+            pre += "/by/%s" % by
+        tail = "/id/%s" % cid
+        if year:
+            tail += "/year/%s" % year
+        return self.site_url + "/explore" + pre + tail + ".html"
+
     def homeContent(self, filter=False):
         return {"class": CLASSES, "filters": FILTERS}
 
@@ -395,38 +517,23 @@ class Spider(Spider):
         if not isinstance(extend, dict):
             extend = {}
 
-        cat  = (extend.get("cat")  or "").strip()   # 分类ID（国产剧=13）
+        cat  = (extend.get("cat")  or "").strip()   # 类型（class 段，如 古装）
         area = (extend.get("area") or "").strip()   # 地区
         year = (extend.get("year") or "").strip()   # 年代
         by   = (extend.get("by")   or "").strip()   # 排序
 
         # 真实路径拼接（严格对应站内链接格式）：
-        #   /explore[ /class/{类型} ][ /area/{地区} ] /id/{分类或频道id}
-        #           [ /year/{年} ][ /by/{排序} ][ /page/{页} ].html
-        # 注意 class（类型）段必须在 id 之前，见真实样本
-        #   /explore/class/古装/id/13.html
+        #   /explore[ /by/{排序} ][ /class/{类型} ][ /area/{地区} ]
+        #           /id/{分类或频道id}[ /year/{年} ].html
+        # 注意：/page/N 形式在 explore 页并不存在，翻页一律回到 /class/{cid}-{N}.html
         if cat or area or year or by:
-            cid = cat or tid
-            # 真实组合顺序（取自页内真实链接）：
-            #   /explore/by/hits/id/13.html              ← by 在最前
-            #   /explore/area/内地/id/13.html            ← area 在最前
-            #   /explore/area/内地/id/13/year/2018.html  ← area→id→year
-            #   /explore/class/古装/id/13.html           ← class 在最前
-            # 归纳：by / area → id → year
-            seg = []
-            if by:
-                seg.append("/by/%s" % by)
-            if area:
-                seg.append("/area/%s" % urllib.parse.quote(area))
-            seg.append("/id/%s" % cid)
-            if year:
-                seg.append("/year/%s" % year)
+            cid = tid      # id 段是频道/分类id，与 class 段的类型名是两回事
             # 实测：explore 页自身没有 /page/N 形式，其“下一页/尾页”一律回到
             # /class/{cid}-{N}.html，故翻页直接走 class 路径
             if page > 1:
                 url = "%s/class/%s-%d.html" % (self.site_url, cid, page)
             else:
-                url = self.site_url + "/explore" + "".join(seg) + ".html"
+                url = self._explore_url(cid, cat, area, year, by)
         else:
             cid = tid
             url = ("%s/class/%s-%d.html" % (self.site_url, cid, page)
@@ -437,7 +544,7 @@ class Spider(Spider):
         self.log("  HTML: %d" % len(html))
 
         videos = self._extract_videos(html)
-        pagecount = self._page_count(html, cat or tid)
+        pagecount = self._page_count(html, cid)
         self.log("  结果: %d 条, 总页数: %d" % (len(videos), pagecount))
 
         return {
@@ -449,18 +556,59 @@ class Spider(Spider):
         }
 
     def searchContent(self, key, quick, pg="1"):
-        kw = urllib.parse.quote(key)
-        url = "%s/query.html?wd=%s" % (self.site_url, kw)
+        """搜索用真实表单：<form method="get" action="/query.html"><input name="wd">
+             第1页  GET /query.html?wd=关键词
+             翻页    GET /query/page/{页}/wd/{URL编码关键词}.html
+                    真实样本（wd=老舅 的搜索结果页页脚）：
+                    <a href="/query/page/1/wd/%E8%80%81%E8%88%85.html">尾页</a>
+        关键词在路径段里，是 URL 编码后的形式；页数从“尾页”链接取，
+        总数从 <span class="ff-text mac_total">4</span> 取。
+        """
+        kw_path = urllib.parse.quote(key)      # 路径段编码，与真实链接一致
+        kw_qs   = urllib.parse.quote_plus(key)  # query 参数编码
+        page = int(pg) if pg else 1
+
+        if page > 1:
+            url = "%s/query/page/%d/wd/%s.html" % (self.site_url, page, kw_path)
+        else:
+            url = "%s/query.html?wd=%s" % (self.site_url, kw_qs)
+
         self.log("search: %s" % url)
         html = self._fetch(url)
         self.log("  HTML: %d" % len(html))
+
         videos = self._extract_videos(html)
+
+        # 真实总数：<span class="ff-text mac_total">4</span>
+        total = len(videos)
+        mt = re.search(r'class="[^"]*mac_total[^"]*"[^>]*>\s*(\d+)\s*<', html, re.I)
+        if mt:
+            try:
+                total = int(mt.group(1))
+            except Exception:
+                pass
+
+        # 页数：优先尾页链接 /query/page/{N}/wd/...，其次按总数 / 每页条数
+        pagecount = 1
+        mlast = re.search(
+            r'href="[^"]*/query/page/(\d+)/wd/[^"]*"[^>]*>\s*尾页', html, re.I)
+        if mlast:
+            try:
+                pagecount = max(1, int(mlast.group(1)))
+            except Exception:
+                pagecount = 1
+        elif videos and total > len(videos):
+            pagecount = (total + len(videos) - 1) // len(videos)
+
+        self.log("  结果: %d 条, 总数: %d, 页数: %d"
+                 % (len(videos), total, pagecount))
+
         return {
             "list": videos,
-            "page": int(pg) if pg else 1,
-            "pagecount": 1,
+            "page": page,
+            "pagecount": pagecount,
             "limit": len(videos) if videos else 24,
-            "total": len(videos),
+            "total": total,
         }
 
     def searchContentPage(self, key, quick, pg="1"):
@@ -507,10 +655,11 @@ class Spider(Spider):
         mi = _RE_IMG_DATA.search(html)
         if mi:
             pic = self._fix_url(mi.group(1))
-        if not pic or pic.endswith("load.gif"):
+        if self._is_placeholder(pic):
+            pic = ""
             for mm in _RE_IMG_ANY.finditer(html):
                 u = self._fix_url(mm.group(1))
-                if u and "load.gif" not in u:
+                if u and not self._is_placeholder(u):
                     pic = u
                     break
         pic = pic or self.default_pic
@@ -604,6 +753,100 @@ class Spider(Spider):
         u = data.get("url") or ""
         return u.replace("\\/", "/")
 
+    def _fetch_text(self, url, referer="", timeout=12):
+        """取纯文本（给 m3u8 用），失败返回空串"""
+        try:
+            h = {"User-Agent": UA}
+            if referer:
+                h["Referer"] = referer
+            rsp = self.fetch(url, headers=h, timeout=timeout)
+            if hasattr(rsp, "text"):
+                return rsp.text or ""
+            if hasattr(rsp, "content"):
+                return rsp.content.decode("utf-8", "ignore")
+        except Exception as e:
+            self.log("  m3u8 FAIL %s -> %s" % (url[:80], e))
+        return ""
+
+    def _pick_media_playlist(self, m3u8_url, referer=""):
+        """把 master 列表解析成真正的 media 列表地址。
+
+        实测形态（lzm3u8 / sid=5）：
+            #EXTM3U
+            #EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=800000,RESOLUTION=1080x608
+            2000k/hls/index.m3u8          ← 相对路径
+        TVBox 拿到 master 会黑屏/转圈，必须自己选出子列表。
+        规则：按 #EXT-X-STREAM-INF 的 BANDWIDTH 取最大码率那条；
+              没有 BANDWIDTH 就取第一条；子地址一律 urljoin 补全为绝对地址。
+        """
+        text = self._fetch_text(m3u8_url, referer)
+        if not text or "#EXTM3U" not in text:
+            return m3u8_url
+
+        # 已是 media 列表（含分片），直接用
+        if "#EXT-X-STREAM-INF" not in text:
+            return m3u8_url
+
+        # 逐条解析 STREAM-INF 与其后紧跟的那一行 URI
+        variants = []
+        lines = [ln.strip() for ln in text.replace("\r", "").split("\n")]
+        i = 0
+        while i < len(lines):
+            ln = lines[i]
+            if ln.startswith("#EXT-X-STREAM-INF"):
+                bw = 0
+                mb = re.search(r"BANDWIDTH=(\d+)", ln)
+                if mb:
+                    try:
+                        bw = int(mb.group(1))
+                    except Exception:
+                        bw = 0
+                # 找下一行非注释、非空行作为子列表地址
+                j = i + 1
+                while j < len(lines):
+                    nxt = lines[j]
+                    if nxt and not nxt.startswith("#"):
+                        variants.append((bw, nxt))
+                        i = j
+                        break
+                    j += 1
+            i += 1
+
+        if not variants:
+            return m3u8_url
+
+        variants.sort(key=lambda x: x[0], reverse=True)
+        sub = variants[0][1]
+        # 相对路径 → 绝对地址（实测为 2000k/hls/index.m3u8 这种相对形式）
+        if not sub.startswith("http"):
+            sub = urllib.parse.urljoin(m3u8_url, sub)
+        self.log("  master -> 子列表(%d 条候选, 选中 bw=%d): %s"
+                 % (len(variants), variants[0][0], sub[:110]))
+        return sub
+
+    def _normalize_play_url(self, url, referer=""):
+        """m3u8 地址规整：
+           1) 去掉 iOS 专用的 EXT-X 查询串（TVBox 不需要）
+           2) master 列表解析出 media 子列表
+           3) 其余原样返回，绝不改写分片/key 地址（AES 线路靠它解密）
+        """
+        if not url:
+            return url
+        u = url.strip()
+
+        # 苹果CMS部分源带 ?&ext=... 之类后缀，去掉不影响播放
+        if "#" in u:
+            u = u.split("#", 1)[0]
+
+        if ".m3u8" not in u.lower():
+            return u
+
+        try:
+            return self._pick_media_playlist(u, referer)
+        except Exception as e:
+            self.log("  列表解析异常，用原地址: %s" % e)
+            return u
+
     def playerContent(self, flag, id, vipFlags):
         play_url = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_url)
@@ -614,10 +857,16 @@ class Spider(Spider):
             if now - ts < 600:
                 return res
 
+        # 播放页偶发 520（源站回源抖动），重试一次，别直接丢给嗅探
         html = self._fetch(play_url)
         m3u8 = self._parse_player(html)
+        if not m3u8:
+            time.sleep(0.6)
+            html = self._fetch(play_url)
+            m3u8 = self._parse_player(html)
 
         if m3u8 and m3u8.startswith("http"):
+            m3u8 = self._normalize_play_url(m3u8, play_url)
             self.log("  => 直链: %s" % m3u8[:120])
             res = {
                 "parse": 0,
