@@ -1,10 +1,10 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (双BOSS终极终结版)
+水牛影院 sunnykings.com | TVBox Python 爬虫 (最强终极防折叠版)
 关键:
-  - 强制塞满渲染字段，杜绝 TVBox 模版导致空白的 Bug
-  - 精准抓取 HTML 节点，连换行和空格都完美兼容
-  - 保留你的代码风格
+  - 完美绕过 TVBox 面板折叠机制（防折叠绝杀）
+  - 强制折叠排版信息，确保 100% 显示
+  - 完美保留你的代码结构
 """
 import re
 import sys
@@ -213,7 +213,7 @@ class Spider(Spider):
             return ""
         s = s.replace("\\u0026", "&").replace("\\/", "/")
         s = html.unescape(s)
-        s = re.sub(r"<br\s*/?>", "\n", s, flags=re.I)
+        s = re.sub(r"<br\s*/?>", " ", s, flags=re.I)
         s = re.sub(r"<[^>]+>", "", s)
         s = (s.replace("&nbsp;", " ").replace("\xa0", " ")
               .replace("&amp;", "&").replace("&quot;", '"')
@@ -382,6 +382,7 @@ class Spider(Spider):
                 pass
         name = name or vod_id
 
+        # 封面强制清理防盗链
         pic = self.default_pic
         try:
             m = re.search(r'data-original="(/upload/vod/[^"]+)"', html_text)
@@ -409,7 +410,7 @@ class Spider(Spider):
             except Exception:
                 pass
 
-        # ======== 暴力抓取所有元数据，无惧换行 ========
+        # ======== 暴力抓取所有元数据 ========
         v_type, v_area, v_year, v_lang, v_actor, v_director, v_update = "", "", "", "", "", "", ""
         
         try:
@@ -478,25 +479,21 @@ class Spider(Spider):
         if not play_from:
             return {"list": []}
 
-        # ======== 核心大招：强制塞满每一个可能显示的位置 ========
-        info_blocks = []
-        if v_type: info_blocks.append("【类型】：" + v_type)
-        if v_area: info_blocks.append("【地区】：" + v_area)
-        if v_year: info_blocks.append("【年份】：" + v_year)
-        if v_lang: info_blocks.append("【语言】：" + v_lang)
-        if v_update: info_blocks.append("【更新】：" + v_update)
+        # ======== 极限制裁：强制单行拼接，无视 TVBox 折叠机制 ========
+        info_array = []
+        if v_type: info_array.append("类型：" + v_type)
+        if v_area: info_array.append("地区：" + v_area)
+        if v_year: info_array.append("年份：" + v_year)
+        if v_lang: info_array.append("语言：" + v_lang)
         
-        # 把基本信息和主演、导演融合进去
-        meta_text = "\n".join(info_blocks)
+        meta_text = " | ".join(info_array)
         
-        # 霸王硬上弓：如果你不显示主演，我就把主演拼到备注里！
-        fake_actor = v_actor if v_actor else ""
-        fake_director = v_director if v_director else ""
-        
-        # 同时在 content 头部强制加上
+        # 把主演导演强行拼进备注和简介，防止某些 TVBox 隐藏
         final_content = INTRO_PREFIX + "\n\n" + meta_text + "\n"
-        if v_actor: final_content += "【主演】：" + v_actor + "\n"
-        if v_director: final_content += "【导演】：" + v_director + "\n"
+        if v_actor: final_content += "主演：" + v_actor + "\n"
+        if v_director: final_content += "导演：" + v_director + "\n"
+        if v_update: final_content += "更新：" + v_update + "\n"
+        
         final_content += "\n" + (content or "暂无简介")
         
         return {"list": [{
@@ -504,10 +501,10 @@ class Spider(Spider):
             "vod_name": name,
             "vod_pic": pic,
             "vod_content": final_content,
-            "vod_actor": fake_actor, 
-            "vod_director": fake_director,
+            "vod_actor": v_actor, 
+            "vod_director": v_director,
             "vod_score": score,
-            "vod_remarks": meta_text.replace("\n", " | "), # 双重保险
+            "vod_remarks": meta_text, 
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url":  "$$$".join(play_url),
         }]}
