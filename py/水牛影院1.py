@@ -108,7 +108,7 @@ FILTERS = {
 
 
 # ===================== 正则 =====================
-# 列表卡片片段: <a class="AAMcYE stui-vodlist__thumb lazyload" href="/weihu/166840.html" title="&#21345;&#20854;&#29454;&#3339
+# 列表卡片片段: <a class="vqqchU stui-vodlist__thumb lazyload" href="/cp/169049.html" title="&#37325;&#36820;&#21150;&#20844;&
 _RE_CARD = re.compile(
     r'<a[^>]*?href="(/[^"]*?\d[^"]*?\.html)"([^>]*)>'
     r'([\s\S]{0,700}?)</a>',
@@ -152,14 +152,17 @@ CAT_TPLS = {
     '2': '/listnew/2-{page}.html',
     '3': '/listnew/3-{page}.html',
     '4': '/listnew/4-{page}.html',
+    '30': '/listnew/30-{page}.html',
     '36': '/listnew/36-{page}.html',
     '7': '/listnew/7-{page}.html',
+    '8': '/listnew/8-{page}.html',
     '9': '/listnew/9-{page}.html',
     '10': '/listnew/10-{page}.html',
     '11': '/listnew/11-{page}.html',
     '12': '/listnew/12-{page}.html',
     '29': '/listnew/29-{page}.html',
     '13': '/listnew/13-{page}.html',
+    '14': '/listnew/14-{page}.html',
     '15': '/listnew/15-{page}.html',
     '16': '/listnew/16-{page}.html',
     '17': '/listnew/17-{page}.html',
@@ -167,27 +170,27 @@ CAT_TPLS = {
     '31': '/listnew/31-{page}.html',
     '19': '/listnew/19-{page}.html',
     '20': '/listnew/20-{page}.html',
+    '21': '/listnew/21-{page}.html',
     '22': '/listnew/22-{page}.html',
     '23': '/listnew/23-{page}.html',
     '24': '/listnew/24-{page}.html',
+    '25': '/listnew/25-{page}.html',
     '26': '/listnew/26-{page}.html',
     '27': '/listnew/27-{page}.html',
     '28': '/listnew/28-{page}.html',
 }
-SEARCH_TPL = ''
+SEARCH_TPL = '/search/{wd}-------------{page}---.html'
 HAS_SUGGEST = True
-DETAIL_PREFIX = '/tv/'
+DETAIL_PREFIX = '/cp/'
 # 列表页原始链接前缀（与详情页前缀不同时，自动转 id 拼 DETAIL_PREFIX）
-LIST_PREFIXES = ['/tv/', '/wap/', '/weihu/']
+LIST_PREFIXES = ['/cp/', '/wap/']
 SUGGEST_API = '/index.php/ajax/suggest?mid=1&wd=%s&page=%s'
 
-_LINE_PRIORITY = ['线路1', '线路5', '线路3', '线路4', '线路2', 'vip', '1080zyk', 'bfzym3u8', 'ffm3u8', 'lzm3u8', 'modum3u8', 'jsm3u8', 'mtm3u8']
+_LINE_PRIORITY = ['线路1', 'vip', '1080zyk', 'bfzym3u8', 'ffm3u8', 'lzm3u8', 'modum3u8', 'jsm3u8', 'mtm3u8']
 _LINE_ALIAS = {
-    '线路1': '线路1', '线路5': '线路5', '线路3': '线路3',
-    '线路4': '线路4', '线路2': '线路2', 'vip': 'VIP线路',
-    '1080zyk': '1080资源', 'bfzym3u8': '暴风资源', 'ffm3u8': '非凡M3U8',
-    'lzm3u8': '量子M3U8', 'modum3u8': '魔都M3U8', 'jsm3u8': '极速M3U8',
-    'mtm3u8': '茅台M3U8',
+    '线路1': '线路1', 'vip': 'VIP线路', '1080zyk': '1080资源',
+    'bfzym3u8': '暴风资源', 'ffm3u8': '非凡M3U8', 'lzm3u8': '量子M3U8',
+    'modum3u8': '魔都M3U8', 'jsm3u8': '极速M3U8', 'mtm3u8': '茅台M3U8',
 }
 
 
@@ -447,19 +450,25 @@ class Spider(Spider):
         for k in list(extend.keys()):
             if extend[k] in ("", None, "全部"):
                 del extend[k]
-        # 优先使用从分类页 URL 学习到的路径模板
-        tpl = CAT_TPLS.get(tid)
+        # 分类路径模板：优先用学习到的；缺失时按常见形态逐个试，全部失败才返回空
+        tpl = CAT_TPLS.get(str(tid))
+        cands = []
         if tpl:
-            url = self.site_url + tpl.replace("{page}", str(page))
+            cands.append(tpl.replace("{page}", str(page)))
         else:
-            params = {"page": page - 1}
-            for k in ("class", "year", "area", "sort_field"):
-                if extend.get(k):
-                    params[k] = extend[k]
-            url = self.site_url + "/" + tid + ".html?" + urllib.parse.urlencode(params)
-        html = self._fetch(url)
-        videos = self._extract_videos(html)
-        pc = self._page_count(html)
+            cands.append("/listnew/%s-%s.html" % (tid, page))
+            cands.append("/listnew/%s.html?page=%s" % (tid, page))
+        videos, html, url = [], "", ""
+        for path in cands:
+            url = self.site_url + path
+            html = self._fetch(url)
+            videos = self._extract_videos(html)
+            if videos:
+                if not tpl:
+                    # 试出来了就记住，翻页不用再试一遍
+                    CAT_TPLS[str(tid)] = path.replace(str(page), "{page}")
+                break
+        pc = self._page_count(html) if html else 1
         return {"list": videos, "page": page, "pagecount": pc, "limit": 24, "total": pc * 24}
 
     def searchContent(self, key, quick, pg="1"):
@@ -481,7 +490,8 @@ class Spider(Spider):
                         "limit": 20, "total": int(data.get("total") or len(out))}
         except Exception as e:
             self.log("suggest fail", e)
-        url = self.site_url + "/search?wd=" + urllib.parse.quote(key) + "&page=" + str(page)
+        # 兜底：搜索页 HTML（模板从搜索页 URL 学习）
+        url = self.site_url + SEARCH_TPL.replace("{wd}", urllib.parse.quote(key)).replace("{page}", str(page))
         html = self._fetch(url)
         return {"list": self._extract_videos(html), "page": page,
                 "pagecount": self._page_count(html), "limit": 24, "total": 999}
@@ -716,4 +726,3 @@ class Spider(Spider):
 
     def close(self):
         self.destroy()
-
