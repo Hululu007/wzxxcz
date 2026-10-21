@@ -1,10 +1,10 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (精准破敌版)
+水牛影院 sunnykings.com | TVBox Python 爬虫 (终极真相版)
 关键:
-  - 完美解析首页切割，无视属性乱序换行
-  - 彻底死锁真实 URL 格式：/so-show/14--------2---2025.html (8个断位)
-  - 完美解析 player_aaaa 中的转义链接
+  - 修复大类路由，重归 /listnew/ 阵营，不再被 /so-show/ 诱饵欺骗
+  - 暴力搜寻任意标签下的 title 属性，无视多层嵌套
+  - 完美解析 player_aaaa
   - 简介添加指定前缀
 """
 import re
@@ -71,7 +71,7 @@ CLASSES = [
     {"type_id": "36", "type_name": "伦理片"},
 ]
 
-# 大类默认映射子类
+# 大类点击默认去它原本的 listnew 路由
 _DEFAULT_SUB_TID = {
     "1": "7", "2": "14", "3": "21", "4": "25", "30": "30", "36": "36"
 }
@@ -237,29 +237,25 @@ class Spider(Spider):
             self.log("  HTML 为空")
             return videos
 
-        # 核心：终极结构切割法，无视所有换行和属性乱序
-        blocks = re.split(r'(<a[^>]+href="/(?:news|weihu|wap|m)/\d+\.html")', html)
-        self.log("  切割区块: %d 个" % len(blocks))
-
-        for i in range(1, len(blocks), 2):
-            href_match = re.search(r'href="([^"]+)"', blocks[i])
-            if not href_match:
-                continue
-            href = href_match.group(1).replace("&amp;", "&")
+        # 核心：抓取包含 /news/ /weihu/ /wap/ 的 href，向后找 1000 个字符内的 title
+        matches = re.finditer(r'href="(/(?:news|weihu|wap|m)/\d+\.html)"', html)
+        for m in matches:
+            href = m.group(1).replace("&amp;", "&")
             if href in seen:
                 continue
             seen.add(href)
-
-            next_block = blocks[i+1] if i+1 < len(blocks) else ""
-            # 在后续 HTML 中找 title，绝对不放过任何回车
-            title_match = re.search(r'title="([^"]*)"', blocks[i] + next_block[:400])
+            
+            # 在匹配位置之后的 1000 个字符里找 title
+            start_idx = m.start()
+            segment = html[start_idx : start_idx + 1000]
+            title_match = re.search(r'title="([^"]*)"', segment)
             title = title_match.group(1) if title_match else "未命名"
-
+            
+            # 在同样区段找图片
             pic = self.default_pic
-            # 兼容 data-original 和 src
-            pic_match = re.search(r'data-original="([^"]+)"', next_block)
+            pic_match = re.search(r'data-original="([^"]+)"', segment)
             if not pic_match:
-                pic_match = re.search(r'src="([^"]+)"', next_block)
+                pic_match = re.search(r'src="([^"]+)"', segment)
             if pic_match:
                 pic = self._fix_url(pic_match.group(1))
 
@@ -269,12 +265,20 @@ class Spider(Spider):
                 "vod_pic":     pic,
                 "vod_remarks": "",
             })
+            
+        self.log("  提取到数据: %d 条" % len(videos))
         return videos
 
     def _page_count(self, html, page):
         if not html:
             return page
         m = re.search(r'href="[^"]*?/so-show/[^"]*?-(\d+)---', html)
+        if m:
+            try:
+                return max(int(m.group(1)), page)
+            except Exception:
+                pass
+        m = re.search(r'href="[^"]*?/listnew/\d+-(\d+)\.html', html)
         if m:
             try:
                 return max(int(m.group(1)), page)
@@ -302,20 +306,22 @@ class Spider(Spider):
         sort = extend.get("sort_field") or "time"
         year = extend.get("year") or ""
         
-        # 强制默认年份
+        # 核心：如果没有任何筛选条件，直接走 /listnew/ 的路由
+        if not area and not lang and not year and sort == "time":
+            if page == 1:
+                return "%s/listnew/%s.html" % (self.site_url, real_tid)
+            else:
+                return "%s/listnew/%s-%d.html" % (self.site_url, real_tid, page)
+
+        # 如果带了筛选，才走 /so-show/
         if not year:
             year = "2025"
 
         s_area = urllib.parse.quote(area) if area else ""
         s_lang = urllib.parse.quote(lang) if lang else ""
         
-        # 真实格式：/so-show/7-----------.html (11个横杠) 或 14--------2---2025.html
-        # 用最直白的方式硬编码，断然拒绝格式错误
-        if not s_area and not s_lang:
-            url = "%s/so-show/%s--------%d---%s.html" % (self.site_url, real_tid, page - 1, year)
-        else:
-            url = "%s/so-show/%s-%s--%s--%s-%d---%s.html" % (self.site_url, real_tid, s_area, s_lang, sort, page - 1, year)
-            
+        head = "%s-%s--%s--%s-%d" % (real_tid, s_area, s_lang, sort, page - 1)
+        url = "%s/so-show/%s---%s.html" % (self.site_url, head, year)
         return url
 
     def categoryContent(self, tid, pg, filter, extend):
