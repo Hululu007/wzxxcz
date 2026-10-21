@@ -1,10 +1,11 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (究极解析版)
+水牛影院 sunnykings.com | TVBox Python 爬虫 (精准破敌版)
 关键:
-  - 彻底放弃属性顺序正则，改用切片区块法，无视所有换行混淆
-  - 严格对齐真实 URL 路由（11个占位符）
-  - 彻底解决播放地址转义及双斜杠问题
+  - 完美解析首页切割，无视属性乱序换行
+  - 彻底死锁真实 URL 格式：/so-show/14--------2---2025.html (8个断位)
+  - 完美解析 player_aaaa 中的转义链接
+  - 简介添加指定前缀
 """
 import re
 import sys
@@ -70,7 +71,7 @@ CLASSES = [
     {"type_id": "36", "type_name": "伦理片"},
 ]
 
-# 大类默认映射子类（7=动作片，14=国产剧...）
+# 大类默认映射子类
 _DEFAULT_SUB_TID = {
     "1": "7", "2": "14", "3": "21", "4": "25", "30": "30", "36": "36"
 }
@@ -308,10 +309,13 @@ class Spider(Spider):
         s_area = urllib.parse.quote(area) if area else ""
         s_lang = urllib.parse.quote(lang) if lang else ""
         
-        # 真实格式：/so-show/7-----------.html (11个横杠)
-        # 真实源码有地区时：/so-show/14-大陆--------2---2025.html
-        head = "%s-%s---------%s-%d" % (real_tid, s_area, sort, page - 1)
-        url = "%s/so-show/%s---%s.html" % (self.site_url, head, year)
+        # 真实格式：/so-show/7-----------.html (11个横杠) 或 14--------2---2025.html
+        # 用最直白的方式硬编码，断然拒绝格式错误
+        if not s_area and not s_lang:
+            url = "%s/so-show/%s--------%d---%s.html" % (self.site_url, real_tid, page - 1, year)
+        else:
+            url = "%s/so-show/%s-%s--%s--%s-%d---%s.html" % (self.site_url, real_tid, s_area, s_lang, sort, page - 1, year)
+            
         return url
 
     def categoryContent(self, tid, pg, filter, extend):
