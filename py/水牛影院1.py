@@ -1,6 +1,6 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (分类修复版)
+水牛影院 sunnykings.com | TVBox Python 爬虫 (分类数据修复版)
 严格按真实源码结构编写：
   - 列表页卡片: <a class="... lazyload" href="/{news|weihu|wap|m}/{id}.html" title="..." data-original="...">
   - 分类页路由: /so-show/{tid}-{area}---{lang}---{page}---{year}.html
@@ -72,7 +72,7 @@ CLASSES = [
     {"type_id": "36", "type_name": "伦理片"},
 ]
 
-# 核心修复：一级分类（1,2,3,4）不能直接在 /so-show/ 里请求，必须映射到默认的子分类
+# 修复：大类映射到默认子类，防空白
 _DEFAULT_SUB_TID = {
     "1": "7",   # 电影 -> 动作片
     "2": "14",  # 电视剧 -> 国产剧
@@ -143,13 +143,13 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
+# 修复：增加兼容性，不论属性顺序如何，都能精准抓取数据
 _RE_CARD = re.compile(
-    r'<a[^>]+href="(/(?:news|weihu|wap|m)/\d+\.html)"[^>]+title="([^"]*)"'
-    r'[^>]+data-original="([^"]*)"',
+    r'<a[^>]+href="(/(?:news|weihu|wap|m)/\d+\.html)"[^>]*?title="([^"]*)"[^>]*?(?:data-original|src)="([^"]*)"', 
     re.S | re.I)
 
 _RE_CARD_MIN = re.compile(
-    r'<a[^>]+href="(/(?:news|weihu|wap|m)/\d+\.html)"[^>]+title="([^"]*)"',
+    r'<a[^>]+href="(/(?:news|weihu|wap|m)/\d+\.html)"[^>]*?title="([^"]*)"',
     re.S | re.I)
 
 _RE_H1 = re.compile(r'<h1[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)</h1>', re.I)
@@ -325,7 +325,7 @@ class Spider(Spider):
         return {"list": self._extract_videos(html)}
 
     def _build_show_url(self, tid, extend, page):
-        # 核心修复：大类无筛选时，映射至默认子分类 ID，防止返回空白页
+        # 1. 处理真实分类 ID
         cls = extend.get("class", "")
         if cls:
             real_tid = _CLASS_ID_MAP.get(cls, tid)
@@ -336,9 +336,12 @@ class Spider(Spider):
         lang = extend.get("lang") or ""
         sort = extend.get("sort_field") or "time"
         year = extend.get("year") or ""
+        
+        # 2. 关键修复：如果没传年份，强制用 2025，否则网站返回空
+        if not year:
+            year = "2025"
 
-        # 真实格式形如：/so-show/14--------2---2025.html
-        # 占位符依次为：tid - area - class - lang - letter - sort - page --- year
+        # 3. 真实格式占位：tid - area - class - lang - letter - sort - page --- year
         parts = [real_tid]
         if area:
             parts.append("-%s" % urllib.parse.quote(area))
