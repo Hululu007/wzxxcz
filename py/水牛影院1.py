@@ -41,7 +41,6 @@ so-show 筛选 URL 是固定 12 段（用 "-" 连接，索引 0~11），实测�
 原逻辑正确，这里补了 url 兜底与 Referer。
 so-show 12段占位 URL 与容错降级。
 """
-"""
 import re
 import sys
 import json
@@ -98,7 +97,7 @@ DEFAULT_PIC = HOST + "/template/default18/template/mb13/statics/img/load.gif"
 
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
-# 终极过滤：去掉了伦理片
+# 移除了伦理片 (36)
 CLASSES = [
     {"type_id": "1",  "type_name": "电影"},
     {"type_id": "2",  "type_name": "电视剧"},
@@ -154,6 +153,7 @@ _LANGS = [
     {"n": "其它", "v": "其它"},
 ]
 
+# 彻底移除了 "36" 的配置
 _FILTERS_MAP = {
     "1":  ["全部", "动作片", "喜剧片", "爱情片", "科幻片", "恐怖片", "剧情片", "犯罪片", "战争片"],
     "2":  ["全部", "国产剧", "港剧", "台湾剧", "韩剧", "日剧", "泰剧", "欧美剧", "海外剧"],
