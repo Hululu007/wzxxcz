@@ -1,6 +1,6 @@
 # coding=utf-8
 """
-水牛影院 | TVBox Python 爬虫
+火龙果影视 | TVBox Python 爬虫
 自动生成于 Spider AutoGen — 请按需微调正则后再上线
 生成状态: 列表已命中 / 详情已命中 / 播放页 direct-m3u8
 """
@@ -54,7 +54,7 @@ except ImportError:
     Spider = _BaseSpider
 
 
-HOST = 'https://www.sunnykings.com'
+HOST = 'https://www.gljade.com'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 DEFAULT_PIC = HOST + '/favicon.ico'
 
@@ -62,38 +62,38 @@ INTRO_PREFIX = '🍊小橙子为您介绍剧情👉请不要相信视频中的�
 
 CLASSES = [
     {"type_id": '1', "type_name": '电影'},
+    {"type_id": '6', "type_name": '动作片'},
+    {"type_id": '7', "type_name": '喜剧片'},
+    {"type_id": '8', "type_name": '爱情片'},
+    {"type_id": '9', "type_name": '科幻片'},
+    {"type_id": '10', "type_name": '剧情片'},
+    {"type_id": '11', "type_name": '战争片'},
+    {"type_id": '41', "type_name": '动画片'},
+    {"type_id": '12', "type_name": '记录片'},
+    {"type_id": '39', "type_name": '恐怖片'},
     {"type_id": '2', "type_name": '电视剧'},
-    {"type_id": '3', "type_name": '综艺'},
+    {"type_id": '13', "type_name": '国产剧'},
+    {"type_id": '14', "type_name": '香港剧'},
+    {"type_id": '15', "type_name": '韩国剧'},
+    {"type_id": '16', "type_name": '欧美剧'},
+    {"type_id": '22', "type_name": '台湾剧'},
+    {"type_id": '21', "type_name": '日本剧'},
+    {"type_id": '20', "type_name": '泰国剧'},
+    {"type_id": '23', "type_name": '海外剧'},
+    {"type_id": '3', "type_name": '综艺片'},
+    {"type_id": '25', "type_name": '大陆综艺'},
+    {"type_id": '26', "type_name": '日韩综艺'},
+    {"type_id": '27', "type_name": '港台综艺'},
+    {"type_id": '28', "type_name": '欧美综艺'},
     {"type_id": '4', "type_name": '动漫'},
-    {"type_id": '30', "type_name": '爽文短剧'},
-    {"type_id": '36', "type_name": '伦理片'},
-    {"type_id": '7', "type_name": '动作片'},
-    {"type_id": '8', "type_name": '喜剧片'},
-    {"type_id": '9', "type_name": '爱情片'},
-    {"type_id": '10', "type_name": '科幻片'},
-    {"type_id": '11', "type_name": '恐怖片'},
-    {"type_id": '12', "type_name": '剧情片'},
-    {"type_id": '29', "type_name": '犯罪片'},
-    {"type_id": '13', "type_name": '战争片'},
-    {"type_id": '14', "type_name": '国产剧'},
-    {"type_id": '15', "type_name": '港剧'},
-    {"type_id": '16', "type_name": '台湾剧'},
-    {"type_id": '17', "type_name": '韩剧'},
-    {"type_id": '18', "type_name": '日剧'},
-    {"type_id": '31', "type_name": '泰剧'},
-    {"type_id": '19', "type_name": '欧美剧'},
-    {"type_id": '20', "type_name": '海外剧'},
-    {"type_id": '21', "type_name": '大陆综艺'},
-    {"type_id": '22', "type_name": '日韩综艺'},
-    {"type_id": '23', "type_name": '港台综艺'},
-    {"type_id": '24', "type_name": '欧美综艺'},
-    {"type_id": '25', "type_name": '国产动漫'},
-    {"type_id": '26', "type_name": '日本动漫'},
-    {"type_id": '27', "type_name": '欧美动漫'},
-    {"type_id": '28', "type_name": '海外动漫'},
+    {"type_id": '29', "type_name": '国产动漫'},
+    {"type_id": '30', "type_name": '日本动漫'},
+    {"type_id": '42', "type_name": '港台动漫'},
+    {"type_id": '31', "type_name": '欧美动漫'},
+    {"type_id": '43', "type_name": '海外动漫'},
 ]
 
-_YEARS = [{"n": "全部", "v": ""}] + [{"n": y, "v": y} for y in ('2025', '2024', '2023', '2022', '2021', '2020', '2019', '2018', '2017', '2016', '2015', '2014', '2013', '2012', '2011', '2010', '2009', '2008', '2007', '2006')]
+_YEARS = [{"n": "全部", "v": ""}] + [{"n": y, "v": y} for y in ('2010', '2012', '2013', '2014', '2015', '2016', '2017', '2018', '2019', '2020', '2021', '2022', '2023', '2024', '2025', '2026')]
 _AREAS = [{"n": "全部", "v": ""}] + [{"n": a, "v": a} for a in ('中国大陆', '美国', '日本', '韩国', '中国香港', '中国台湾', '英国', '法国', '德国', '印度', '泰国')]
 _SORTS = [{"n": "热度最高", "v": 'play_hot'}, {"n": "最新更新", "v": 'time'}]
 
@@ -108,16 +108,15 @@ FILTERS = {
 
 
 # ===================== 正则 =====================
-# 列表卡片片段: <a class="vqqchU stui-vodlist__thumb lazyload" href="/cp/169049.html" title="&#37325;&#36820;&#21150;&#20844;&
+# 列表卡片片段: <ul class="aui-nav-dow">
+														<li><a href="/medialist/id/6.html" title="动作片">动作片</a></li>
+											
 _RE_CARD = re.compile(
     r'<a[^>]*?href="(/[^"]*?\d[^"]*?\.html)"([^>]*)>'
     r'([\s\S]{0,700}?)</a>',
     re.S | re.I)
 _RE_HREF = re.compile(r'href="(/[^"]*?\d[^"]*?\.html)', re.I)
 _RE_PLAY_HREF = re.compile(r'/(?:tvplay|vodplay|play|v_play)/', re.I)
-# 本站卡片: title/data-original 直接在 <a> 标签属性上
-_RE_A_TITLE = re.compile(r'title="([^"]*)"', re.I)
-_RE_A_PIC = re.compile(r'(?:data-original|data-src|data-lazy-src|src)="([^"]+)"', re.I)
 _RE_IMG = re.compile(
     r'<img[^>]*?alt="([^"]*)"[^>]*?(?:data-src|src)="([^"]*)"',
     re.S | re.I)
@@ -148,58 +147,59 @@ _RE_POW_TARGET = re.compile(r"var\s+target\s*=\s*['\"]([a-f0-9]{40})['\"]")
 
 # 分页模板: {tid} 类型 -> 分类路径, {page} = 页码(从 0 或 1 视站点)
 CAT_TPLS = {
-    '1': '/listnew/1-{page}.html',
-    '2': '/listnew/2-{page}.html',
-    '3': '/listnew/3-{page}.html',
-    '4': '/listnew/4-{page}.html',
-    '30': '/listnew/30-{page}.html',
-    '36': '/listnew/36-{page}.html',
-    '7': '/listnew/7-{page}.html',
-    '8': '/listnew/8-{page}.html',
-    '9': '/listnew/9-{page}.html',
-    '10': '/listnew/10-{page}.html',
-    '11': '/listnew/11-{page}.html',
-    '12': '/listnew/12-{page}.html',
-    '29': '/listnew/29-{page}.html',
-    '13': '/listnew/13-{page}.html',
-    '14': '/listnew/14-{page}.html',
-    '15': '/listnew/15-{page}.html',
-    '16': '/listnew/16-{page}.html',
-    '17': '/listnew/17-{page}.html',
-    '18': '/listnew/18-{page}.html',
-    '31': '/listnew/31-{page}.html',
-    '19': '/listnew/19-{page}.html',
-    '20': '/listnew/20-{page}.html',
-    '21': '/listnew/21-{page}.html',
-    '22': '/listnew/22-{page}.html',
-    '23': '/listnew/23-{page}.html',
-    '24': '/listnew/24-{page}.html',
-    '25': '/listnew/25-{page}.html',
-    '26': '/listnew/26-{page}.html',
-    '27': '/listnew/27-{page}.html',
-    '28': '/listnew/28-{page}.html',
+    '1': '/cat/1-{page}.html',
+    '6': '/medialist/id/6-{page}.html',
+    '7': '/cat/7-{page}.html',
+    '8': '/medialist/id/8-{page}.html',
+    '9': '/medialist/id/9-{page}.html',
+    '10': '/medialist/id/10-{page}.html',
+    '11': '/medialist/id/11-{page}.html',
+    '41': '/medialist/id/41-{page}.html',
+    '12': '/medialist/id/12-{page}.html',
+    '39': '/medialist/id/39-{page}.html',
+    '2': '/cat/2-{page}.html',
+    '13': '/cat/13-{page}.html',
+    '14': '/medialist/id/14-{page}.html',
+    '15': '/medialist/id/15-{page}.html',
+    '16': '/medialist/id/16-{page}.html',
+    '22': '/medialist/id/22-{page}.html',
+    '21': '/medialist/id/21-{page}.html',
+    '20': '/medialist/id/20-{page}.html',
+    '23': '/medialist/id/23-{page}.html',
+    '3': '/cat/3-{page}.html',
+    '25': '/cat/25-{page}.html',
+    '26': '/medialist/id/26-{page}.html',
+    '27': '/medialist/id/27-{page}.html',
+    '28': '/medialist/id/28-{page}.html',
+    '4': '/cat/4-{page}.html',
+    '29': '/cat/29-{page}.html',
+    '30': '/medialist/id/30-{page}.html',
+    '42': '/medialist/id/42-{page}.html',
+    '31': '/medialist/id/31-{page}.html',
+    '43': '/medialist/id/43-{page}.html',
+    '40': '/cat/40-{page}.html',
 }
-SEARCH_TPL = '/search/{wd}-------------{page}---.html'
+SEARCH_TPL = ''
 HAS_SUGGEST = True
-DETAIL_PREFIX = '/cp/'
+DETAIL_PREFIX = '/video/'
 # 列表页原始链接前缀（与详情页前缀不同时，自动转 id 拼 DETAIL_PREFIX）
-LIST_PREFIXES = ['/cp/', '/wap/']
+LIST_PREFIXES = ['/medialist/id/', '/video/']
 SUGGEST_API = '/index.php/ajax/suggest?mid=1&wd=%s&page=%s'
 
-_LINE_PRIORITY = ['线路1', 'vip', '1080zyk', 'bfzym3u8', 'ffm3u8', 'lzm3u8', 'modum3u8', 'jsm3u8', 'mtm3u8']
+_LINE_PRIORITY = ['vip', '1080zyk', 'bfzym3u8', 'ffm3u8', 'lzm3u8', 'modum3u8', 'jsm3u8', 'mtm3u8']
 _LINE_ALIAS = {
-    '线路1': '线路1', 'vip': 'VIP线路', '1080zyk': '1080资源',
-    'bfzym3u8': '暴风资源', 'ffm3u8': '非凡M3U8', 'lzm3u8': '量子M3U8',
-    'modum3u8': '魔都M3U8', 'jsm3u8': '极速M3U8', 'mtm3u8': '茅台M3U8',
+    'vip': 'VIP线路', '1080zyk': '1080资源', 'bfzym3u8': '暴风资源',
+    'ffm3u8': '非凡M3U8', 'lzm3u8': '量子M3U8', 'modum3u8': '魔都M3U8',
+    'jsm3u8': '极速M3U8', 'mtm3u8': '茅台M3U8',
 }
 
 
 class Spider(Spider):
 
     def getName(self):
-        return '水牛影院'
+        return '火龙果影视'
 
-    site_name = '水牛影院'
+    site_name = '火龙果影视'
     _session = None
 
     @property
@@ -490,8 +490,7 @@ class Spider(Spider):
                         "limit": 20, "total": int(data.get("total") or len(out))}
         except Exception as e:
             self.log("suggest fail", e)
-        # 兜底：搜索页 HTML（模板从搜索页 URL 学习）
-        url = self.site_url + SEARCH_TPL.replace("{wd}", urllib.parse.quote(key)).replace("{page}", str(page))
+        url = self.site_url + "/search?wd=" + urllib.parse.quote(key) + "&page=" + str(page)
         html = self._fetch(url)
         return {"list": self._extract_videos(html), "page": page,
                 "pagecount": self._page_count(html), "limit": 24, "total": 999}
@@ -726,3 +725,4 @@ class Spider(Spider):
 
     def close(self):
         self.destroy()
+
