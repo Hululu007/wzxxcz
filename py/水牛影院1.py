@@ -1,11 +1,10 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (源码对齐完美版)
+水牛影院 sunnykings.com | TVBox Python 爬虫 (究极解析版)
 关键:
-  - 解决 HTML 属性乱序及换行导致的正则提取空白
-  - 强制默认年份及修正真实 URL 连字符占位
-  - 完美解析 player_aaaa 中的转义链接
-  - 简介添加指定前缀
+  - 彻底放弃属性顺序正则，改用切片区块法，无视所有换行混淆
+  - 严格对齐真实 URL 路由（11个占位符）
+  - 彻底解决播放地址转义及双斜杠问题
 """
 import re
 import sys
@@ -71,14 +70,9 @@ CLASSES = [
     {"type_id": "36", "type_name": "伦理片"},
 ]
 
-# 修复核心：大类直接拼出来是空页面，必须换成其子类 ID
+# 大类默认映射子类（7=动作片，14=国产剧...）
 _DEFAULT_SUB_TID = {
-    "1": "7",   # 电影 -> 动作片
-    "2": "14",  # 电视剧 -> 国产剧
-    "3": "21",  # 综艺 -> 大陆综艺
-    "4": "25",  # 动漫 -> 国产动漫
-    "30": "30", # 爽文短剧
-    "36": "36", # 伦理片
+    "1": "7", "2": "14", "3": "21", "4": "25", "30": "30", "36": "36"
 }
 
 _CLASS_ID_MAP = {
@@ -137,16 +131,7 @@ for c in CLASSES:
         {"key": "sort_field", "name": "排序", "value": _SORTS},
     ]
 
-
 # ===================== 正则 =====================
-_RE_CARD = re.compile(
-    r'<a[^>]+href="(/(?:news|weihu|wap|m)/\d+\.html)"[^>]*?title="([^"]*)"[^>]*?(?:data-original|src)="([^"]*)"', 
-    re.S | re.I)
-
-_RE_CARD_MIN = re.compile(
-    r'<a[^>]+href="(/(?:news|weihu|wap|m)/\d+\.html)"[^>]*?title="([^"]*)"',
-    re.S | re.I)
-
 _RE_H1 = re.compile(r'<h1[^>]*>([\s\S]*?)</h1>', re.I)
 _RE_INTRO_FULL = re.compile(r'<span[^>]*class="[^"]*detail-content[^"]*"[^>]*>([\s\S]*?)</span>', re.I)
 _RE_INTRO_SKETCH = re.compile(r'<span[^>]*class="[^"]*detail-sketch[^"]*"[^>]*>([\s\S]*?)</span>', re.I)
@@ -251,7 +236,7 @@ class Spider(Spider):
             self.log("  HTML 为空")
             return videos
 
-        # 核心破敌：按链接特征暴力切割，不依赖任何属性顺序
+        # 核心：终极结构切割法，无视所有换行和属性乱序
         blocks = re.split(r'(<a[^>]+href="/(?:news|weihu|wap|m)/\d+\.html")', html)
         self.log("  切割区块: %d 个" % len(blocks))
 
@@ -265,11 +250,12 @@ class Spider(Spider):
             seen.add(href)
 
             next_block = blocks[i+1] if i+1 < len(blocks) else ""
-            # 在后续 HTML 中找 title，忽略换行
+            # 在后续 HTML 中找 title，绝对不放过任何回车
             title_match = re.search(r'title="([^"]*)"', blocks[i] + next_block[:400])
             title = title_match.group(1) if title_match else "未命名"
 
             pic = self.default_pic
+            # 兼容 data-original 和 src
             pic_match = re.search(r'data-original="([^"]+)"', next_block)
             if not pic_match:
                 pic_match = re.search(r'src="([^"]+)"', next_block)
@@ -315,15 +301,16 @@ class Spider(Spider):
         sort = extend.get("sort_field") or "time"
         year = extend.get("year") or ""
         
-        # 强制默认年份，防止网页因为空缺年份返回全白
+        # 强制默认年份
         if not year:
             year = "2025"
 
         s_area = urllib.parse.quote(area) if area else ""
         s_lang = urllib.parse.quote(lang) if lang else ""
         
-        # 8个连字符直接硬编码，杜绝任何格式错误
-        head = "%s-%s--%s--%s-%d" % (real_tid, s_area, s_lang, sort, page - 1)
+        # 真实格式：/so-show/7-----------.html (11个横杠)
+        # 真实源码有地区时：/so-show/14-大陆--------2---2025.html
+        head = "%s-%s---------%s-%d" % (real_tid, s_area, sort, page - 1)
         url = "%s/so-show/%s---%s.html" % (self.site_url, head, year)
         return url
 
@@ -382,7 +369,6 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # 标题
         name = ""
         try:
             m = _RE_H1.search(html)
@@ -399,7 +385,6 @@ class Spider(Spider):
                 pass
         name = name or vod_id
 
-        # 封面
         pic = self.default_pic
         try:
             m = re.search(r'data-original="(/upload/vod/[^"]+)"', html)
@@ -412,7 +397,6 @@ class Spider(Spider):
         except Exception:
             pass
 
-        # 简介
         content = ""
         try:
             m = _RE_INTRO_FULL.search(html) or _RE_INTRO_SKETCH.search(html)
@@ -433,7 +417,6 @@ class Spider(Spider):
         else:
             content = INTRO_PREFIX
 
-        # 元信息
         director = ""
         try:
             m = _RE_DIRECTOR_BLOCK.search(html)
@@ -460,7 +443,6 @@ class Spider(Spider):
         except Exception:
             pass
 
-        # 剧集提取
         play_from = []
         play_url = []
         try:
@@ -501,7 +483,6 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # -------- 播放 --------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -519,7 +500,7 @@ class Spider(Spider):
                 m = _RE_PLAYER.search(html)
                 if m:
                     raw = m.group(1)
-                    # 修复致命转义问题
+                    # 修复转义
                     raw = raw.replace("\\/", "/")
                     cfg = json.loads(raw)
                     url = cfg.get("url", "") or ""
