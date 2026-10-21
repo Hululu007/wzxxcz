@@ -1,10 +1,10 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (完美收官纯净版)
+水牛影院 sunnykings.com | TVBox Python 爬虫 (红框信息全量抓取版)
 关键:
-  - 完美剥离 Unicode 和 HTML 实体转义，线路名称 100% 与网页对齐
-  - 完美保留你的代码结构和风格
-  - 修复某些 TVBox 不显示全部线路的问题
+  - 完美提取详情页的 类型、地区、年份、语言、主演、导演、更新
+  - 完美剥离 HTML/Unicode 转义，线路、剧集 100% 对齐
+  - 保留你的代码风格
 """
 import re
 import sys
@@ -136,13 +136,21 @@ _RE_H1 = re.compile(r'<h1[^>]*>([\s\S]*?)</h1>', re.I)
 _RE_INTRO_FULL = re.compile(r'<span[^>]*class="[^"]*detail-content[^"]*"[^>]*>([\s\S]*?)</span>', re.I)
 _RE_INTRO_SKETCH = re.compile(r'<span[^>]*class="[^"]*detail-sketch[^"]*"[^>]*>([\s\S]*?)</span>', re.I)
 _RE_META_DESC = re.compile(r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', re.I)
-_RE_ACTOR_BLOCK = re.compile(r'<span[^>]*>\s*主演\s*[：:]\s*</span>([\s\S]*?)</p>', re.I)
-_RE_DIRECTOR_BLOCK = re.compile(r'<span[^>]*>\s*导演\s*[：:]\s*</span>([\s\S]*?)</p>', re.I)
-_RE_A_TEXT = re.compile(r'<a[^>]*>([^<]*)</a>', re.I)
 _RE_SCORE = re.compile(r'<span[^>]*class="[^"]*branch[^"]*"[^>]*>\s*([\d.]+)\s*<', re.I)
 _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{.*?\})\s*</script>', re.S)
 _RE_LINE_BLOCK = re.compile(r'<h3[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+?)\s*</h3>[\s\S]*?<ul[^>]*class="[^"]*stui-content__playlist[^"]*"[^>]*>([\s\S]*?)</ul>', re.I)
 _RE_EP_A = re.compile(r'<a[^>]+href="([^"]*?/tvplay/[^"]+?\.html)"[^>]*>([^<]*)</a>', re.I)
+
+# 精准提取红框内的标签数据
+_RE_META_TYPE = re.compile(r'类型[：:]\s*</span>([\s\S]*?)<span', re.I)
+_RE_META_AREA = re.compile(r'地区[：:]\s*</span>([\s\S]*?)<span', re.I)
+_RE_META_YEAR = re.compile(r'年份[：:]\s*</span>([\s\S]*?)<span', re.I)
+_RE_META_LANG = re.compile(r'语言[：:]\s*</span>([\s\S]*?)</p>', re.I)
+_RE_META_ACTOR = re.compile(r'主演[：:]\s*</span>([\s\S]*?)</p>', re.I)
+_RE_META_DIRECTOR = re.compile(r'导演[：:]\s*</span>([\s\S]*?)</p>', re.I)
+_RE_META_UPDATE = re.compile(r'更新[：:]\s*</span>([\s\S]*?)</p>', re.I)
+_RE_A_TAG = re.compile(r'<a[^>]*>([^<]*)</a>', re.I)
+
 
 class Spider(Spider):
 
@@ -213,7 +221,6 @@ class Spider(Spider):
     def _clean(self, s):
         if not s:
             return ""
-        # 核心绝招：先反转义 JS 的 unicode 码，再解 HTML 实体
         s = s.replace("\\u0026", "&").replace("\\/", "/")
         s = html.unescape(s)
         s = re.sub(r"<br\s*/?>", "\n", s, flags=re.I)
@@ -417,21 +424,79 @@ class Spider(Spider):
         else:
             content = INTRO_PREFIX
 
-        director = ""
+        # ======== 重点：全量提取红框信息 ========
+        
+        # 类型
+        v_type = ""
         try:
-            m = _RE_DIRECTOR_BLOCK.search(html_text)
+            m = _RE_META_TYPE.search(html_text)
             if m:
-                names = [self._clean(x) for x in _RE_A_TEXT.findall(m.group(1))]
-                director = ", ".join([n for n in names if n])
+                types = _RE_A_TAG.findall(m.group(1))
+                if not types:
+                    types = re.findall(r'>([^<]+)<', m.group(1))
+                v_type = ", ".join([self._clean(t) for t in types if self._clean(t)])
         except Exception:
             pass
 
+        # 地区
+        v_area = ""
+        try:
+            m = _RE_META_AREA.search(html_text)
+            if m:
+                areas = _RE_A_TAG.findall(m.group(1))
+                if not areas:
+                    areas = re.findall(r'>([^<]+)<', m.group(1))
+                v_area = ", ".join([self._clean(a) for a in areas if self._clean(a)])
+        except Exception:
+            pass
+
+        # 年份
+        v_year = ""
+        try:
+            m = _RE_META_YEAR.search(html_text)
+            if m:
+                v_year = self._clean(m.group(1))
+        except Exception:
+            pass
+
+        # 语言
+        v_lang = ""
+        try:
+            m = _RE_META_LANG.search(html_text)
+            if m:
+                langs = _RE_A_TAG.findall(m.group(1))
+                if not langs:
+                    langs = re.findall(r'>([^<]+)<', m.group(1))
+                v_lang = ", ".join([self._clean(l) for l in langs if self._clean(l)])
+        except Exception:
+            pass
+
+        # 主演
         actor = ""
         try:
-            m = _RE_ACTOR_BLOCK.search(html_text)
+            m = _RE_META_ACTOR.search(html_text)
             if m:
-                names = [self._clean(x) for x in _RE_A_TEXT.findall(m.group(1))]
-                actor = ", ".join([n for n in names if n])
+                names = _RE_A_TAG.findall(m.group(1))
+                actor = ", ".join([self._clean(n) for n in names if self._clean(n)])
+        except Exception:
+            pass
+
+        # 导演
+        director = ""
+        try:
+            m = _RE_META_DIRECTOR.search(html_text)
+            if m:
+                names = _RE_A_TAG.findall(m.group(1))
+                director = ", ".join([self._clean(n) for n in names if self._clean(n)])
+        except Exception:
+            pass
+
+        # 更新日期
+        v_update = ""
+        try:
+            m = _RE_META_UPDATE.search(html_text)
+            if m:
+                v_update = self._clean(m.group(1))
         except Exception:
             pass
 
@@ -447,15 +512,12 @@ class Spider(Spider):
         play_url = []
         try:
             for m in _RE_LINE_BLOCK.finditer(html_text):
-                # 净化并反转义获取真实的线路名
                 raw_name = self._clean(m.group(1))
                 alias = raw_name
-
                 block = m.group(2)
                 eps = _RE_EP_A.findall(block)
                 if not eps:
                     continue
-
                 items = []
                 for href, ep_name in eps:
                     href = href.replace("&amp;", "&")
@@ -473,6 +535,22 @@ class Spider(Spider):
         if not play_from:
             return {"list": []}
 
+        # 组装所有的备注信息（按 TVBox 默认格式拼接，保证红框填满）
+        remark = ""
+        meta_parts = []
+        if v_type: meta_parts.append(v_type)
+        if v_area: meta_parts.append(v_area)
+        if v_year: meta_parts.append(v_year)
+        if v_lang: meta_parts.append(v_lang)
+        if meta_parts:
+            remark += " | ".join(meta_parts) + "\n"
+        if actor:
+            remark += "主演：" + actor + "\n"
+        if director:
+            remark += "导演：" + director + "\n"
+        if v_update:
+            remark += "更新：" + v_update
+            
         return {"list": [{
             "vod_id": vod_id,
             "vod_name": name,
@@ -481,7 +559,7 @@ class Spider(Spider):
             "vod_actor": actor,
             "vod_director": director,
             "vod_score": score,
-            "vod_remarks": "%d条线路" % len(play_from),
+            "vod_remarks": remark,
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url":  "$$$".join(play_url),
         }]}
