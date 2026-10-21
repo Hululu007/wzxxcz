@@ -1,9 +1,9 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (红框终极填满版)
+水牛影院 sunnykings.com | TVBox Python 爬虫 (红框终极融合大招版)
 关键:
-  - 暴力解析 HTML 节点，彻底解决 type/area/year/lang 提取不到的问题
-  - 完美适配 TVBox UI 渲染机制
+  - 将所有的 类型/地区/年份/语言/主演/导演/更新 完美融合进简介 (vod_content)
+  - 完美绕过 TVBox 对 remarks 的隐藏机制
   - 保留你的代码风格
 """
 import re
@@ -409,11 +409,6 @@ class Spider(Spider):
             except Exception:
                 pass
 
-        if content:
-            content = INTRO_PREFIX + "\n" + content
-        else:
-            content = INTRO_PREFIX
-
         # ======== 暴力抓取所有元数据 ========
         v_type, v_area, v_year, v_lang, v_actor, v_director, v_update = "", "", "", "", "", "", ""
         
@@ -483,26 +478,30 @@ class Spider(Spider):
         if not play_from:
             return {"list": []}
 
-        # 按照 TVBox 完美格式拼装
-        remark_parts = []
-        if v_type: remark_parts.append(v_type)
-        if v_area: remark_parts.append(v_area)
-        if v_year: remark_parts.append(v_year)
-        if v_lang: remark_parts.append(v_lang)
-        
-        remark = " | ".join(remark_parts)
-        if v_update:
-            remark += " | " + v_update
+        # ======== 核心大招：把元数据全部拼接到简介最前面！ ========
+        meta_lines = []
+        if v_type: meta_lines.append("【类型】：" + v_type)
+        if v_area: meta_lines.append("【地区】：" + v_area)
+        if v_year: meta_lines.append("【年份】：" + v_year)
+        if v_lang: meta_lines.append("【语言】：" + v_lang)
+        if v_actor: meta_lines.append("【主演】：" + v_actor)
+        if v_director: meta_lines.append("【导演】：" + v_director)
+        if v_update: meta_lines.append("【更新】：" + v_update)
 
+        meta_text = "\n".join(meta_lines)
+        
+        final_content = INTRO_PREFIX + "\n\n" + meta_text + "\n\n" + (content or "暂无简介")
+        
+        # 彻底清空 remarks，把排版全交给简介
         return {"list": [{
             "vod_id": vod_id,
             "vod_name": name,
             "vod_pic": pic,
-            "vod_content": content,
-            "vod_actor": v_actor,
-            "vod_director": v_director,
+            "vod_content": final_content,
+            "vod_actor": "", 
+            "vod_director": "",
             "vod_score": score,
-            "vod_remarks": remark, 
+            "vod_remarks": "", 
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url":  "$$$".join(play_url),
         }]}
