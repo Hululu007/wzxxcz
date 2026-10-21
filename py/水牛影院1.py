@@ -1,12 +1,11 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫
+水牛影院 sunnykings.com | TVBox Python 爬虫 (完美分类修复版)
 严格按真实源码结构编写：
   - 列表页卡片: <a class="... lazyload" href="/{news|weihu|wap|m}/{id}.html" title="..." data-original="...">
-  - 分类页路由: /so-show/{tid}-{area}-{class}-{lang}-{letter}-{sort}-{page}---{year}.html
+  - 分类页路由: /so-show/{tid}-{area}---{lang}---{page}---{year}.html
   - 详情页: <h1 class="... title">、detail-content 简介、<h3 class="... title">线路名</h3> + 剧集 <a href="/tvplay/{id}-{sid}-{nid}.html">
   - 播放页: var player_aaaa={...} 中 url 字段为直链 m3u8
-  - 频率限制页: "请不要频繁操作，搜索时间间隔为3秒"
 """
 import re
 import sys
@@ -72,6 +71,27 @@ CLASSES = [
     {"type_id": "36", "type_name": "伦理片"},
 ]
 
+# 核心修复：一级分类不能直接用于 /so-show/，必须映射到其默认的子分类ID
+_DEFAULT_SUB_TID = {
+    "1": "7",   # 电影 -> 动作片
+    "2": "14",  # 电视剧 -> 国产剧
+    "3": "21",  # 综艺 -> 大陆综艺
+    "4": "25",  # 动漫 -> 国产动漫
+    "30": "30", # 爽文短剧
+    "36": "36", # 伦理片
+}
+
+# 用户明确选择了子分类时的映射
+_CLASS_ID_MAP = {
+    "动作片": "7", "喜剧片": "8", "爱情片": "9", "科幻片": "10", 
+    "恐怖片": "11", "剧情片": "12", "犯罪片": "29", "战争片": "13",
+    "国产剧": "14", "港剧": "15", "台湾剧": "16", "韩剧": "17", 
+    "日剧": "18", "泰剧": "31", "欧美剧": "19", "海外剧": "20",
+    "大陆综艺": "21", "日韩综艺": "22", "港台综艺": "23", "欧美综艺": "24",
+    "国产动漫": "25", "日本动漫": "26", "欧美动漫": "27", "海外动漫": "28",
+    "爽文短剧": "30", "短剧": "30", "伦理片": "36"
+}
+
 _SORTS = [{"n": "按时间", "v": "time"},
           {"n": "按人气", "v": "hits"},
           {"n": "按评分", "v": "score"}]
@@ -97,7 +117,6 @@ _LANGS = [
     {"n": "其它", "v": "其它"},
 ]
 
-# 各一级分类下的剧情分类（来自源码 /so-show/ 的类型列表）
 _FILTERS_MAP = {
     "1":  ["全部", "动作片", "喜剧片", "爱情片", "科幻片", "恐怖片", "剧情片",
            "犯罪片", "战争片"],
@@ -124,13 +143,11 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
-# 卡片：href + title + data-original 三属性同现，class 随机可忽略
 _RE_CARD = re.compile(
     r'<a[^>]+href="(/(?:news|weihu|wap|m)/\d+\.html)"[^>]+title="([^"]*)"'
     r'[^>]+data-original="([^"]*)"',
     re.S | re.I)
 
-# 兜底：仅有 href + title
 _RE_CARD_MIN = re.compile(
     r'<a[^>]+href="(/(?:news|weihu|wap|m)/\d+\.html)"[^>]+title="([^"]*)"',
     re.S | re.I)
@@ -138,7 +155,6 @@ _RE_CARD_MIN = re.compile(
 _RE_H1 = re.compile(r'<h1[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)</h1>', re.I)
 _RE_H1_ANY = re.compile(r'<h1[^>]*>([\s\S]*?)</h1>', re.I)
 
-# 简介：取 detail-content（完整），兜底 detail-sketch
 _RE_INTRO_FULL = re.compile(
     r'<span[^>]*class="[^"]*detail-content[^"]*"[^>]*>([\s\S]*?)</span>', re.I)
 _RE_INTRO_SKETCH = re.compile(
@@ -146,20 +162,16 @@ _RE_INTRO_SKETCH = re.compile(
 _RE_META_DESC = re.compile(
     r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', re.I)
 
-# 主演 / 导演：<p> 内 <span>主演：</span> 后多个 <a>姓名</a>
 _RE_ACTOR_BLOCK = re.compile(
     r'<span[^>]*>\s*主演\s*[：:]\s*</span>([\s\S]*?)</p>', re.I)
 _RE_DIRECTOR_BLOCK = re.compile(
     r'<span[^>]*>\s*导演\s*[：:]\s*</span>([\s\S]*?)</p>', re.I)
 _RE_A_TEXT = re.compile(r'<a[^>]*>([^<]*)</a>', re.I)
 
-# 评分
 _RE_SCORE = re.compile(r'<span[^>]*class="[^"]*branch[^"]*"[^>]*>\s*([\d.]+)\s*<', re.I)
 
-# 播放器配置
 _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{.*?\})\s*</script>', re.S)
 
-# 详情页线路：<h3 class="... title">线路名</h3> 之后紧跟的 <ul class="... stui-content__playlist ...">
 _RE_LINE_BLOCK = re.compile(
     r'<h3[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+?)\s*</h3>'
     r'[\s\S]*?<ul[^>]*class="[^"]*stui-content__playlist[^"]*"[^>]*>([\s\S]*?)</ul>',
@@ -167,7 +179,6 @@ _RE_LINE_BLOCK = re.compile(
 _RE_EP_A = re.compile(
     r'<a[^>]+href="([^"]*?/tvplay/[^"]+?\.html)"[^>]*>([^<]*)</a>', re.I)
 
-# 频率限制页
 _RE_RATE_LIMIT = "请不要频繁操作"
 
 _LINE_ALIAS = {
@@ -199,9 +210,7 @@ class Spider(Spider):
         self._last_req_ts = 0.0
         self.log("init: site=%s" % self.site_url)
 
-    # -------- 请求 --------
     def _fetch(self, url, timeout=20, headers=None, retry=2):
-        # 简单节流，避免触发“3秒”频率限制
         now = time.time()
         gap = now - self._last_req_ts
         if gap < 0.6:
@@ -257,7 +266,6 @@ class Spider(Spider):
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
 
-    # -------- 列表解析 --------
     def _extract_videos(self, html):
         videos = []
         seen = set()
@@ -295,14 +303,12 @@ class Spider(Spider):
     def _page_count(self, html, page):
         if not html:
             return page
-        # 尾页链接: /so-show/...-{N}---{year}.html
         m = re.search(r'href="[^"]*?/so-show/[^"]*?-(\d+)---', html)
         if m:
             try:
                 return max(int(m.group(1)), page)
             except Exception:
                 pass
-        # visible-xs 里的 2/394
         m = re.search(r'<span[^>]*class="[^"]*num[^"]*"[^>]*>\s*\d+\s*/\s*(\d+)\s*<', html)
         if m:
             try:
@@ -311,43 +317,12 @@ class Spider(Spider):
                 pass
         return page
 
-    # -------- 首页 / 分类 --------
     def homeContent(self, filter=False):
         return {"class": CLASSES, "filters": FILTERS}
 
     def homeVideoContent(self):
         html = self._fetch(self.site_url + "/")
         return {"list": self._extract_videos(html)}
-
-    def _build_show_url(self, tid, extend, page):
-        area = extend.get("area") or ""
-        cls = extend.get("class") or ""
-        lang = extend.get("lang") or ""
-        letter = ""
-        sort = extend.get("sort_field") or "time"
-        year = extend.get("year") or ""
-
-        parts = [tid]
-        if area:
-            parts.append("-%s" % urllib.parse.quote(area))
-        else:
-            parts.append("-")
-        if cls:
-            parts.append("-%s" % urllib.parse.quote(cls))
-        else:
-            parts.append("-")
-        if lang:
-            parts.append("-%s" % urllib.parse.quote(lang))
-        else:
-            parts.append("-")
-        parts.append("-%s" % letter)
-        parts.append("-%s" % sort)
-        parts.append("-%d" % (page - 1))
-        head = "".join(parts)
-        # head 形如 tid-area-class-lang--sort-page，需保证段数：
-        # 真实格式 /so-show/{tid}-{area}-{class}-{lang}-{letter}-{sort}-{page}---{year}.html
-        url = "%s/so-show/%s---%s.html" % (self.site_url, head, year)
-        return url
 
     def categoryContent(self, tid, pg, filter, extend):
         page = int(pg) if pg else 1
@@ -362,7 +337,26 @@ class Spider(Spider):
             if extend[k] in ("", None, "全部"):
                 del extend[k]
 
-        url = self._build_show_url(tid, extend, page)
+        # 解决空白页：如果无子类则匹配默认子类，有子类则映射到真实ID
+        cls = extend.get("class", "")
+        if cls:
+            real_tid = _CLASS_ID_MAP.get(cls, tid)
+        else:
+            real_tid = _DEFAULT_SUB_TID.get(tid, tid)
+
+        area = urllib.parse.quote(extend.get("area") or "")
+        lang = urllib.parse.quote(extend.get("lang") or "")
+        sort = extend.get("sort_field") or "time"
+        year = extend.get("year") or ""
+
+        # 格式：/so-show/14--------2---2025.html
+        # 拆分：tid + 7个连字符断位 + page + 3个连字符 + year
+        url = "%s/so-show/%s-%s---%s----%s-%d---%s.html" % (
+            self.site_url, real_tid, area, "", lang, sort, page - 1, year
+        )
+        # 清理多余的占位符
+        url = url.replace("----", "-").replace("-----", "-").replace("------", "-").replace("-------", "-")
+
         self.log("category: %s" % url)
         html = self._fetch(url)
 
@@ -373,20 +367,13 @@ class Spider(Spider):
             "limit": 30, "total": pagecount * 30,
         }
 
-    # -------- 搜索 --------
     def searchContent(self, key, quick, pg="1"):
         page = int(pg) if pg else 1
         kw = urllib.parse.quote(key)
-        url = "%s/search/%s-------------%s.html" % (
-            self.site_url, kw, page - 1)
-        # 兜底：标准搜索入口
-        url2 = "%s/search/-------------.html?wd=%s" % (self.site_url, kw)
+        url = "%s/search/%s-------------.html" % (self.site_url, kw)
         self.log("search: %s" % url)
         html = self._fetch(url)
         videos = self._extract_videos(html)
-        if not videos and page == 1:
-            html = self._fetch(url2)
-            videos = self._extract_videos(html)
         return {
             "list": videos, "page": page,
             "pagecount": self._page_count(html, page),
@@ -396,7 +383,6 @@ class Spider(Spider):
     def searchContentPage(self, key, quick, pg="1"):
         return self.searchContent(key, quick, pg)
 
-    # -------- 详情 --------
     def detailContent(self, ids):
         if not ids:
             return {"list": []}
@@ -408,7 +394,6 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # 标题
         name = ""
         m = _RE_H1.search(html) or _RE_H1_ANY.search(html)
         if m:
@@ -419,7 +404,6 @@ class Spider(Spider):
                 name = self._clean(m.group(1).split("_")[0].split("-")[0])
         name = name or vod_id
 
-        # 封面
         pic = self.default_pic
         m = re.search(r'data-original="(/upload/vod/[^"]+)"', html)
         if m:
@@ -429,7 +413,6 @@ class Spider(Spider):
             if m:
                 pic = self._fix_url(m.group(1))
 
-        # 简介
         content = ""
         m = _RE_INTRO_FULL.search(html) or _RE_INTRO_SKETCH.search(html)
         if m:
@@ -440,7 +423,6 @@ class Spider(Spider):
                 content = self._clean(m.group(1))
         content = INTRO_PREFIX + "\n" + content if content else INTRO_PREFIX
 
-        # 主演 / 导演
         actor = ""
         m = _RE_ACTOR_BLOCK.search(html)
         if m:
@@ -453,13 +435,11 @@ class Spider(Spider):
             names = [self._clean(x) for x in _RE_A_TEXT.findall(m.group(1))]
             director = ", ".join([n for n in names if n])
 
-        # 评分
         score = ""
         m = _RE_SCORE.search(html)
         if m:
             score = m.group(1)
 
-        # 剧集：按线路分组
         play_from = []
         play_url = []
         for m in _RE_LINE_BLOCK.finditer(html):
@@ -495,7 +475,6 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # -------- 播放 --------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
@@ -538,13 +517,11 @@ class Spider(Spider):
             self.log("  => m3u8: %s" % url[:160])
             return res
 
-        # 兜底：交给 TVBox 嗅探
         res = {"parse": 1, "playUrl": "", "url": play_page,
                "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
         self._play_cache[play_page] = (now, res)
         return res
 
-    # -------- 其他 --------
     def localProxy(self, param):
         try:
             url = ""
