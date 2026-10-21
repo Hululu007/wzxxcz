@@ -1,16 +1,16 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (终极真相版)
+水牛影院 sunnykings.com | TVBox Python 爬虫 (胜利净化版)
 关键:
-  - 修复大类路由，重归 /listnew/ 阵营，不再被 /so-show/ 诱饵欺骗
-  - 暴力搜寻任意标签下的 title 属性，无视多层嵌套
-  - 完美解析 player_aaaa
-  - 简介添加指定前缀
+  - 彻底解决剧集名称和线路名称的 HTML 实体转义问题 (如 &#31532;01&#38598;)
+  - 完美解析播放链接中的转义符号
+  - 保留你最喜欢的结构化代码风格
 """
 import re
 import sys
 import json
 import time
+import html  # 引入 html 库，用于清洗脏字符
 import urllib.parse
 
 sys.path.append('..')
@@ -71,7 +71,7 @@ CLASSES = [
     {"type_id": "36", "type_name": "伦理片"},
 ]
 
-# 大类点击默认去它原本的 listnew 路由
+# 大类默认映射子类
 _DEFAULT_SUB_TID = {
     "1": "7", "2": "14", "3": "21", "4": "25", "30": "30", "36": "36"
 }
@@ -220,6 +220,8 @@ class Spider(Spider):
     def _clean(self, s):
         if not s:
             return ""
+        # 核心净化解码
+        s = html.unescape(s)
         s = re.sub(r"<br\s*/?>", "\n", s, flags=re.I)
         s = re.sub(r"<[^>]+>", "", s)
         s = (s.replace("&nbsp;", " ").replace("\xa0", " ")
@@ -230,28 +232,25 @@ class Spider(Spider):
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
 
-    def _extract_videos(self, html):
+    def _extract_videos(self, html_content):
         videos = []
         seen = set()
-        if not html:
+        if not html_content:
             self.log("  HTML 为空")
             return videos
 
-        # 核心：抓取包含 /news/ /weihu/ /wap/ 的 href，向后找 1000 个字符内的 title
-        matches = re.finditer(r'href="(/(?:news|weihu|wap|m)/\d+\.html)"', html)
+        matches = re.finditer(r'href="(/(?:news|weihu|wap|m)/\d+\.html)"', html_content)
         for m in matches:
             href = m.group(1).replace("&amp;", "&")
             if href in seen:
                 continue
             seen.add(href)
             
-            # 在匹配位置之后的 1000 个字符里找 title
             start_idx = m.start()
-            segment = html[start_idx : start_idx + 1000]
+            segment = html_content[start_idx : start_idx + 1000]
             title_match = re.search(r'title="([^"]*)"', segment)
             title = title_match.group(1) if title_match else "未命名"
             
-            # 在同样区段找图片
             pic = self.default_pic
             pic_match = re.search(r'data-original="([^"]+)"', segment)
             if not pic_match:
@@ -269,16 +268,16 @@ class Spider(Spider):
         self.log("  提取到数据: %d 条" % len(videos))
         return videos
 
-    def _page_count(self, html, page):
-        if not html:
+    def _page_count(self, html_content, page):
+        if not html_content:
             return page
-        m = re.search(r'href="[^"]*?/so-show/[^"]*?-(\d+)---', html)
+        m = re.search(r'href="[^"]*?/so-show/[^"]*?-(\d+)---', html_content)
         if m:
             try:
                 return max(int(m.group(1)), page)
             except Exception:
                 pass
-        m = re.search(r'href="[^"]*?/listnew/\d+-(\d+)\.html', html)
+        m = re.search(r'href="[^"]*?/listnew/\d+-(\d+)\.html', html_content)
         if m:
             try:
                 return max(int(m.group(1)), page)
@@ -290,9 +289,9 @@ class Spider(Spider):
         return {"class": CLASSES, "filters": FILTERS}
 
     def homeVideoContent(self):
-        html = self._fetch(self.site_url + "/")
-        self.log("home HTML 长度: %d" % len(html))
-        return {"list": self._extract_videos(html)}
+        html_text = self._fetch(self.site_url + "/")
+        self.log("home HTML 长度: %d" % len(html_text))
+        return {"list": self._extract_videos(html_text)}
 
     def _build_show_url(self, tid, extend, page):
         cls = extend.get("class", "")
@@ -306,14 +305,13 @@ class Spider(Spider):
         sort = extend.get("sort_field") or "time"
         year = extend.get("year") or ""
         
-        # 核心：如果没有任何筛选条件，直接走 /listnew/ 的路由
+        # 没筛选条件走 listnew，有筛选走 so-show
         if not area and not lang and not year and sort == "time":
             if page == 1:
                 return "%s/listnew/%s.html" % (self.site_url, real_tid)
             else:
                 return "%s/listnew/%s-%d.html" % (self.site_url, real_tid, page)
 
-        # 如果带了筛选，才走 /so-show/
         if not year:
             year = "2025"
 
@@ -339,11 +337,11 @@ class Spider(Spider):
 
         url = self._build_show_url(tid, extend, page)
         self.log("category: %s" % url)
-        html = self._fetch(url)
-        self.log("  HTML 长度: %d" % len(html))
+        html_text = self._fetch(url)
+        self.log("  HTML 长度: %d" % len(html_text))
 
-        videos = self._extract_videos(html)
-        pagecount = self._page_count(html, page)
+        videos = self._extract_videos(html_text)
+        pagecount = self._page_count(html_text, page)
         self.log("  最终: %d 条, 总页数: %d" % (len(videos), pagecount))
 
         return {
@@ -356,11 +354,11 @@ class Spider(Spider):
         kw = urllib.parse.quote(key)
         url = "%s/search/%s-------------.html" % (self.site_url, kw)
         self.log("search: %s" % url)
-        html = self._fetch(url)
-        videos = self._extract_videos(html)
+        html_text = self._fetch(url)
+        videos = self._extract_videos(html_text)
         return {
             "list": videos, "page": page,
-            "pagecount": self._page_count(html, page),
+            "pagecount": self._page_count(html_text, page),
             "limit": 30, "total": 999,
         }
 
@@ -374,21 +372,21 @@ class Spider(Spider):
         url = vod_id if vod_id.startswith("http") else self._fix_url(vod_id)
         self.log("detail: %s" % url)
 
-        html = self._fetch(url)
-        self.log("  HTML 长度: %d" % len(html))
-        if not html:
+        html_text = self._fetch(url)
+        self.log("  HTML 长度: %d" % len(html_text))
+        if not html_text:
             return {"list": []}
 
         name = ""
         try:
-            m = _RE_H1.search(html)
+            m = _RE_H1.search(html_text)
             if m:
                 name = self._clean(m.group(1))
         except Exception:
             pass
         if not name:
             try:
-                m = re.search(r"<title>(.*?)</title>", html, re.S)
+                m = re.search(r"<title>(.*?)</title>", html_text, re.S)
                 if m:
                     name = self._clean(m.group(1).split("_")[0].split("-")[0])
             except Exception:
@@ -397,11 +395,11 @@ class Spider(Spider):
 
         pic = self.default_pic
         try:
-            m = re.search(r'data-original="(/upload/vod/[^"]+)"', html)
+            m = re.search(r'data-original="(/upload/vod/[^"]+)"', html_text)
             if m:
                 pic = self._fix_url(m.group(1))
             else:
-                m = re.search(r'<img[^>]+src="(/upload/vod/[^"]+)"', html)
+                m = re.search(r'<img[^>]+src="(/upload/vod/[^"]+)"', html_text)
                 if m:
                     pic = self._fix_url(m.group(1))
         except Exception:
@@ -409,14 +407,14 @@ class Spider(Spider):
 
         content = ""
         try:
-            m = _RE_INTRO_FULL.search(html) or _RE_INTRO_SKETCH.search(html)
+            m = _RE_INTRO_FULL.search(html_text) or _RE_INTRO_SKETCH.search(html_text)
             if m:
                 content = self._clean(m.group(1))
         except Exception:
             pass
         if not content:
             try:
-                m = _RE_META_DESC.search(html)
+                m = _RE_META_DESC.search(html_text)
                 if m:
                     content = self._clean(m.group(1))
             except Exception:
@@ -429,7 +427,7 @@ class Spider(Spider):
 
         director = ""
         try:
-            m = _RE_DIRECTOR_BLOCK.search(html)
+            m = _RE_DIRECTOR_BLOCK.search(html_text)
             if m:
                 names = [self._clean(x) for x in _RE_A_TEXT.findall(m.group(1))]
                 director = ", ".join([n for n in names if n])
@@ -438,7 +436,7 @@ class Spider(Spider):
 
         actor = ""
         try:
-            m = _RE_ACTOR_BLOCK.search(html)
+            m = _RE_ACTOR_BLOCK.search(html_text)
             if m:
                 names = [self._clean(x) for x in _RE_A_TEXT.findall(m.group(1))]
                 actor = ", ".join([n for n in names if n])
@@ -447,7 +445,7 @@ class Spider(Spider):
 
         score = ""
         try:
-            m = _RE_SCORE.search(html)
+            m = _RE_SCORE.search(html_text)
             if m:
                 score = m.group(1)
         except Exception:
@@ -456,18 +454,24 @@ class Spider(Spider):
         play_from = []
         play_url = []
         try:
-            for m in _RE_LINE_BLOCK.finditer(html):
+            for m in _RE_LINE_BLOCK.finditer(html_text):
                 line_name = self._clean(m.group(1))
                 block = m.group(2)
                 eps = _RE_EP_A.findall(block)
                 if not eps:
                     continue
+                
+                # 核心净化：线路别名也进行转义
                 alias = _LINE_ALIAS.get(line_name, line_name) or line_name
+                alias = html.unescape(alias)
+                
                 items = []
                 for href, ep_name in eps:
                     href = href.replace("&amp;", "&")
                     href = self._fix_url(href)
                     ep = self._clean(ep_name) or "正片"
+                    # 核心净化：集数名字转义
+                    ep = html.unescape(ep)
                     items.append("%s$%s" % (ep, href))
                 if items:
                     play_from.append(alias)
@@ -503,11 +507,11 @@ class Spider(Spider):
             if now - ts < 600:
                 return res
 
-        html = self._fetch(play_page)
+        html_text = self._fetch(play_page)
         url = ""
-        if html:
+        if html_text:
             try:
-                m = _RE_PLAYER.search(html)
+                m = _RE_PLAYER.search(html_text)
                 if m:
                     raw = m.group(1)
                     # 修复转义
