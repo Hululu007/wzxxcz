@@ -1,10 +1,11 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (完美分类与解析修复版)
-关键:
-  - 解决因 HTML 随机 Class 混淆导致的正则匹配空白
-  - 强制分类年份为 2025，防止网页返回空白
-  - 修复异常处理，防止 TVBox 初始化崩溃
+水牛影院 sunnykings.com | TVBox Python 爬虫 (终极源码对齐版)
+严格对照真实 HTML 结构：
+  - 列表页 URL 格式：/so-show/{tid}-{area}---{lang}---{page}---{year}.html
+  - 列表页数据提取：按 href 拆分块，在块内找 title 和 img
+  - 详情页剧集：多线路按 h3 + ul 提取
+  - 播放页提取：var player_aaaa 直链提取
 """
 import re
 import sys
@@ -70,10 +71,17 @@ CLASSES = [
     {"type_id": "36", "type_name": "伦理片"},
 ]
 
+# 大类默认映射子类，防止大类查不到数据
 _DEFAULT_SUB_TID = {
-    "1": "7", "2": "14", "3": "21", "4": "25", "30": "30", "36": "36"
+    "1": "7",   # 电影 -> 动作片
+    "2": "14",  # 电视剧 -> 国产剧
+    "3": "21",  # 综艺 -> 大陆综艺
+    "4": "25",  # 动漫 -> 国产动漫
+    "30": "30", # 爽文短剧
+    "36": "36", # 伦理片
 }
 
+# 真实子类 ID 映射
 _CLASS_ID_MAP = {
     "动作片": "7", "喜剧片": "8", "爱情片": "9", "科幻片": "10", 
     "恐怖片": "11", "剧情片": "12", "犯罪片": "29", "战争片": "13",
@@ -132,32 +140,16 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
-# 列表页解析正则，彻底剥离随机 class 影响，精准抓取任意位置的链接与标题
-_RE_CARD = re.compile(r'href="(/(?:news|weihu|wap|m)/\d+\.html)"[\s\S]*?title="([^"]*)"', re.I)
-_RE_IMG = re.compile(r'<img[^>]*?(?:data-original|src)="([^"]*)"[^>]*>', re.I)
-
 _RE_H1 = re.compile(r'<h1[^>]*>([\s\S]*?)</h1>', re.I)
-
-# 详情页数据提取
 _RE_INTRO_FULL = re.compile(r'<span[^>]*class="[^"]*detail-content[^"]*"[^>]*>([\s\S]*?)</span>', re.I)
 _RE_INTRO_SKETCH = re.compile(r'<span[^>]*class="[^"]*detail-sketch[^"]*"[^>]*>([\s\S]*?)</span>', re.I)
 _RE_META_DESC = re.compile(r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', re.I)
-
-# 主演和导演
 _RE_ACTOR_BLOCK = re.compile(r'<span[^>]*>\s*主演\s*[：:]\s*</span>([\s\S]*?)</p>', re.I)
 _RE_DIRECTOR_BLOCK = re.compile(r'<span[^>]*>\s*导演\s*[：:]\s*</span>([\s\S]*?)</p>', re.I)
 _RE_A_TEXT = re.compile(r'<a[^>]*>([^<]*)</a>', re.I)
-
 _RE_SCORE = re.compile(r'<span[^>]*class="[^"]*branch[^"]*"[^>]*>\s*([\d.]+)\s*<', re.I)
-
-# 播放器
 _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{.*?\})\s*</script>', re.S)
-
-# 剧集
-_RE_LINE_BLOCK = re.compile(
-    r'<h3[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+?)\s*</h3>'
-    r'[\s\S]*?<ul[^>]*class="[^"]*stui-content__playlist[^"]*"[^>]*>([\s\S]*?)</ul>',
-    re.I)
+_RE_LINE_BLOCK = re.compile(r'<h3[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+?)\s*</h3>[\s\S]*?<ul[^>]*class="[^"]*stui-content__playlist[^"]*"[^>]*>([\s\S]*?)</ul>', re.I)
 _RE_EP_A = re.compile(r'<a[^>]+href="([^"]*?/tvplay/[^"]+?\.html)"[^>]*>([^<]*)</a>', re.I)
 
 _LINE_ALIAS = {
@@ -252,29 +244,29 @@ class Spider(Spider):
             self.log("  HTML 为空")
             return videos
 
-        # 提取带链接的图片
-        pics = _RE_IMG.findall(html)
-        pic_idx = 0
-        
-        # 按 href 切割，提取卡片区块
+        # 按 href 作为切割锚点，精准提取块内 title 和图片
         blocks = re.split(r'(<a[^>]+href="/(?:news|weihu|wap|m)/\d+\.html")', html)
         
         for i in range(1, len(blocks), 2):
-            href = re.search(r'href="([^"]+)"', blocks[i]).group(1)
-            if href in seen:
-                continue
+            href_match = re.search(r'href="([^"]+)"', blocks[i])
+            if not href_match: continue
+            
+            href = href_match.group(1).replace("&amp;", "&")
+            if href in seen: continue
             seen.add(href)
             
-            # 在块内或者后一个区块找 title
+            # 当前块和后续一小段找 title
             next_block = blocks[i+1] if i+1 < len(blocks) else ""
-            title_match = re.search(r'title="([^"]*)"', blocks[i] + next_block[:200])
-            
+            title_match = re.search(r'title="([^"]*)"', blocks[i] + next_block[:300])
             title = title_match.group(1) if title_match else "未命名"
             
+            # 找图片
             pic = self.default_pic
-            if pic_idx < len(pics):
-                pic = self._fix_url(pics[pic_idx])
-                pic_idx += 1
+            pic_match = re.search(r'data-original="([^"]+)"', next_block)
+            if not pic_match:
+                pic_match = re.search(r'src="([^"]+)"', next_block)
+            if pic_match:
+                pic = self._fix_url(pic_match.group(1))
 
             videos.append({
                 "vod_id":      href,
@@ -311,6 +303,7 @@ class Spider(Spider):
         return {"list": self._extract_videos(html)}
 
     def _build_show_url(self, tid, extend, page):
+        # 1. 确定真实子分类 ID
         cls = extend.get("class", "")
         if cls:
             real_tid = _CLASS_ID_MAP.get(cls, tid)
@@ -322,24 +315,31 @@ class Spider(Spider):
         sort = extend.get("sort_field") or "time"
         year = extend.get("year") or ""
         
-        # 强制年份，防止源码空缺导致页面全白
+        # 2. 强制默认年份，防止网页空白
         if not year:
             year = "2025"
 
-        # 核心格式: /so-show/14--------2---2025.html
-        parts = [real_tid]
-        if area:
-            parts.append("-%s" % urllib.parse.quote(area))
-        else:
-            parts.append("-")
-        parts.append("-")
-        if lang:
-            parts.append("-%s" % urllib.parse.quote(lang))
-        else:
-            parts.append("-")
-        parts.append("-")
-        parts.append("-%s" % sort)
-        parts.append("-%d" % (page - 1))
+        # 3. 严格按照真实格式拼装：tid - area(占位) - 占位 - lang - letter(占位) - sort - page --- year
+        # 示例：14--------2---2025.html (14后面是8个横杠)
+        # 公式: tid + '-' + (area或'') + '-' + '-' + (lang或'') + '-' + '-' + sort + '-' + page + '---' + year
+        
+        p_tid = real_tid
+        p_area = urllib.parse.quote(area) if area else ""
+        p_lang = urllib.parse.quote(lang) if lang else ""
+        p_sort = sort
+        p_page = str(page - 1)
+        
+        # 拼装 (空位用空字符串，连字符用 - )
+        # 真实格式是 tid - area - class(空) - lang - letter(空) - sort - page
+        # 注意源码中：14--------2---2025 -> 14 后跟 8 个横杠。
+        # 即：14 - (空) - (空) - (空) - (空) - (空) - 2 --- 2025
+        parts = [p_tid]
+        parts.append("-%s" % p_area)  # 地区
+        parts.append("-")             # 类型(剧情)
+        parts.append("-%s" % p_lang)  # 语言
+        parts.append("-")             # 字母
+        parts.append("-%s" % p_sort)  # 排序
+        parts.append("-%s" % p_page)  # 页码
         head = "".join(parts)
 
         url = "%s/so-show/%s---%s.html" % (self.site_url, head, year)
@@ -550,7 +550,6 @@ class Spider(Spider):
             self.log("  => m3u8: %s" % url[:160])
             return res
 
-        # 兜底：交给 TVBox 嗅探
         res = {"parse": 1, "playUrl": "", "url": play_page,
                "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
         self._play_cache[play_page] = (now, res)
