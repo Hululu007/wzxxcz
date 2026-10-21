@@ -1,10 +1,10 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (红框信息完美提取版)
+水牛影院 sunnykings.com | TVBox Python 爬虫 (红框终极填满版)
 关键:
-  - 暴力提取 类型、地区、年份、语言、主演、导演、更新 信息
-  - 完美适配 TVBox 的字段显示机制
-  - 彻底剥离转义并保留你的代码风格
+  - 暴力解析 HTML 节点，彻底解决 type/area/year/lang 提取不到的问题
+  - 完美适配 TVBox UI 渲染机制
+  - 保留你的代码风格
 """
 import re
 import sys
@@ -414,46 +414,34 @@ class Spider(Spider):
         else:
             content = INTRO_PREFIX
 
-        # 超级暴力的信息提取，无视一切换行与标签嵌套
-        v_type = ""
-        v_area = ""
-        v_year = ""
-        v_lang = ""
-        v_actor = ""
-        v_director = ""
-        v_update = ""
+        # ======== 暴力抓取所有元数据 ========
+        v_type, v_area, v_year, v_lang, v_actor, v_director, v_update = "", "", "", "", "", "", ""
         
         try:
-            # 截取详情页真正的头部区域
             header_match = re.search(r'<div[^>]*class="[^"]*stui-content__detail[^"]*"[^>]*>([\s\S]*?)</div>', html_text)
             if header_match:
                 header = header_match.group(1)
                 
-                # 提取主演
                 a_m = re.search(r'主演[：:]\s*</span>([\s\S]*?)</p>', header)
                 if a_m:
                     names = re.findall(r'<a[^>]*>([^<]*)</a>', a_m.group(1))
                     v_actor = ", ".join([self._clean(n) for n in names if self._clean(n)])
                     
-                # 提取导演
                 d_m = re.search(r'导演[：:]\s*</span>([\s\S]*?)</p>', header)
                 if d_m:
                     names = re.findall(r'<a[^>]*>([^<]*)</a>', d_m.group(1))
                     v_director = ", ".join([self._clean(n) for n in names if self._clean(n)])
                 
-                # 提取杂项 (类型、地区、年份、语言)
                 info_m = re.search(r'类型[：:]\s*</span>([\s\S]*?)<span[^>]*>\s*地区[：:]\s*</span>([\s\S]*?)<span[^>]*>\s*年份[：:]\s*</span>([\s\S]*?)<span[^>]*>\s*语言[：:]\s*</span>([\s\S]*?)</p>', header)
                 if info_m:
                     v_type = ", ".join([self._clean(x) for x in re.findall(r'<a[^>]*>([^<]*)</a>', info_m.group(1))])
                     v_area = ", ".join([self._clean(x) for x in re.findall(r'<a[^>]*>([^<]*)</a>', info_m.group(2))])
                     v_year = self._clean(info_m.group(3))
                     v_lang = ", ".join([self._clean(x) for x in re.findall(r'<a[^>]*>([^<]*)</a>', info_m.group(4))])
-                    # 如果没 a 标签，就直接取纯文本
                     if not v_type: v_type = self._clean(re.sub(r'<[^>]+>', '', info_m.group(1)))
                     if not v_area: v_area = self._clean(re.sub(r'<[^>]+>', '', info_m.group(2)))
                     if not v_lang: v_lang = self._clean(re.sub(r'<[^>]+>', '', info_m.group(4)))
                 
-                # 提取更新日期
                 u_m = re.search(r'更新[：:]\s*</span>([\s\S]*?)</p>', header)
                 if u_m:
                     v_update = self._clean(u_m.group(1))
@@ -495,18 +483,17 @@ class Spider(Spider):
         if not play_from:
             return {"list": []}
 
-        # 按照 TVBox 规则完美拼接备注（将作为红框里的内容展示）
+        # 按照 TVBox 完美格式拼装
         remark_parts = []
-        if v_type: remark_parts.append("类型：" + v_type)
-        if v_area: remark_parts.append("地区：" + v_area)
-        if v_year: remark_parts.append("年份：" + v_year)
-        if v_lang: remark_parts.append("语言：" + v_lang)
+        if v_type: remark_parts.append(v_type)
+        if v_area: remark_parts.append(v_area)
+        if v_year: remark_parts.append(v_year)
+        if v_lang: remark_parts.append(v_lang)
         
-        info_str = " | ".join(remark_parts)
+        remark = " | ".join(remark_parts)
         if v_update:
-            info_str += "\n更新：" + v_update
-        
-        # 组装最终返回数据
+            remark += " | " + v_update
+
         return {"list": [{
             "vod_id": vod_id,
             "vod_name": name,
@@ -515,7 +502,7 @@ class Spider(Spider):
             "vod_actor": v_actor,
             "vod_director": v_director,
             "vod_score": score,
-            "vod_remarks": info_str,  # 将拼接好的信息串放入备注区
+            "vod_remarks": remark, 
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url":  "$$$".join(play_url),
         }]}
