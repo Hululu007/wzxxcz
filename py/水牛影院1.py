@@ -1,9 +1,9 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (红框信息全量抓取版)
+水牛影院 sunnykings.com | TVBox Python 爬虫 (红框终极完美排版版)
 关键:
-  - 完美提取详情页的 类型、地区、年份、语言、主演、导演、更新
-  - 完美剥离 HTML/Unicode 转义，线路、剧集 100% 对齐
+  - 完美提取 类型、地区、年份、语言、主演、导演、更新 信息
+  - 彻底解决 HTML/Unicode 转义导致的乱码
   - 保留你的代码风格
 """
 import re
@@ -141,7 +141,7 @@ _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{.*?\})\s*</script>', re.S)
 _RE_LINE_BLOCK = re.compile(r'<h3[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+?)\s*</h3>[\s\S]*?<ul[^>]*class="[^"]*stui-content__playlist[^"]*"[^>]*>([\s\S]*?)</ul>', re.I)
 _RE_EP_A = re.compile(r'<a[^>]+href="([^"]*?/tvplay/[^"]+?\.html)"[^>]*>([^<]*)</a>', re.I)
 
-# 精准提取红框内的标签数据
+# 针对红框提取专属正则
 _RE_META_TYPE = re.compile(r'类型[：:]\s*</span>([\s\S]*?)<span', re.I)
 _RE_META_AREA = re.compile(r'地区[：:]\s*</span>([\s\S]*?)<span', re.I)
 _RE_META_YEAR = re.compile(r'年份[：:]\s*</span>([\s\S]*?)<span', re.I)
@@ -424,33 +424,25 @@ class Spider(Spider):
         else:
             content = INTRO_PREFIX
 
-        # ======== 重点：全量提取红框信息 ========
-        
-        # 类型
+        # 全量提取红框信息
         v_type = ""
         try:
             m = _RE_META_TYPE.search(html_text)
             if m:
                 types = _RE_A_TAG.findall(m.group(1))
-                if not types:
-                    types = re.findall(r'>([^<]+)<', m.group(1))
                 v_type = ", ".join([self._clean(t) for t in types if self._clean(t)])
         except Exception:
             pass
 
-        # 地区
         v_area = ""
         try:
             m = _RE_META_AREA.search(html_text)
             if m:
                 areas = _RE_A_TAG.findall(m.group(1))
-                if not areas:
-                    areas = re.findall(r'>([^<]+)<', m.group(1))
                 v_area = ", ".join([self._clean(a) for a in areas if self._clean(a)])
         except Exception:
             pass
 
-        # 年份
         v_year = ""
         try:
             m = _RE_META_YEAR.search(html_text)
@@ -459,19 +451,15 @@ class Spider(Spider):
         except Exception:
             pass
 
-        # 语言
         v_lang = ""
         try:
             m = _RE_META_LANG.search(html_text)
             if m:
                 langs = _RE_A_TAG.findall(m.group(1))
-                if not langs:
-                    langs = re.findall(r'>([^<]+)<', m.group(1))
                 v_lang = ", ".join([self._clean(l) for l in langs if self._clean(l)])
         except Exception:
             pass
 
-        # 主演
         actor = ""
         try:
             m = _RE_META_ACTOR.search(html_text)
@@ -481,7 +469,6 @@ class Spider(Spider):
         except Exception:
             pass
 
-        # 导演
         director = ""
         try:
             m = _RE_META_DIRECTOR.search(html_text)
@@ -491,7 +478,6 @@ class Spider(Spider):
         except Exception:
             pass
 
-        # 更新日期
         v_update = ""
         try:
             m = _RE_META_UPDATE.search(html_text)
@@ -535,22 +521,17 @@ class Spider(Spider):
         if not play_from:
             return {"list": []}
 
-        # 组装所有的备注信息（按 TVBox 默认格式拼接，保证红框填满）
-        remark = ""
-        meta_parts = []
-        if v_type: meta_parts.append(v_type)
-        if v_area: meta_parts.append(v_area)
-        if v_year: meta_parts.append(v_year)
-        if v_lang: meta_parts.append(v_lang)
-        if meta_parts:
-            remark += " | ".join(meta_parts) + "\n"
-        if actor:
-            remark += "主演：" + actor + "\n"
-        if director:
-            remark += "导演：" + director + "\n"
+        # 核心排版逻辑：把提取的信息完美拼接成 TVBox 所需的布局
+        remark_parts = []
+        if v_type: remark_parts.append(v_type)
+        if v_area: remark_parts.append(v_area)
+        if v_year: remark_parts.append(v_year)
+        if v_lang: remark_parts.append(v_lang)
+        
+        remark = " / ".join(remark_parts)
         if v_update:
-            remark += "更新：" + v_update
-            
+            remark += " | " + v_update
+
         return {"list": [{
             "vod_id": vod_id,
             "vod_name": name,
