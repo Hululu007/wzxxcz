@@ -1,7 +1,7 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (红框与分类完美修复版)
-核心战力:
+水牛影院 sunnykings.com | TVBox Python 爬虫 
+网站结构:
   - 全量修复筛选分类（港剧、日剧、泰剧等完美展示并可点击）
   - 强制修复 INTRO_PREFIX 丢失问题
   - 融合 12 段占位与霸王硬上弓详情页解析
