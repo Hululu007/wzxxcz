@@ -1,10 +1,10 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (最强终极防折叠版)
+水牛影院 sunnykings.com | TVBox Python 爬虫 (卡片角标完美捕获版)
 关键:
-  - 完美绕过 TVBox 面板折叠机制（防折叠绝杀）
-  - 强制折叠排版信息，确保 100% 显示
-  - 完美保留你的代码结构
+  - 完美抓取“更新至xx集”角标 (vod_remarks)
+  - 完美绕过 TVBox 面板折叠机制
+  - 保留你的代码结构
 """
 import re
 import sys
@@ -237,10 +237,13 @@ class Spider(Spider):
             seen.add(href)
             
             start_idx = m.start()
-            segment = html_content[start_idx : start_idx + 1000]
+            # 截取更大的一块，确保能包裹到角标
+            segment = html_content[start_idx : start_idx + 1500]
+            
             title_match = re.search(r'title="([^"]*)"', segment)
             title = title_match.group(1) if title_match else "未命名"
             
+            # 提取图片
             pic = self.default_pic
             pic_match = re.search(r'data-original="([^"]+)"', segment)
             if not pic_match:
@@ -248,11 +251,21 @@ class Spider(Spider):
             if pic_match:
                 pic = self._fix_url(pic_match.group(1))
 
+            # 核心大招：强行抓取角标（如“更新至xx集”、“全30集”）
+            remark = ""
+            # 在附近的 span 中寻找
+            span_matches = re.findall(r'<span[^>]*>([^<]+)</span>', segment)
+            for text in span_matches:
+                text = self._clean(text)
+                if re.search(r'(更新|全|第|集|HD|正片)', text) and text != title:
+                    remark = text
+                    break
+
             videos.append({
                 "vod_id":      href,
                 "vod_name":    self._clean(title)[:100],
                 "vod_pic":     pic,
-                "vod_remarks": "",
+                "vod_remarks": remark,
             })
             
         self.log("  提取到数据: %d 条" % len(videos))
