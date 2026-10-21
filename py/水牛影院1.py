@@ -1,10 +1,10 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (卡片角标完美捕获版)
+水牛影院 sunnykings.com | TVBox Python 爬虫 (终极杀阵版)
 关键:
-  - 完美抓取“更新至xx集”角标 (vod_remarks)
-  - 完美绕过 TVBox 面板折叠机制
-  - 保留你的代码结构
+  - 完美复原 9 个横杠 / 空条件过滤的终极 URL 拼接逻辑
+  - 完美抓取卡片“更新至xx集”角标
+  - 完美保留你的代码结构
 """
 import re
 import sys
@@ -237,13 +237,11 @@ class Spider(Spider):
             seen.add(href)
             
             start_idx = m.start()
-            # 截取更大的一块，确保能包裹到角标
             segment = html_content[start_idx : start_idx + 1500]
             
             title_match = re.search(r'title="([^"]*)"', segment)
             title = title_match.group(1) if title_match else "未命名"
             
-            # 提取图片
             pic = self.default_pic
             pic_match = re.search(r'data-original="([^"]+)"', segment)
             if not pic_match:
@@ -251,9 +249,8 @@ class Spider(Spider):
             if pic_match:
                 pic = self._fix_url(pic_match.group(1))
 
-            # 核心大招：强行抓取角标（如“更新至xx集”、“全30集”）
+            # 强行抠出卡片的角标
             remark = ""
-            # 在附近的 span 中寻找
             span_matches = re.findall(r'<span[^>]*>([^<]+)</span>', segment)
             for text in span_matches:
                 text = self._clean(text)
@@ -308,6 +305,7 @@ class Spider(Spider):
         sort = extend.get("sort_field") or "time"
         year = extend.get("year") or ""
         
+        # 终极 URL 拼接逻辑复原：没条件就走 listnew，有条件走 so-show 的 9 个横杠！
         if not area and not lang and not year and sort == "time":
             if page == 1:
                 return "%s/listnew/%s.html" % (self.site_url, real_tid)
@@ -320,8 +318,12 @@ class Spider(Spider):
         s_area = urllib.parse.quote(area) if area else ""
         s_lang = urllib.parse.quote(lang) if lang else ""
         
-        head = "%s-%s--%s--%s-%d" % (real_tid, s_area, s_lang, sort, page - 1)
-        url = "%s/so-show/%s---%s.html" % (self.site_url, head, year)
+        # 根据你提供的截图绝对复原：/so-show/14---------2025.html
+        head = "%s---------" % real_tid
+        if s_area:
+            head = "%s-%s--------" % (real_tid, s_area)
+            
+        url = "%s/so-show/%s-%d---%s.html" % (self.site_url, head, page, year)
         return url
 
     def categoryContent(self, tid, pg, filter, extend):
@@ -395,7 +397,6 @@ class Spider(Spider):
                 pass
         name = name or vod_id
 
-        # 封面强制清理防盗链
         pic = self.default_pic
         try:
             m = re.search(r'data-original="(/upload/vod/[^"]+)"', html_text)
@@ -492,32 +493,26 @@ class Spider(Spider):
         if not play_from:
             return {"list": []}
 
-        # ======== 极限制裁：强制单行拼接，无视 TVBox 折叠机制 ========
-        info_array = []
-        if v_type: info_array.append("类型：" + v_type)
-        if v_area: info_array.append("地区：" + v_area)
-        if v_year: info_array.append("年份：" + v_year)
-        if v_lang: info_array.append("语言：" + v_lang)
+        # 按照 TVBox 完美格式拼装
+        remark_parts = []
+        if v_type: remark_parts.append(v_type)
+        if v_area: remark_parts.append(v_area)
+        if v_year: remark_parts.append(v_year)
+        if v_lang: remark_parts.append(v_lang)
         
-        meta_text = " | ".join(info_array)
-        
-        # 把主演导演强行拼进备注和简介，防止某些 TVBox 隐藏
-        final_content = INTRO_PREFIX + "\n\n" + meta_text + "\n"
-        if v_actor: final_content += "主演：" + v_actor + "\n"
-        if v_director: final_content += "导演：" + v_director + "\n"
-        if v_update: final_content += "更新：" + v_update + "\n"
-        
-        final_content += "\n" + (content or "暂无简介")
-        
+        remark = " | ".join(remark_parts)
+        if v_update:
+            remark += " | " + v_update
+
         return {"list": [{
             "vod_id": vod_id,
             "vod_name": name,
             "vod_pic": pic,
-            "vod_content": final_content,
-            "vod_actor": v_actor, 
+            "vod_content": content,
+            "vod_actor": v_actor,
             "vod_director": v_director,
             "vod_score": score,
-            "vod_remarks": meta_text, 
+            "vod_remarks": remark, 
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url":  "$$$".join(play_url),
         }]}
