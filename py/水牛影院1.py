@@ -1,10 +1,46 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (红框与分类完美修复版)
-核心战力:
-  - 全量修复筛选分类（港剧、日剧、泰剧等完美展示并可点击）
-  - 强制修复 INTRO_PREFIX 丢失问题
-  - 融合 12 段占位与霸王硬上弓详情页解析
+水牛影院 sunnykings.com | TVBox Python 爬虫 
+网站结构:
+1. 卡片链接是 /wap/xxx.html、/weihu/xxx.html、/news/xxx.html、/tv/xxx.html 四种混用，
+   原来的 /(news|weihu|wap|m)/ 正则漏掉 /tv/，且没有兜底，导致部分页"0 条"。
+2. 卡片结构是「缩略图 a + 标题 a + 简介 p」，标题在 h4>a 的 title 里，
+   原来的 +1500 字符窗口取到的 title 往往是下一张卡的，标题会错位。
+   改为按 <li> 分块解析，彻底解决错位与串图。
+3. 筛选 URL 是 maccms 的 11 段横杠格式，各字段位置固定：
+   /so-show/{class}-{area}-{lang}-{letter}-{order}-{page}-{year}.html
+   实测可用示例：
+     分类+年份 : /so-show/14-----------2025.html
+     地区+语言 : /so-show/14-%E5%86%85%E5%9C%B0--%E5%9B%BD%E8%AF%AD--------.html
+     年份+排序 : /so-show/14--------1---hits.html
+   原脚本把年份写在页码区、把排序整个丢掉，所以"筛了没数据"。
+4. 分页总页数：优先读移动端 <span class="num">1/22</span>，其次读"尾页"链接里的页码。
+5. 详情页元数据（类型/地区/年份/语言/主演/导演/更新）原正则相互依赖、遇空格即断，
+   改为按"标签 span 定位 + 到下一个标签 span 截止"的独立片段解析。
+6. 播放地址：详情页里没有 player_aaaa，必须在 /tvplay/xx-x-x.html 里取，
+   原逻辑正确，这里补了 url 兜底与 Referer。
+
+==================== 实测得到的站点真实规则（重要） ====================
+so-show 筛选 URL 是固定 12 段（用 "-" 连接，索引 0~11），实测槽位为：
+    0 分类id | 1 地区 | 2 排序 | 3 剧情 | 4 语言 | 5 字母 | 6 空 | 7 空
+    8 页码   | 9 空   | 10 空  | 11 年份
+实测通过的 URL（均已请求验证）：
+    默认       /so-show/14-----------.html                  -> 36 条 / 186 页
+    年份       /so-show/14-----------2025.html              -> 36 条 / 22 页
+    地区       /so-show/14-%E5%86%85%E5%9C%B0----------.html -> 34 条
+    语言       /so-show/14----%E5%9B%BD%E8%AF%AD-------.html -> 36 条 / 116 页
+    排序       /so-show/14--hits---------.html               -> 36 条
+    年份+排序  /so-show/14--hits---------2025.html           -> 36 条 / 22 页
+    年份+分页  /so-show/14--------2---2025.html              -> 第 2 页 / 22 页
+    排序+分页  /so-show/14--hits------2---.html              -> 第 2 页
+旧脚本把年份塞进页码槽、排序字段整个丢弃、且地区/语言槽位错开，
+这正是"筛选完没有数据"的直接原因。
+
+搜索 URL 是 14 段，关键词在槽 0；实测该站搜索固定只回 10 条且无分页条，
+故搜索只取第 1 页。
+原逻辑正确，这里补了 url 兜底与 Referer。
+so-show 12段占位 URL 与容错降级。
+"""
 """
 import re
 import sys
@@ -62,17 +98,17 @@ DEFAULT_PIC = HOST + "/template/default18/template/mb13/statics/img/load.gif"
 
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
+# 终极过滤：去掉了伦理片
 CLASSES = [
     {"type_id": "1",  "type_name": "电影"},
     {"type_id": "2",  "type_name": "电视剧"},
     {"type_id": "3",  "type_name": "综艺"},
     {"type_id": "4",  "type_name": "动漫"},
     {"type_id": "30", "type_name": "爽文短剧"},
-    {"type_id": "36", "type_name": "伦理片"},
 ]
 
 _DEFAULT_SUB_TID = {
-    "1": "1", "2": "2", "3": "3", "4": "4", "30": "30", "36": "36"
+    "1": "1", "2": "2", "3": "3", "4": "4", "30": "30"
 }
 
 _SLOT = {
@@ -90,7 +126,7 @@ _CLASS_ID_MAP = {
     "日剧": "18", "泰剧": "31", "欧美剧": "19", "海外剧": "20",
     "大陆综艺": "21", "日韩综艺": "22", "港台综艺": "23", "欧美综艺": "24",
     "国产动漫": "25", "日本动漫": "26", "欧美动漫": "27", "海外动漫": "28",
-    "爽文短剧": "30", "短剧": "30", "伦理片": "36",
+    "爽文短剧": "30", "短剧": "30"
 }
 
 _SORTS = [{"n": "按时间", "v": "time"},
@@ -118,14 +154,12 @@ _LANGS = [
     {"n": "其它", "v": "其它"},
 ]
 
-# 核心修复：完美对齐网页的子分类下拉！
 _FILTERS_MAP = {
     "1":  ["全部", "动作片", "喜剧片", "爱情片", "科幻片", "恐怖片", "剧情片", "犯罪片", "战争片"],
     "2":  ["全部", "国产剧", "港剧", "台湾剧", "韩剧", "日剧", "泰剧", "欧美剧", "海外剧"],
     "3":  ["全部", "大陆综艺", "日韩综艺", "港台综艺", "欧美综艺"],
     "4":  ["全部", "国产动漫", "日本动漫", "欧美动漫", "海外动漫"],
     "30": ["全部", "爽文短剧", "短剧"],
-    "36": ["全部", "伦理片"],
 }
 
 FILTERS = {}
@@ -389,7 +423,6 @@ class Spider(Spider):
                 del extend[k]
 
         url = self._build_show_url(tid, extend, page)
-        self.log("category: %s" % url)
         html_text = self._fetch(url)
         videos = self._extract_videos(html_text)
 
@@ -494,7 +527,6 @@ class Spider(Spider):
         if m:
             pic = self._fix_url(m.group(1))
 
-        # --- 核心修复：强制保护简介前缀 ---
         content = ""
         m = _RE_INTRO_FULL.search(html_text) or _RE_INTRO_SKETCH.search(html_text)
         if m:
@@ -504,12 +536,10 @@ class Spider(Spider):
             if m:
                 content = self._clean(m.group(1))
 
-        # 无论 content 有没有拿到，前缀永远都在！
         if content:
             content = INTRO_PREFIX + "\n" + content
         else:
             content = INTRO_PREFIX
-        # ---------------------------------
 
         header = ""
         m = re.search(r'class="[^"]*stui-content__detail[^"]*"([\s\S]{0,4000}?)<div[^>]*class="[^"]*(?:play-btn|stui-pannel)[^"]*"', html_text)
