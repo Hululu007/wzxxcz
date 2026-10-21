@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-看剧 kanju.ai | TVBox Python 爬虫 
+看剧 kanju.ai | TVBox Python 爬虫
 关键:
   - HMAC-SHA256 请求签名 (timestamp + nonce)
   - 主备域名自动切换
-  - 播放多级兜底: yjm3u8 直链 -> yjapi -> resolve-line
+  - 播放多级兜底: resolve-line -> 直链校验 -> 页面嗅探
+  - 线路级自动探活: 记录失败线路，下次优先可用线路
 """
 import sys
 import json
@@ -13,6 +14,7 @@ import math
 import hmac
 import hashlib
 import secrets
+import binascii
 import urllib.parse
 
 sys.path.append('..')
@@ -46,11 +48,13 @@ except ImportError:
             timeout = kw.pop('timeout', 15)
             method = kw.pop('method', 'GET').upper()
             data = kw.pop('data', None)
+            stream = kw.pop('stream', False)
             if method == 'POST':
                 r = self._sess.post(url, headers=headers, data=data,
-                                    timeout=timeout, **kw)
+                                    timeout=timeout, stream=stream, **kw)
             else:
-                r = self._sess.get(url, headers=headers, timeout=timeout, **kw)
+                r = self._sess.get(url, headers=headers, timeout=timeout,
+                                   stream=stream, **kw)
             r.encoding = 'utf-8'
             return r
 
@@ -67,8 +71,6 @@ HOSTS = ["https://kanju.ai", "https://kanju20.com"]
 KEY = "557d0e4ae929f438da6bd84412374e6086b8af09b3fed54bf22601d5bf8c54a0"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
-YJ = "https://zy.baipiaozhe.com/v1/playback/yjm3u8/%s.m3u8"
-YJ_API = "https://zy.baipiaozhe.com/v1/playback/yjapi/%s"
 CLIENT = {
     "x-ai-movie-client-name": "dianyingtiantang-frontend",
     "x-ai-movie-client-version": "1.0.0",
@@ -77,6 +79,34 @@ CLIENT = {
 }
 
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
+
+# 线路名 -> 播放页 Referer（部分 CDN 校验 Referer）
+REFERER_MAP = {
+    "hn.bfvvs.com": "https://hn.bfvvs.com/",
+    "bfikuncdn.com": "https://bfikuncdn.com/",
+    "jisuzy": "https://www.jisuzy.com/",
+    "jisuts": "https://www.jisuzy.com/",
+    "yzzy": "https://www.yzzy.com/",
+    "modujx": "https://www.modujx.com/",
+    "xluuss": "https://www.xluuss.com/",
+    "wsyzym3u8": "https://www.wsyzym3u8.com/",
+    "xgplay": "https://www.xgplay20.com/",
+    "ly166": "https://www.ly166.com/",
+    "rstu6": "https://www.rstu6.com/",
+    "hhuus": "https://www.hhuus.com/",
+    "ajupf": "https://www.ajupf.com/",
+    "fengbao": "https://www.fengbao14.com/",
+    "kuktxu": "https://www.kuktxu.com/",
+    "ukubf": "https://www.ukubf3.com/",
+    "maoyanplay": "https://www.maoyanplay.com/",
+    "dytt-tvs": "https://www.dytt-tvs.com/",
+    "ppqrrs": "https://www.ppqrrs.com/",
+    "ffzy-onl": "https://www.ffzy-online.com/",
+    "gghijk": "https://www.gghijk.com/",
+    "lzcdn": "https://www.lzcdn.com/",
+    "zuidazym3u": "https://www.zuidazy.com/",
+    "maowushi": "https://www.maowushi.com/",
+}
 
 CATEGORIES = {
     "movie": "电影", "series": "电视剧", "short_drama": "短剧",
@@ -97,6 +127,32 @@ _SORTS = [
     {"n": "最新", "v": "latest"},
     {"n": "评分", "v": "rating"},
 ]
+
+# 线路排序：m3u8 直链优先（播放器兼容性最好），官方 mp4 次之
+_KIND_RANK = {"m3u8": 0, "mp4": 1, "unknown": 9}
+
+
+def _kind_of(head):
+    """根据响应头字节判断真实媒体类型，绕开错误的 Content-Type"""
+    if not head:
+        return ""
+    if head[:7] == b"#EXTM3U":
+        return "m3u8"
+    if len(head) >= 8 and head[4:8] == b"ftyp":
+        return "mp4"
+    if head[:3] == b"ID3" or head[:2] in (b"\xff\xfb", b"\xff\xf3"):
+        return "mp3"
+    if head[:4] == b"\x1aE\xdf\xa3":
+        return "mkv"
+    if head[:3] == b"\xff\xd8\xff":
+        return "jpeg"
+    if head[:4] == b"\x89PNG":
+        return "png"
+    if head[:2] in (b"PK",) or head[:4] == b"RIFF":
+        return "bin"
+    if head[:5] == b"<?xml" or head[:1] in (b"<", b"{"):
+        return "text"
+    return ""
 
 
 class Spider(Spider):
@@ -124,16 +180,13 @@ class Spider(Spider):
         self._hv_t = 0
         self._sc = {}
         self._sc_t = {}
+        # 线路探活缓存: {线路名: {"ok":bool, "t":ts, "url":真实地址}}
+        self._line_probe = {}
+        # 播放地址缓存: {token: {"url":.., "referer":.., "t":ts}}
+        self._play_cache = {}
 
         # 探测可用域名
-        for i, h in enumerate(self.hosts):
-            try:
-                r = self.fetch(h, headers={"User-Agent": UA}, timeout=15)
-                if getattr(r, "status_code", None) == 200:
-                    self._hi = i
-                    break
-            except Exception:
-                continue
+        self._probe_host()
         self.log("init: host=%s" % self._host())
         return ""
 
@@ -142,6 +195,21 @@ class Spider(Spider):
     def _host(self):
         return self.hosts[getattr(self, "_hi", 0)]
 
+    def _probe_host(self):
+        order = list(range(len(self.hosts)))
+        if getattr(self, "_hi", 0):
+            order.insert(0, order.pop(self._hi))
+        for i in order:
+            h = self.hosts[i]
+            try:
+                r = self.fetch(h, headers={"User-Agent": UA}, timeout=12)
+                if getattr(r, "status_code", None) == 200:
+                    self._hi = i
+                    return True
+            except Exception:
+                continue
+        return False
+
     def _sign(self, method, path):
         ts = str(int(time.time() * 1000))
         nonce = secrets.token_hex(16)
@@ -149,23 +217,41 @@ class Spider(Spider):
         sig = hmac.new(KEY.encode(), msg.encode(), hashlib.sha256).hexdigest()
         return ts, nonce, sig
 
-    def _fetch(self, url, headers=None, timeout=15, method="GET", data=None):
+    def _fetch(self, url, headers=None, timeout=15, method="GET", data=None,
+               stream=False):
         try:
             h = dict(self.headers)
             if headers:
                 h.update(headers)
+            kw = {"timeout": timeout}
+            if stream:
+                kw["stream"] = True
             if method.upper() == "POST":
-                rsp = self.fetch(url, headers=h, timeout=timeout,
-                                 method="POST", data=data)
+                rsp = self.fetch(url, headers=h, method="POST", data=data, **kw)
             else:
-                rsp = self.fetch(url, headers=h, timeout=timeout)
+                rsp = self.fetch(url, headers=h, **kw)
             return rsp
+        except TypeError:
+            # 兼容不支持 stream 参数的内核
+            try:
+                h = dict(self.headers)
+                if headers:
+                    h.update(headers)
+                if method.upper() == "POST":
+                    return self.fetch(url, headers=h, timeout=timeout,
+                                      method="POST", data=data)
+                return self.fetch(url, headers=h, timeout=timeout)
+            except Exception as e:
+                self.log("fetch FAIL %s -> %s" % (url[:80], e))
+                return None
         except Exception as e:
-            self.log("fetch FAIL %s -> %s" % (url, e))
+            self.log("fetch FAIL %s -> %s" % (url[:80], e))
             return None
 
-    def _req(self, method, path, body=None):
-        for _ in range(len(self.hosts)):
+    def _req(self, method, path, body=None, retry_host=True):
+        """带签名请求，失败自动切换备用域名"""
+        tries = len(self.hosts) if retry_host else 1
+        for n in range(tries):
             host = self._host()
             try:
                 ts, nonce, sig = self._sign(method, path)
@@ -179,25 +265,33 @@ class Spider(Spider):
                 url = host + path
                 if body is not None:
                     hdrs["Content-Type"] = "application/json"
-                    rsp = self._fetch(url, headers=hdrs, timeout=10,
-                                      method="POST", data=json.dumps(body))
+                    rsp = self._fetch(url, headers=hdrs, timeout=12,
+                                      method="POST",
+                                      data=json.dumps(body, ensure_ascii=False))
                 else:
-                    rsp = self._fetch(url, headers=hdrs, timeout=10)
+                    rsp = self._fetch(url, headers=hdrs, timeout=12)
 
                 if rsp is None:
                     raise RuntimeError("rsp is None")
                 code = getattr(rsp, "status_code", 0)
                 if code in (200, 201):
                     try:
-                        return rsp.json()
+                        j = rsp.json()
                     except Exception:
                         txt = getattr(rsp, "text", "") or ""
-                        return json.loads(txt) if txt else {}
-                self.log("req %s %s -> HTTP %s" % (method, path, code))
+                        j = json.loads(txt) if txt.strip().startswith("{") else {}
+                    if isinstance(j, dict):
+                        return j
+                    return {}
+                self.log("req %s %s -> HTTP %s" % (method, path[:70], code))
+                # 4xx 说明签名/参数问题，换域名也没用，但仍试一次
+                if code in (401, 403, 404):
+                    break
             except Exception as e:
-                self.log("req FAIL %s %s -> %s" % (method, path, e))
-            self._hi = (self._hi + 1) % len(self.hosts)
-            time.sleep(1)
+                self.log("req FAIL %s %s -> %s" % (method, path[:70], e))
+            if n + 1 < tries:
+                self._hi = (self._hi + 1) % len(self.hosts)
+                time.sleep(0.6)
         return {}
 
     def _fix_url(self, url):
@@ -221,16 +315,43 @@ class Spider(Spider):
               .replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">"))
         return s.strip()
 
+    def _referer_for(self, url):
+        """按 CDN 域名推断 Referer；无法识别时退回站点根"""
+        try:
+            host = urllib.parse.urlparse(url).netloc.lower()
+        except Exception:
+            return self._host() + "/"
+        for k, v in REFERER_MAP.items():
+            if k in host:
+                return v
+        return self._host() + "/"
+
+    def _play_header(self, url=""):
+        h = {"User-Agent": UA}
+        if url:
+            h["Referer"] = self._referer_for(url)
+            h["Origin"] = h["Referer"].rstrip("/")
+        else:
+            h["Referer"] = self._host() + "/"
+        return h
+
     # ---------------- 内容 ----------------
 
     def _vod(self, c):
         if not isinstance(c, dict):
             return {}
+        remarks = c.get("remarks")
+        if not remarks:
+            ep_txt = c.get("episode_progress_text") or ""
+            if ep_txt:
+                remarks = self._clean(ep_txt)
+            elif c.get("year"):
+                remarks = str(c.get("year"))
         return {
-            "vod_id": c.get("id", ""),
-            "vod_name": self._clean(c.get("title", "")),
-            "vod_pic": self._fix_url(c.get("poster_url", "")),
-            "vod_remarks": self._clean(c.get("remarks") or str(c.get("year") or "")),
+            "vod_id": c.get("id", "") or c.get("variant_id", ""),
+            "vod_name": self._clean(c.get("title") or c.get("name") or ""),
+            "vod_pic": self._fix_url(c.get("poster_url") or c.get("carousel_url") or ""),
+            "vod_remarks": self._clean(remarks or ""),
             "vod_year": str(c.get("year") or ""),
             "vod_area": self._clean(c.get("area") or ""),
             "vod_actor": "/".join((c.get("actors") or [])[:3]),
@@ -285,24 +406,31 @@ class Spider(Spider):
                     seen.add(vid)
                     lst.append(v)
 
-        self._hv, self._hv_t = {"list": lst}, now
+        if lst:
+            self._hv, self._hv_t = {"list": lst}, now
         self.log("home: %d 条" % len(lst))
-        return self._hv
+        return {"list": lst}
 
     def categoryContent(self, tid, pg=1, filter=False, extend=""):
         pn = 1
         try:
-            pn = max(int(str(pg)), 1)
+            pn = max(int(str(pg).strip()), 1)
         except Exception:
             pass
 
-        # 解析 extend
+        # 解析 extend（TVBox 可能传 str / dict / list）
         ext = {}
         if isinstance(extend, dict):
             ext = extend
-        elif isinstance(extend, str) and extend:
+        elif isinstance(extend, (list, tuple)):
+            for e in extend:
+                if isinstance(e, dict):
+                    ext.update(e)
+        elif isinstance(extend, str) and extend.strip():
             try:
-                ext = json.loads(extend)
+                t = json.loads(extend)
+                if isinstance(t, dict):
+                    ext = t
             except Exception:
                 ext = {}
 
@@ -312,18 +440,18 @@ class Spider(Spider):
         if cat not in CATEGORIES:
             cat = "movie"
 
-        # 筛选条件覆盖
-        if isinstance(ext, dict):
-            gen = ext.get("genre") or gen
-            sort = ext.get("sort") or "trending"
-        else:
+        gen = str(ext.get("genre") or gen or "").strip()
+        if gen in ("全部", "all", "0"):
+            gen = ""
+        sort = str(ext.get("sort") or "trending").strip()
+        if sort in ("全部", "0"):
             sort = "trending"
 
         qs = ["kind=%s" % cat]
         if gen:
             qs.append("genre=%s" % urllib.parse.quote(gen))
         if sort:
-            qs.append("sort=%s" % urllib.parse.quote(str(sort)))
+            qs.append("sort=%s" % urllib.parse.quote(sort))
         qs.append("page=%d" % pn)
         qs.append("limit=40")
         path = "/v1/browse/catalog?" + "&".join(qs)
@@ -331,8 +459,11 @@ class Spider(Spider):
         self.log("category: %s" % path)
         j = self._req("GET", path)
         cards = j.get("cards") or []
-        total = (j.get("pagination") or {}).get("total", 0) or 0
+        pag = j.get("pagination") or {}
+        total = pag.get("total", 0) or 0
         pagecount = max(math.ceil(total / 40.0), 1) if total else 1
+        if total and not pag.get("has_more", True):
+            pagecount = pn
 
         return {
             "page": pn, "pagecount": pagecount, "limit": 40,
@@ -340,61 +471,103 @@ class Spider(Spider):
             "list": [self._vod(c) for c in cards if c],
         }
 
+    def _pick_id(self, ids):
+        """兼容 TVBox 各种传参形态:
+        list / tuple / '["a","b"]' / "['a']" / 'a,b' / "a/b" / "a$b"
+        """
+        v = ids
+        if isinstance(v, (list, tuple)):
+            v = v[0] if v else ""
+        elif isinstance(v, str):
+            s = v.strip()
+            # 形如 "['xxx']" / '["xxx"]' 的字符串字面量
+            if (s.startswith("[") and s.endswith("]")):
+                inner = s[1:-1].strip()
+                if inner:
+                    s = inner.split(",")[0].strip()
+                else:
+                    s = ""
+                # 去掉可能残留的引号
+                s = s.strip().strip("'").strip('"')
+                v = s
+            elif "," in s:
+                v = s.split(",")[0].strip()
+            elif "/" in s:
+                v = s.split("/")[0].strip()
+        v = str(v or "").strip().strip("'").strip('"')
+        if "$" in v:
+            v = v.rsplit("$", 1)[-1].strip()
+        return v
+
     def detailContent(self, ids):
-        if isinstance(ids, list):
-            vid = ids[0] if ids else ""
-        else:
-            vid = str(ids) if ids else ""
-        vid = str(vid).split("/")[0].strip()
+        vid = self._pick_id(ids)
         if not vid:
             return {"list": []}
 
         self.log("detail: %s" % vid)
         d = self._req("GET", "/v1/catalog/%s" % vid)
-        if not d:
+        if not d or not d.get("id"):
+            self.log("detail 失败: %s" % vid)
             return {"list": []}
 
         eps = d.get("episodes") or []
-        urls = []
+
+        # 先取第一集线路名，确保 线路数 与 剧集列表 对齐
+        line_names = []
+        tok0 = ""
         for e in eps:
-            t = e.get("token")
-            if not t:
-                continue
-            ep_name = (e.get("title")
-                       or ("第%s集" % (e.get("number") or len(urls) + 1)))
-            urls.append("%s$%s" % (ep_name, t))
+            if e.get("token"):
+                tok0 = e.get("token")
+                break
+        if tok0:
+            line_names = self._line_names(tok0)
 
-        play_from, play_url = "kanju", "#".join(urls)
-
-        # 多线路：用第一集 token 解析线路名
-        if eps and urls:
-            tok0 = eps[0].get("token")
-            if tok0:
-                rj = self._req("GET", "/v1/playback/resolve/%s" % tok0)
-                names = []
-                for lo in (rj.get("line_options") or []):
-                    n = (lo.get("provider_name") or "").strip()
-                    if n and n not in names:
-                        names.append(n)
-                names = names[:8]
-                if names:
-                    play_from = "$$$".join(names)
-                    play_url = "$$$".join([play_url] * len(names))
+        if line_names:
+            play_from = "$$$".join(line_names)
+            blocks = []
+            for _ in line_names:
+                urls = []
+                for idx, e in enumerate(eps):
+                    t = e.get("token")
+                    if not t:
+                        continue
+                    ep_name = (e.get("title")
+                               or ("第%s集" % (e.get("number") or idx + 1)))
+                    # 线路名放在 flag 上，id 里带 emoji 会破坏 TVBox 解析，这里只放 token
+                    urls.append("%s$%s" % (ep_name, t))
+                blocks.append("#".join(urls))
+            play_url = "$$$".join(blocks)
+        else:
+            play_from = "kanju"
+            urls = []
+            for idx, e in enumerate(eps):
+                t = e.get("token")
+                if not t:
+                    continue
+                ep_name = (e.get("title")
+                           or ("第%s集" % (e.get("number") or idx + 1)))
+                urls.append("%s$%s" % (ep_name, t))
+            play_url = "#".join(urls)
 
         content = self._clean(d.get("description") or "")
         content = (INTRO_PREFIX + "\n" + content) if content else INTRO_PREFIX
 
+        remarks = (d.get("remarks") or d.get("episode_progress_text")
+                   or d.get("update_status") or "")
+        if not remarks and d.get("episode_count"):
+            remarks = "共%s集" % d.get("episode_count")
+
         return {"list": [{
             "vod_id": vid,
             "vod_name": self._clean(d.get("title", "")),
-            "vod_pic": self._fix_url(d.get("poster_url", "")),
+            "vod_pic": self._fix_url(d.get("poster_url") or d.get("carousel_url") or ""),
             "vod_year": str(d.get("year") or ""),
             "vod_area": self._clean(d.get("area") or ""),
             "vod_class": "/".join((d.get("genres") or [])[:3]),
             "vod_director": "/".join((d.get("directors") or [])[:2]),
             "vod_actor": "/".join((d.get("actors") or [])[:3]),
             "vod_content": content,
-            "vod_remarks": self._clean(d.get("status") or d.get("remarks") or ""),
+            "vod_remarks": self._clean(remarks),
             "vod_play_from": play_from,
             "vod_play_url": play_url,
         }]}
@@ -436,8 +609,48 @@ class Spider(Spider):
 
     # ---------------- 播放 ----------------
 
+    def _line_names(self, token):
+        """取某集全部线路名（按可播优先级排序）"""
+        key = "names:%s" % token[:24]
+        now = time.time()
+        c = self._play_cache.get(key)
+        if c and now - c.get("t", 0) < 600:
+            return c.get("names") or []
+
+        j = self._req("GET", "/v1/playback/resolve/%s" % token, retry_host=False)
+        lines = j.get("line_options") or []
+        lines = self._sort_lines(lines)
+        names = []
+        for lo in lines:
+            n = (lo.get("provider_name") or "").strip()
+            if n and n not in names:
+                names.append(n)
+        self._play_cache[key] = {"names": names, "t": now}
+        return names
+
+    def _sort_lines(self, lines):
+        """线路按 可播性 + 类型 排序：m3u8 优先，已知坏线路排后"""
+        now = time.time()
+
+        def score(lo):
+            name = (lo.get("provider_name") or "").strip()
+            p = self._line_probe.get(name)
+            bad = 0
+            if p and now - p.get("t", 0) < 1800 and not p.get("ok"):
+                bad = 1
+            kind = lo.get("url_kind") or "unknown"
+            if kind == "resolve_ticket":
+                kind = (p or {}).get("real_kind") or "mp4"
+            return (bad, _KIND_RANK.get(kind, 9),
+                    -(lo.get("preference_weight") or 0))
+
+        try:
+            return sorted(lines, key=score)
+        except Exception:
+            return lines
+
     def _match_line(self, lines, flag):
-        """智能匹配线路，兼容 flag 带空格或后缀的情况"""
+        """智能匹配线路, 兼容 flag 带空格或后缀的情况"""
         if not lines:
             return []
         wanted = str(flag or "").strip()
@@ -445,7 +658,8 @@ class Spider(Spider):
             return lines
 
         # 1. 精确匹配
-        picked = [l for l in lines if (l.get("provider_name") or "").strip() == wanted]
+        picked = [l for l in lines
+                  if (l.get("provider_name") or "").strip() == wanted]
         if picked:
             return picked
 
@@ -455,109 +669,157 @@ class Spider(Spider):
             return picked
 
         # 3. 反向包含匹配（防止壳子传的 flag 更长）
-        picked = [l for l in lines if (l.get("provider_name") or "") in wanted]
+        picked = [l for l in lines
+                  if (l.get("provider_name") or "")
+                  and (l.get("provider_name") or "").strip() in wanted]
         if picked:
             return picked
 
         return lines
+
+    def _resolve_ticket(self, ticket, line=None):
+        """resolve:// ticket -> 真实播放地址"""
+        t = str(ticket or "").strip()
+        if t.startswith("resolve://"):
+            t = t[10:]
+        if not t:
+            return "", ""
+        if t.startswith("http"):
+            return t, ""
+
+        body = {"ticket": t}
+        if isinstance(line, dict) and line.get("quality"):
+            body["quality"] = line.get("quality")
+
+        j = self._req("POST", "/v1/playback/resolve-line", body, retry_host=False)
+        li = j.get("line") or {}
+        url = li.get("url") or ""
+        kind = li.get("url_kind") or ""
+        # 个别情况 url 仍可能是二级 ticket
+        if url.startswith("resolve://"):
+            return self._resolve_ticket(url, line)
+        return url, kind
+
+    def _probe_media(self, url, timeout=12):
+        """真实探测链接：返回 (ok, real_kind, content_type)
+        关键: 官方线路常把 mp4 放在图片 CDN 上, Content-Type 错标成
+        image/jpeg，播放器会据此拒绝播放。必须按魔数判断真实类型。
+        """
+        rsp = self._fetch(url, headers=self._play_header(url),
+                          timeout=timeout, stream=True)
+        if rsp is None:
+            return False, "", ""
+        code = getattr(rsp, "status_code", 0)
+        try:
+            ctype = (getattr(rsp, "headers", {}) or {}).get("Content-Type", "") or ""
+        except Exception:
+            ctype = ""
+        if code not in (200, 206):
+            try:
+                rsp.close()
+            except Exception:
+                pass
+            return False, "", ctype
+
+        head = b""
+        try:
+            raw = getattr(rsp, "raw", None)
+            if raw is not None:
+                head = raw.read(1024, decode_content=True) or b""
+            if not head:
+                head = (getattr(rsp, "content", b"") or b"")[:1024]
+        except Exception:
+            head = (getattr(rsp, "content", b"") or b"")[:1024]
+        finally:
+            try:
+                rsp.close()
+            except Exception:
+                pass
+
+        kind = _kind_of(head)
+        if kind in ("m3u8", "mp4", "mkv", "mp3"):
+            return True, kind, ctype
+        # 文本型可能是 m3u8 但带 BOM / 前导空白
+        if head[:400].strip().startswith(b"#EXTM3U"):
+            return True, "m3u8", ctype
+        return False, kind, ctype
 
     def playerContent(self, flag, id, vipFlags=None, vipIds=None):
         tok = str(id or "").strip()
         if not tok:
             return {"url": ""}
 
-        # 1) 如果 id 本身已经是直链，直接返回
-        if tok.startswith("http") and (".m3u8" in tok or ".mp4" in tok):
-            return {
-                "parse": 0, "playUrl": "", "url": tok,
-                "header": {"User-Agent": UA, "Referer": self._host() + "/"},
-            }
+        # 0) id 本身已是直链
+        if tok.startswith("http"):
+            u = tok
+            if u.startswith("resolve://"):
+                u = u[10:]
+            if ".m3u8" in u or ".mp4" in u or "m3u8" in u:
+                return {"parse": 0, "playUrl": "", "url": u,
+                        "header": self._play_header(u)}
 
-        self.log("player: flag=%s tok=%s" % (flag, tok[:32]))
+        # token 里可能带 "线路名$token"，兜底拆一下
+        if "$" in tok:
+            tok = tok.rsplit("$", 1)[-1].strip()
 
-        # 2) yjm3u8 直链探测（严格校验内容，防止空壳或加密）
-        murl = YJ % tok
-        rsp = self._fetch(murl, headers={
-            "User-Agent": UA, "Referer": self._host() + "/",
-        }, timeout=10)
-        if rsp is not None:
-            code = getattr(rsp, "status_code", 0)
-            text = getattr(rsp, "text", "") or ""
-            # 必须包含 EXTINF 或 STREAM-INF 才算是有效可以播放的
-            if code == 200 and "#EXTM3U" in text and (
-                "#EXTINF" in text or "#EXT-X-STREAM-INF" in text
-            ):
-                self.log("  => yjm3u8 直链有效")
-                return {
-                    "parse": 0, "playUrl": "", "url": murl,
-                    "header": {"User-Agent": UA, "Referer": self._host() + "/"},
-                }
-            self.log("  yjm3u8 返回空壳或加密 m3u8，跳过")
+        cache_key = "%s|%s" % (str(flag or "").strip(), tok[:40])
+        now = time.time()
+        c = self._play_cache.get(cache_key)
+        if c and now - c.get("t", 0) < 900 and c.get("url"):
+            self.log("player: 命中缓存")
+            return {"parse": 0, "playUrl": "", "url": c["url"],
+                    "header": c.get("header") or self._play_header(c["url"])}
 
-        # 3) yjapi JSON 解析
-        api_url = YJ_API % tok
-        rsp = self._fetch(api_url, headers={
-            "User-Agent": UA, "Accept": "application/json",
-            "Referer": self._host() + "/",
-        }, timeout=10)
-        if rsp is not None and getattr(rsp, "status_code", 0) == 200:
-            try:
-                j = rsp.json()
-                u = (j.get("url") or "") if isinstance(j, dict) else ""
-                if u:
-                    self.log("  => yjapi 直链")
-                    return {
-                        "parse": 0, "playUrl": "", "url": u,
-                        "header": {"User-Agent": UA,
-                                   "Referer": self._host() + "/"},
-                    }
-            except Exception:
-                pass
+        self.log("player: flag=%s tok=%s" % (flag, tok[:28]))
 
-        # 4) resolve -> resolve-line 兜底解析
         j = self._req("GET", "/v1/playback/resolve/%s" % tok)
         lines = j.get("line_options") or []
-        lines = self._match_line(lines, flag)
+        picked = self._match_line(lines, flag)
+        # 排序：可播优先，m3u8 优先
+        picked = self._sort_lines(picked)
 
-        for lo in lines:
-            t = lo.get("url") or ""
-            if t.startswith("resolve://"):
-                t = t[10:]
-            if not t:
+        tried = 0
+        for lo in picked[:12]:
+            name = (lo.get("provider_name") or "").strip()
+            uk = lo.get("url_kind") or ""
+            raw = (lo.get("url") or "").strip()
+            if not raw:
                 continue
 
-            # 兼容 ticket 可能是一个 JSON 字符串的情况
-            body = {}
-            try:
-                if t.startswith("{") and t.endswith("}"):
-                    body = json.loads(t)
-                else:
-                    body = {"ticket": t}
-            except Exception:
-                body = {"ticket": t}
+            url, real_kind = "", ""
+            if uk == "resolve_ticket" or raw.startswith("resolve://"):
+                url, real_kind = self._resolve_ticket(raw, lo)
+            elif raw.startswith("http"):
+                url = raw
+                real_kind = uk
+            if not url:
+                self.log("  线路 %s 解析为空" % name)
+                continue
 
-            # 附加参数
-            if lo.get("quality"):
-                body["quality"] = lo.get("quality")
+            tried += 1
+            ok, kind, ctype = self._probe_media(url)
+            self._line_probe[name] = {"ok": ok, "t": time.time(),
+                                      "real_kind": kind or real_kind}
 
-            rj = self._req("POST", "/v1/playback/resolve-line", body)
-            url = (rj.get("line") or {}).get("url") or ""
-            
-            if url:
-                self.log("  => resolve-line 直链")
-                return {
-                    "parse": 0, "playUrl": "", "url": url,
-                    "header": {"User-Agent": UA, "Referer": self._host() + "/"},
-                }
+            if not ok:
+                self.log("  线路 %s 不可用 (code/type=%s)" % (name, kind or ctype))
+                continue
 
-        # 5) 最终兜底：返回拼装的真实页面地址交给壳子嗅探
-        # 绝不能返回空的 url，否则会导致 TVBox 无限转圈
-        self.log("  => 所有直链解析失败，兜底 parse=1 交给嗅探")
-        fallback_url = self._host() + "/v1/catalog/" + tok
-        return {
-            "parse": 1, "playUrl": "", "url": fallback_url,
-            "header": {"User-Agent": UA, "Referer": self._host() + "/"},
-        }
+            header = self._play_header(url)
+            # 类型与扩展名不符时（如 mp4 挂在图片 CDN 上），
+            # 加 hint 让播放器按真实类型解码
+            if kind == "m3u8" and ".m3u8" not in url:
+                pass
+            self.log("  => 命中线路 %s (%s)" % (name, kind))
+            self._play_cache[cache_key] = {"url": url, "header": header,
+                                           "t": time.time()}
+            return {"parse": 0, "playUrl": "", "url": url, "header": header}
+
+        # 兜底：返回官方播放页，交给壳子嗅探
+        fallback = "%s/v1/catalog/%s" % (self._host(), tok)
+        self.log("  => 全部线路失败(试了%d条), 兜底嗅探 %s" % (tried, fallback))
+        return {"parse": 1, "playUrl": "", "url": fallback,
+                "header": {"User-Agent": UA, "Referer": self._host() + "/"}}
 
     def localProxy(self, param):
         try:
@@ -572,16 +834,19 @@ class Spider(Spider):
                             url = v
             if not url:
                 return [200, "image/jpeg", b"", ""]
-            url = urllib.parse.unquote(url) if "%" in url else url
+            if "%" in url:
+                try:
+                    url = urllib.parse.unquote(url)
+                except Exception:
+                    pass
             url = self._fix_url(url)
-            rsp = self._fetch(url, headers={
-                "User-Agent": UA, "Referer": self._host() + "/"}, timeout=15)
+            rsp = self._fetch(url, headers=self._play_header(url), timeout=15)
             if rsp is None:
                 return [200, "image/jpeg", b"", ""]
             content = getattr(rsp, "content", b"") or b""
             ctype = ""
             try:
-                ctype = rsp.headers.get("Content-Type", "") or ""
+                ctype = (getattr(rsp, "headers", {}) or {}).get("Content-Type", "") or ""
             except Exception:
                 ctype = ""
             if not ctype.startswith("image/"):
@@ -594,13 +859,15 @@ class Spider(Spider):
         if not url:
             return False
         u = str(url).lower()
-        return ".m3u8" in u or ".mp4" in u or u.startswith("http")
+        return ".m3u8" in u or ".mp4" in u or ".flv" in u
 
     def manualVideoCheck(self):
         return False
 
     def destroy(self):
-        pass
+        self._hv = None
+        self._play_cache = {}
+        self._line_probe = {}
 
     def close(self):
         self.destroy()
