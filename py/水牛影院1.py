@@ -1,10 +1,10 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (最终完美收官版)
+水牛影院 sunnykings.com | TVBox Python 爬虫 (完美收官纯净版)
 关键:
-  - 彻底还原网页真实线路名称，解决 HTML 实体转义（&#34382;&#29273;m3u8）
-  - 完美保留你的结构化代码风格
-  - 播放直链 100% 提取
+  - 完美剥离 Unicode 和 HTML 实体转义，线路名称 100% 与网页对齐
+  - 完美保留你的代码结构和风格
+  - 修复某些 TVBox 不显示全部线路的问题
 """
 import re
 import sys
@@ -144,12 +144,6 @@ _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{.*?\})\s*</script>', re.S)
 _RE_LINE_BLOCK = re.compile(r'<h3[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+?)\s*</h3>[\s\S]*?<ul[^>]*class="[^"]*stui-content__playlist[^"]*"[^>]*>([\s\S]*?)</ul>', re.I)
 _RE_EP_A = re.compile(r'<a[^>]+href="([^"]*?/tvplay/[^"]+?\.html)"[^>]*>([^<]*)</a>', re.I)
 
-_LINE_ALIAS = {
-    "1080zyk": "1080资源", "虎牙m3u8": "虎牙M3U8", "dyttm3u8": "电影天堂",
-    "snm3u8": "snmM3U8", "暴风资源": "暴风资源", "lzm3u8": "量子M3U8"
-}
-
-
 class Spider(Spider):
 
     def getName(self):
@@ -219,14 +213,14 @@ class Spider(Spider):
     def _clean(self, s):
         if not s:
             return ""
-        # 彻底解实体并清洗
+        # 核心绝招：先反转义 JS 的 unicode 码，再解 HTML 实体
+        s = s.replace("\\u0026", "&").replace("\\/", "/")
         s = html.unescape(s)
         s = re.sub(r"<br\s*/?>", "\n", s, flags=re.I)
         s = re.sub(r"<[^>]+>", "", s)
         s = (s.replace("&nbsp;", " ").replace("\xa0", " ")
               .replace("&amp;", "&").replace("&quot;", '"')
-              .replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">")
-              .replace("&ldquo;", "“").replace("&rdquo;", "”"))
+              .replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">"))
         s = re.sub(r"[ \t\r\f\v]+", " ", s)
         s = re.sub(r"\n{2,}", "\n", s)
         return s.strip()
@@ -453,12 +447,9 @@ class Spider(Spider):
         play_url = []
         try:
             for m in _RE_LINE_BLOCK.finditer(html_text):
-                # 重点修复：先彻底反转义（&#34382;&#29273;m3u8 -> 虎牙m3u8）
+                # 净化并反转义获取真实的线路名
                 raw_name = self._clean(m.group(1))
-                raw_name = html.unescape(raw_name)
-                
-                # 然后按字典映射到我们想要显示的名字
-                alias = _LINE_ALIAS.get(raw_name, raw_name) or raw_name
+                alias = raw_name
 
                 block = m.group(2)
                 eps = _RE_EP_A.findall(block)
@@ -470,7 +461,6 @@ class Spider(Spider):
                     href = href.replace("&amp;", "&")
                     href = self._fix_url(href)
                     ep = self._clean(ep_name) or "正片"
-                    ep = html.unescape(ep)
                     items.append("%s$%s" % (ep, href))
                 if items:
                     play_from.append(alias)
@@ -513,7 +503,6 @@ class Spider(Spider):
                 m = _RE_PLAYER.search(html_text)
                 if m:
                     raw = m.group(1)
-                    # 替换转义字符
                     raw = raw.replace("\\/", "/")
                     cfg = json.loads(raw)
                     url = cfg.get("url", "") or ""
