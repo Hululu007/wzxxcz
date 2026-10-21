@@ -41,6 +41,7 @@ except ImportError:
 
         def fetch(self, url, headers=None, **kw):
             timeout = kw.pop('timeout', 15)
+            kw.pop('allow_redirects', None)
             r = self._sess.get(url, headers=headers, timeout=timeout, **kw)
             r.encoding = 'utf-8'
             return r
@@ -61,6 +62,8 @@ DEFAULT_PIC = HOST + '/favicon.ico'
 INTRO_PREFIX = '🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！'
 
 CLASSES = [
+    {"type_id": 'wd', "type_name": '1 变形金刚'},
+    {"type_id": ';', "type_name": '搜索'},
     {"type_id": '1', "type_name": '电影'},
     {"type_id": '6', "type_name": '动作片'},
     {"type_id": '7', "type_name": '喜剧片'},
@@ -89,8 +92,6 @@ CLASSES = [
     {"type_id": '29', "type_name": '国产动漫'},
     {"type_id": '30', "type_name": '日本动漫'},
     {"type_id": '42', "type_name": '港台动漫'},
-    {"type_id": '31', "type_name": '欧美动漫'},
-    {"type_id": '43', "type_name": '海外动漫'},
 ]
 
 _YEARS = [{"n": "全部", "v": ""}] + [{"n": y, "v": y} for y in ('2010', '2012', '2013', '2014', '2015', '2016', '2017', '2018', '2019', '2020', '2021', '2022', '2023', '2024', '2025', '2026')]
@@ -112,11 +113,14 @@ FILTERS = {
 														<li><a href="/medialist/id/6.html" title="动作片">动作片</a></li>
 											
 _RE_CARD = re.compile(
-    r'<a[^>]*?href="(/[^"]*?\d[^"]*?\.html)"([^>]*)>'
+    r'<a[^>]*?href="((?:/video/)[^"]*?\d[^"]*?(?:\.html|\?[^"]*))"([^>]*)>'
     r'([\s\S]{0,700}?)</a>',
     re.S | re.I)
-_RE_HREF = re.compile(r'href="(/[^"]*?\d[^"]*?\.html)', re.I)
+_RE_HREF = re.compile(r'href="((?:/video/)[^"]*?\d[^"]*)', re.I)
 _RE_PLAY_HREF = re.compile(r'/(?:tvplay|vodplay|play|v_play)/', re.I)
+# 本站卡片: title/data-original 直接在 <a> 标签属性上
+_RE_A_TITLE = re.compile(r'title="([^"]*)"', re.I)
+_RE_A_PIC = re.compile(r'(?:data-original|data-src|data-lazy-src|src)="([^"]+)"', re.I)
 _RE_IMG = re.compile(
     r'<img[^>]*?alt="([^"]*)"[^>]*?(?:data-src|src)="([^"]*)"',
     re.S | re.I)
@@ -124,7 +128,6 @@ _RE_IMG = re.compile(
 _RE_EPISODE_A = re.compile(r'<a\s+href="([^"]+)"([^>]*?)>(.*?)</a>', re.S | re.I)
 _RE_DATA_ORIGIN = re.compile(r'data-origin="([^"]+)"', re.I)
 _RE_DATA_TITLE = re.compile(r'data-title="([^"]+)"', re.I)
-_RE_BTN_TITLE = re.compile(r'<button[^>]*>([^<]+)</button>', re.I)
 _RE_EP_ORIGIN_URL = re.compile(r'/(?:tvplay|vodplay|play)/[^"\']*?-(\d+)-\d+\.html', re.I)
 
 _RE_H1 = re.compile(r'<h1[^>]*>([\s\S]*?)</h1>', re.I)
@@ -136,7 +139,7 @@ _RE_META_DESC = re.compile(r'<meta[^>]*name=["\']description["\'][^>]*content=["
 _RE_DIRECTOR = re.compile(r'导演\s*[:：]\s*([^\s\n主]{1,40})')
 _PAGEBOX_RE = re.compile(
     r'<(?:ul|div|nav)[^>]*class=["\']?[^"\']*'
-    r'(?:stui-page|pagination|page-nav|pagenav|pagebar)[^>]*>'
+    r'(?:stui-page|pagination|page-nav|pagenav|pagebar|page-num|page-box)[^>]*>'
     r'(.*?)</(?:ul|div|nav)>', re.S | re.I)
 _RE_ACTOR = re.compile(r'主演\s*[:：]\s*([^\n]{1,100})')
 _RE_SCORE = re.compile(r'(?:score|rating|badge)[^>]*>\s*([\d.]{1,4})\s*<', re.I)
@@ -145,8 +148,9 @@ _RE_SCORE = re.compile(r'(?:score|rating|badge)[^>]*>\s*([\d.]{1,4})\s*<', re.I)
 _RE_POW_HASH = re.compile(r"var\s+hash\s*=\s*['\"]([a-f0-9]{40})['\"]")
 _RE_POW_TARGET = re.compile(r"var\s+target\s*=\s*['\"]([a-f0-9]{40})['\"]")
 
-# 分页模板: {tid} 类型 -> 分类路径, {page} = 页码(从 0 或 1 视站点)
+# 分页模板: {tid} 类型 -> 分类路径, {page} = 页码
 CAT_TPLS = {
+    'wd': '/listnew/wd-{page}.html',
     '1': '/cat/1-{page}.html',
     '6': '/medialist/id/6-{page}.html',
     '7': '/cat/7-{page}.html',
@@ -175,16 +179,12 @@ CAT_TPLS = {
     '29': '/cat/29-{page}.html',
     '30': '/medialist/id/30-{page}.html',
     '42': '/medialist/id/42-{page}.html',
-    '31': '/medialist/id/31-{page}.html',
-    '43': '/medialist/id/43-{page}.html',
     '40': '/cat/40-{page}.html',
 }
 SEARCH_TPL = ''
 HAS_SUGGEST = True
 DETAIL_PREFIX = '/video/'
-# 列表页原始链接前缀（与详情页前缀不同时，自动转 id 拼 DETAIL_PREFIX）
 LIST_PREFIXES = ['/medialist/id/', '/video/']
-SUGGEST_API = '/index.php/ajax/suggest?mid=1&wd=%s&page=%s'
 
 _LINE_PRIORITY = ['vip', '1080zyk', 'bfzym3u8', 'ffm3u8', 'lzm3u8', 'modum3u8', 'jsm3u8', 'mtm3u8']
 _LINE_ALIAS = {
@@ -204,7 +204,6 @@ class Spider(Spider):
 
     @property
     def _sess(self):
-        """内置 requests 会话兜底：宿主基类没有 fetch/_sess 时也能跑。"""
         if getattr(self, '_session', None) is None:
             try:
                 import requests
@@ -249,21 +248,25 @@ class Spider(Spider):
                 return None
         return None
 
-    def _raw(self, url, timeout=30, headers=None):
-        # 优先用基类 fetch（TVBox 环境下带代理与 UA），失败则回落内置 session
+    def _raw(self, url, timeout=30, headers=None, allow_redirects=True):
         h = dict(self.headers)
         if headers:
             h.update(headers)
         fn = getattr(self, "fetch", None)
         if callable(fn):
             try:
-                return fn(url, headers=h, timeout=timeout)
+                return fn(url, headers=h, timeout=timeout, allow_redirects=allow_redirects)
+            except TypeError:
+                try:
+                    return fn(url, headers=h, timeout=timeout)
+                except Exception:
+                    pass
             except Exception:
                 pass
         s = self._sess
         if s is None:
             raise RuntimeError("no http client")
-        return s.get(url, headers=h, timeout=timeout)
+        return s.get(url, headers=h, timeout=timeout, allow_redirects=allow_redirects)
 
     def _fetch(self, url, timeout=30, headers=None):
         try:
@@ -303,32 +306,43 @@ class Spider(Spider):
         return re.sub(r"[ \t\r\f\v]+", " ", s).strip()
 
     def _norm_id(self, href):
-        """统一详情链接：/wap/123.html、/tv/123.html → DETAIL_PREFIX+123.html
-        同一站不同分类可能用不同前缀，点进去都是同一个详情页模板"""
+        """把列表页链接统一成详情页链接，不同前缀的同一 id 归一化。"""
         href = (href or "").split("?")[0].strip()
         if not href:
             return ""
+        if href.startswith("http"):
+            return href
         m = re.match(r"^(/[A-Za-z0-9_\-]+/)(\d+)", href)
         if m:
+            seg = m.group(1)
+            for p in LIST_PREFIXES:
+                if seg == p:
+                    return DETAIL_PREFIX + m.group(2) + ".html"
             return DETAIL_PREFIX + m.group(2) + ".html"
         return href
 
     def _extract_videos(self, html):
         if not html:
             return []
-        # 1) 先把所有候选 <a> 按「href 数字归一化」分桶，出现最多的那桶就是卡片
         buckets = {}
         for m in _RE_CARD.finditer(html[:400000]):
             href, attrs, inner = m.group(1), m.group(2), m.group(3)
             href = href.replace("&amp;", "&").strip()
             if not href or href.startswith("#") or _RE_PLAY_HREF.search(href):
                 continue
-            key = re.sub(r"\d+", "#", href)
+            key = re.sub(r"\d+", "#", href.split("?")[0])
             buckets.setdefault(key, []).append((href, attrs, inner))
         if not buckets:
             return []
-        best = max(buckets.values(), key=len)
-        # 2) 按 href 合并（同片常有多条卡片：海报/标题/备注各一条）
+        def _score(item):
+            k, arr = item
+            return (len(arr), len(k.strip('/').split('/')), -len(k))
+        best = max(buckets.items(), key=_score)[1]
+        if len(best) < 2 and len(buckets) > 1:
+            all_items = []
+            for arr in buckets.values():
+                all_items.extend(arr)
+            best = all_items
         merged, order = {}, []
         for href, attrs, inner in best[:400]:
             vid = self._norm_id(href)
@@ -352,7 +366,8 @@ class Spider(Spider):
         for vid in order:
             it = merged[vid]
             if not it["vod_name"]:
-                it["vod_name"] = vid.rsplit("/", 1)[-1].replace(".html", "")
+                tail = vid.rstrip(".html")
+                it["vod_name"] = tail.rsplit("/", 1)[-1]
             if it["vod_remarks"] == it["vod_name"]:
                 it["vod_remarks"] = ""
             it["vod_pic"] = self._fix_url(it["vod_pic"]) or self.default_pic
@@ -374,7 +389,6 @@ class Spider(Spider):
         return s[:120]
 
     def _pick_pic(self, attrs, inner):
-        # 懒加载站常把图放在 style="background: url(...)"
         ms = re.search(r'background(?:-image)?\s*:\s*url\(([^)]+)\)', attrs + " " + inner, re.I)
         if ms:
             u = ms.group(1).strip("'\" ")
@@ -387,7 +401,6 @@ class Spider(Spider):
             u = m.group(1)
             if not re.search(r'\.(jpg|png|webp|jpeg|gif)', u, re.I):
                 continue
-            # 站点图标/占位图不能当封面
             if re.search(r'favicon|/logo|loading|load\.gif|/statics/img|placeholder', u, re.I):
                 continue
             return u
@@ -395,7 +408,6 @@ class Spider(Spider):
         return m.group(1) if m else ""
 
     def _pick_remarks(self, inner, name=""):
-        # 只看短的纯文字节点；剔除站名、日期、播放按钮之类的噪声
         for m in re.finditer(r'<(span|em|i|b)[^>]*>([^<]{1,20})</\1>', inner, re.I):
             s = self._clean(m.group(2))
             if not s or len(s) < 2:
@@ -411,7 +423,6 @@ class Spider(Spider):
         return ""
 
     def _page_count(self, html):
-        # 1) 优先：分页条容器（stui-page / pagination / page-num）里出现的最大页码
         for m in _PAGEBOX_RE.finditer(html):
             nums = re.findall(r'>\s*(\d{1,5})\s*<', m.group(1))
             nums += re.findall(r'[?&]page=(\d{1,5})', m.group(1))
@@ -419,14 +430,12 @@ class Spider(Spider):
             vals = [int(x) for x in nums if x.isdigit() and 0 < int(x) < 100000]
             if vals:
                 return max(vals)
-        # 2) 路径型分页：/listnew/1-2.html、/vodtype/5-3.html
         pages = re.findall(r"[?&]page=(\d+)", html)
         if pages:
             try:
                 return max(int(p) for p in pages)
             except Exception:
                 pass
-        # 3) 「共 N 页」文本
         m = re.search(r"(?:共|总共)\s*(\d{1,5})\s*页", html)
         if m:
             return int(m.group(1))
@@ -447,33 +456,23 @@ class Spider(Spider):
             except Exception:
                 extend = {}
         extend = extend or {}
-        for k in list(extend.keys()):
-            if extend[k] in ("", None, "全部"):
-                del extend[k]
-        # 分类路径模板：优先用学习到的；缺失时按常见形态逐个试，全部失败才返回空
-        tpl = CAT_TPLS.get(str(tid))
-        cands = []
-        if tpl:
-            cands.append(tpl.replace("{page}", str(page)))
-        else:
-            cands.append("/listnew/%s-%s.html" % (tid, page))
-            cands.append("/listnew/%s.html?page=%s" % (tid, page))
-        videos, html, url = [], "", ""
-        for path in cands:
-            url = self.site_url + path
-            html = self._fetch(url)
-            videos = self._extract_videos(html)
-            if videos:
-                if not tpl:
-                    # 试出来了就记住，翻页不用再试一遍
-                    CAT_TPLS[str(tid)] = path.replace(str(page), "{page}")
-                break
+        ext = {k: v for k, v in extend.items()
+               if v not in ("", None, "全部") and k not in ("class",)}
+        base = CAT_TPLS.get(str(tid))
+        if not base:
+            base = "/listnew/%s-{page}.html" % tid
+        path = base.replace("{page}", str(page))
+        url = self.site_url + path
+        # 筛选参数挂到 query（多数站点兼容，不影响基础分页）
+        if ext:
+            url += ("&" if "?" in url else "?") + urllib.parse.urlencode(ext)
+        html = self._fetch(url)
+        videos = self._extract_videos(html)
         pc = self._page_count(html) if html else 1
         return {"list": videos, "page": page, "pagecount": pc, "limit": 24, "total": pc * 24}
 
     def searchContent(self, key, quick, pg="1"):
         page = int(pg) if pg else 1
-        # 优先：suggest JSON 接口（苹果CMS 通用，最稳）
         try:
             u = self.site_url + "/index.php/ajax/suggest?mid=1&wd=" + urllib.parse.quote(key) + "&pg=" + str(page)
             rsp = self._fetch(u, timeout=10)
@@ -507,7 +506,6 @@ class Spider(Spider):
         if not html:
             return {"list": []}
         name = ""
-        # 页面可能有多个 h1（stui 模板把站名写成 h1），取最长且不等于站名的
         h1s = [self._clean(x) for x in _RE_H1.findall(html)]
         h1s = [x for x in h1s if x and len(x) <= 120 and x != self.site_name]
         if h1s:
@@ -548,7 +546,6 @@ class Spider(Spider):
         for m in _RE_EPISODE_A.finditer(html):
             href, attrs, inner = m.group(1), m.group(2), m.group(3)
             href = href.replace("&amp;", "&").strip()
-            # 判定线路：data-origin > URL 里的 sid > /play/{line}/id 形态
             mo = _RE_DATA_ORIGIN.search(attrs)
             origin = mo.group(1).strip() if mo else ""
             if not origin:
@@ -624,12 +621,11 @@ class Spider(Spider):
 
     @staticmethod
     def _unesc(u):
-        """把 JSON/JS 里的转义还原：\/ -> /，\u0026 -> &"""
         if not u:
             return ""
         u = u.replace("\\/", "/").replace("\\u0026", "&").replace("\\u003d", "=")
         u = u.replace("\\u002F", "/").replace("\\u002f", "/")
-        u = u.replace("&amp;", "&").replace("\\", "")
+        u = u.replace("&amp;", "&")
         return u.strip()
 
     def _extract_api(self, html):
@@ -654,12 +650,8 @@ class Spider(Spider):
 
     def _resolve_to_real_m3u8(self, api_url, referer=None):
         try:
-            rsp = self.fetch(api_url, headers={"User-Agent": UA,
-                                              "Referer": referer or (self.site_url + "/")},
-                             timeout=15, allow_redirects=False)
-        except TypeError:
-            rsp = self.fetch(api_url, headers={"User-Agent": UA,
-                                              "Referer": referer or (self.site_url + "/")}, timeout=15)
+            rsp = self._raw(api_url, timeout=15, headers={"User-Agent": UA,
+                              "Referer": referer or (self.site_url + "/")}, allow_redirects=False)
         except Exception as e:
             self.log("resolve fail", e)
             return ""
@@ -673,7 +665,7 @@ class Spider(Spider):
             loc = "https:" + loc
         loc = loc.replace("&amp;", "&")
         try:
-            rsp2 = self.fetch(loc, headers={"User-Agent": UA, "Referer": api_url}, timeout=15)
+            rsp2 = self._raw(loc, timeout=15, headers={"User-Agent": UA, "Referer": api_url})
             txt2 = getattr(rsp2, "text", "") or ""
         except Exception as e:
             self.log("master fail", e)
@@ -705,12 +697,12 @@ class Spider(Spider):
                 return [200, "image/jpeg", b"", ""]
             url = urllib.parse.unquote(url) if "%" in url else url
             url = self._fix_url(url)
-            rsp = self.fetch(url, headers={"User-Agent": UA,
-                                    "Referer": self.site_url + "/"}, timeout=15)
+            rsp = self._raw(url, timeout=15, headers={"User-Agent": UA,
+                              "Referer": self.site_url + "/"})
             ctype = rsp.headers.get("Content-Type", "image/jpeg") if hasattr(rsp, "headers") else "image/jpeg"
             if not ctype.startswith("image/"):
                 ctype = "image/jpeg"
-            return [200, ctype, rsp.content, ""]
+            return [200, ctype, rsp.content if hasattr(rsp, "content") else b"", ""]
         except Exception:
             return [200, "image/jpeg", b"", ""]
 
