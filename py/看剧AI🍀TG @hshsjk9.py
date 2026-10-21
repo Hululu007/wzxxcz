@@ -436,12 +436,37 @@ class Spider(Spider):
 
     # ---------------- 播放 ----------------
 
+    def _match_line(self, lines, flag):
+        """智能匹配线路，兼容 flag 带空格或后缀的情况"""
+        if not lines:
+            return []
+        wanted = str(flag or "").strip()
+        if not wanted or wanted == "kanju":
+            return lines
+
+        # 1. 精确匹配
+        picked = [l for l in lines if (l.get("provider_name") or "").strip() == wanted]
+        if picked:
+            return picked
+
+        # 2. 模糊包含匹配
+        picked = [l for l in lines if wanted in (l.get("provider_name") or "")]
+        if picked:
+            return picked
+
+        # 3. 反向包含匹配（防止壳子传的 flag 更长）
+        picked = [l for l in lines if (l.get("provider_name") or "") in wanted]
+        if picked:
+            return picked
+
+        return lines
+
     def playerContent(self, flag, id, vipFlags=None, vipIds=None):
         tok = str(id or "").strip()
         if not tok:
             return {"url": ""}
 
-        # 如果 id 本身已经是直链，直接返回
+        # 1) 如果 id 本身已经是直链，直接返回
         if tok.startswith("http") and (".m3u8" in tok or ".mp4" in tok):
             return {
                 "parse": 0, "playUrl": "", "url": tok,
@@ -450,20 +475,26 @@ class Spider(Spider):
 
         self.log("player: flag=%s tok=%s" % (flag, tok[:32]))
 
-        # 1) yjm3u8 直链探测
+        # 2) yjm3u8 直链探测（严格校验内容，防止空壳或加密）
         murl = YJ % tok
-        rsp = self._fetch(murl, headers={"User-Agent": UA}, timeout=10)
+        rsp = self._fetch(murl, headers={
+            "User-Agent": UA, "Referer": self._host() + "/",
+        }, timeout=10)
         if rsp is not None:
             code = getattr(rsp, "status_code", 0)
             text = getattr(rsp, "text", "") or ""
-            if code == 200 and "#EXTM3U" in text:
-                self.log("  => yjm3u8 直链")
+            # 必须包含 EXTINF 或 STREAM-INF 才算是有效可以播放的
+            if code == 200 and "#EXTM3U" in text and (
+                "#EXTINF" in text or "#EXT-X-STREAM-INF" in text
+            ):
+                self.log("  => yjm3u8 直链有效")
                 return {
                     "parse": 0, "playUrl": "", "url": murl,
                     "header": {"User-Agent": UA, "Referer": self._host() + "/"},
                 }
+            self.log("  yjm3u8 返回空壳或加密 m3u8，跳过")
 
-        # 2) yjapi JSON
+        # 3) yjapi JSON 解析
         api_url = YJ_API % tok
         rsp = self._fetch(api_url, headers={
             "User-Agent": UA, "Accept": "application/json",
@@ -483,14 +514,10 @@ class Spider(Spider):
             except Exception:
                 pass
 
-        # 3) resolve -> resolve-line
+        # 4) resolve -> resolve-line 兜底解析
         j = self._req("GET", "/v1/playback/resolve/%s" % tok)
         lines = j.get("line_options") or []
-        wanted = str(flag or "")
-        if wanted and wanted != "kanju":
-            picked = [l for l in lines
-                      if (l.get("provider_name") or "") == wanted]
-            lines = picked or lines
+        lines = self._match_line(lines, flag)
 
         for lo in lines:
             t = lo.get("url") or ""
@@ -498,8 +525,24 @@ class Spider(Spider):
                 t = t[10:]
             if not t:
                 continue
-            rj = self._req("POST", "/v1/playback/resolve-line", {"ticket": t})
+
+            # 兼容 ticket 可能是一个 JSON 字符串的情况
+            body = {}
+            try:
+                if t.startswith("{") and t.endswith("}"):
+                    body = json.loads(t)
+                else:
+                    body = {"ticket": t}
+            except Exception:
+                body = {"ticket": t}
+
+            # 附加参数
+            if lo.get("quality"):
+                body["quality"] = lo.get("quality")
+
+            rj = self._req("POST", "/v1/playback/resolve-line", body)
             url = (rj.get("line") or {}).get("url") or ""
+            
             if url:
                 self.log("  => resolve-line 直链")
                 return {
@@ -507,10 +550,12 @@ class Spider(Spider):
                     "header": {"User-Agent": UA, "Referer": self._host() + "/"},
                 }
 
-        # 兜底：交给 TVBox 嗅探
-        self.log("  => 兜底 parse=1")
+        # 5) 最终兜底：返回拼装的真实页面地址交给壳子嗅探
+        # 绝不能返回空的 url，否则会导致 TVBox 无限转圈
+        self.log("  => 所有直链解析失败，兜底 parse=1 交给嗅探")
+        fallback_url = self._host() + "/v1/catalog/" + tok
         return {
-            "parse": 1, "playUrl": "", "url": "",
+            "parse": 1, "playUrl": "", "url": fallback_url,
             "header": {"User-Agent": UA, "Referer": self._host() + "/"},
         }
 
