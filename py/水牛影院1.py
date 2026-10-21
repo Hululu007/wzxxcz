@@ -1,10 +1,10 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (红框终极完美排版版)
+水牛影院 sunnykings.com | TVBox Python 爬虫 (红框信息完美提取版)
 关键:
-  - 完美提取 类型、地区、年份、语言、主演、导演、更新 信息
-  - 彻底解决 HTML/Unicode 转义导致的乱码
-  - 保留你的代码风格
+  - 暴力提取 类型、地区、年份、语言、主演、导演、更新 信息
+  - 完美适配 TVBox 的字段显示机制
+  - 彻底剥离转义并保留你的代码风格
 """
 import re
 import sys
@@ -140,16 +140,6 @@ _RE_SCORE = re.compile(r'<span[^>]*class="[^"]*branch[^"]*"[^>]*>\s*([\d.]+)\s*<
 _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{.*?\})\s*</script>', re.S)
 _RE_LINE_BLOCK = re.compile(r'<h3[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+?)\s*</h3>[\s\S]*?<ul[^>]*class="[^"]*stui-content__playlist[^"]*"[^>]*>([\s\S]*?)</ul>', re.I)
 _RE_EP_A = re.compile(r'<a[^>]+href="([^"]*?/tvplay/[^"]+?\.html)"[^>]*>([^<]*)</a>', re.I)
-
-# 针对红框提取专属正则
-_RE_META_TYPE = re.compile(r'类型[：:]\s*</span>([\s\S]*?)<span', re.I)
-_RE_META_AREA = re.compile(r'地区[：:]\s*</span>([\s\S]*?)<span', re.I)
-_RE_META_YEAR = re.compile(r'年份[：:]\s*</span>([\s\S]*?)<span', re.I)
-_RE_META_LANG = re.compile(r'语言[：:]\s*</span>([\s\S]*?)</p>', re.I)
-_RE_META_ACTOR = re.compile(r'主演[：:]\s*</span>([\s\S]*?)</p>', re.I)
-_RE_META_DIRECTOR = re.compile(r'导演[：:]\s*</span>([\s\S]*?)</p>', re.I)
-_RE_META_UPDATE = re.compile(r'更新[：:]\s*</span>([\s\S]*?)</p>', re.I)
-_RE_A_TAG = re.compile(r'<a[^>]*>([^<]*)</a>', re.I)
 
 
 class Spider(Spider):
@@ -424,67 +414,51 @@ class Spider(Spider):
         else:
             content = INTRO_PREFIX
 
-        # 全量提取红框信息
+        # 超级暴力的信息提取，无视一切换行与标签嵌套
         v_type = ""
-        try:
-            m = _RE_META_TYPE.search(html_text)
-            if m:
-                types = _RE_A_TAG.findall(m.group(1))
-                v_type = ", ".join([self._clean(t) for t in types if self._clean(t)])
-        except Exception:
-            pass
-
         v_area = ""
-        try:
-            m = _RE_META_AREA.search(html_text)
-            if m:
-                areas = _RE_A_TAG.findall(m.group(1))
-                v_area = ", ".join([self._clean(a) for a in areas if self._clean(a)])
-        except Exception:
-            pass
-
         v_year = ""
-        try:
-            m = _RE_META_YEAR.search(html_text)
-            if m:
-                v_year = self._clean(m.group(1))
-        except Exception:
-            pass
-
         v_lang = ""
-        try:
-            m = _RE_META_LANG.search(html_text)
-            if m:
-                langs = _RE_A_TAG.findall(m.group(1))
-                v_lang = ", ".join([self._clean(l) for l in langs if self._clean(l)])
-        except Exception:
-            pass
-
-        actor = ""
-        try:
-            m = _RE_META_ACTOR.search(html_text)
-            if m:
-                names = _RE_A_TAG.findall(m.group(1))
-                actor = ", ".join([self._clean(n) for n in names if self._clean(n)])
-        except Exception:
-            pass
-
-        director = ""
-        try:
-            m = _RE_META_DIRECTOR.search(html_text)
-            if m:
-                names = _RE_A_TAG.findall(m.group(1))
-                director = ", ".join([self._clean(n) for n in names if self._clean(n)])
-        except Exception:
-            pass
-
+        v_actor = ""
+        v_director = ""
         v_update = ""
+        
         try:
-            m = _RE_META_UPDATE.search(html_text)
-            if m:
-                v_update = self._clean(m.group(1))
-        except Exception:
-            pass
+            # 截取详情页真正的头部区域
+            header_match = re.search(r'<div[^>]*class="[^"]*stui-content__detail[^"]*"[^>]*>([\s\S]*?)</div>', html_text)
+            if header_match:
+                header = header_match.group(1)
+                
+                # 提取主演
+                a_m = re.search(r'主演[：:]\s*</span>([\s\S]*?)</p>', header)
+                if a_m:
+                    names = re.findall(r'<a[^>]*>([^<]*)</a>', a_m.group(1))
+                    v_actor = ", ".join([self._clean(n) for n in names if self._clean(n)])
+                    
+                # 提取导演
+                d_m = re.search(r'导演[：:]\s*</span>([\s\S]*?)</p>', header)
+                if d_m:
+                    names = re.findall(r'<a[^>]*>([^<]*)</a>', d_m.group(1))
+                    v_director = ", ".join([self._clean(n) for n in names if self._clean(n)])
+                
+                # 提取杂项 (类型、地区、年份、语言)
+                info_m = re.search(r'类型[：:]\s*</span>([\s\S]*?)<span[^>]*>\s*地区[：:]\s*</span>([\s\S]*?)<span[^>]*>\s*年份[：:]\s*</span>([\s\S]*?)<span[^>]*>\s*语言[：:]\s*</span>([\s\S]*?)</p>', header)
+                if info_m:
+                    v_type = ", ".join([self._clean(x) for x in re.findall(r'<a[^>]*>([^<]*)</a>', info_m.group(1))])
+                    v_area = ", ".join([self._clean(x) for x in re.findall(r'<a[^>]*>([^<]*)</a>', info_m.group(2))])
+                    v_year = self._clean(info_m.group(3))
+                    v_lang = ", ".join([self._clean(x) for x in re.findall(r'<a[^>]*>([^<]*)</a>', info_m.group(4))])
+                    # 如果没 a 标签，就直接取纯文本
+                    if not v_type: v_type = self._clean(re.sub(r'<[^>]+>', '', info_m.group(1)))
+                    if not v_area: v_area = self._clean(re.sub(r'<[^>]+>', '', info_m.group(2)))
+                    if not v_lang: v_lang = self._clean(re.sub(r'<[^>]+>', '', info_m.group(4)))
+                
+                # 提取更新日期
+                u_m = re.search(r'更新[：:]\s*</span>([\s\S]*?)</p>', header)
+                if u_m:
+                    v_update = self._clean(u_m.group(1))
+        except Exception as e:
+            self.log("  Meta解析异常: %s" % e)
 
         score = ""
         try:
@@ -521,26 +495,27 @@ class Spider(Spider):
         if not play_from:
             return {"list": []}
 
-        # 核心排版逻辑：把提取的信息完美拼接成 TVBox 所需的布局
+        # 按照 TVBox 规则完美拼接备注（将作为红框里的内容展示）
         remark_parts = []
-        if v_type: remark_parts.append(v_type)
-        if v_area: remark_parts.append(v_area)
-        if v_year: remark_parts.append(v_year)
-        if v_lang: remark_parts.append(v_lang)
+        if v_type: remark_parts.append("类型：" + v_type)
+        if v_area: remark_parts.append("地区：" + v_area)
+        if v_year: remark_parts.append("年份：" + v_year)
+        if v_lang: remark_parts.append("语言：" + v_lang)
         
-        remark = " / ".join(remark_parts)
+        info_str = " | ".join(remark_parts)
         if v_update:
-            remark += " | " + v_update
-
+            info_str += "\n更新：" + v_update
+        
+        # 组装最终返回数据
         return {"list": [{
             "vod_id": vod_id,
             "vod_name": name,
             "vod_pic": pic,
             "vod_content": content,
-            "vod_actor": actor,
-            "vod_director": director,
+            "vod_actor": v_actor,
+            "vod_director": v_director,
             "vod_score": score,
-            "vod_remarks": remark,
+            "vod_remarks": info_str,  # 将拼接好的信息串放入备注区
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url":  "$$$".join(play_url),
         }]}
