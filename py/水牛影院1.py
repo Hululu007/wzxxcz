@@ -1,12 +1,11 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (分类数据修复版)
+水牛影院 sunnykings.com | TVBox Python 爬虫 (最终完美分类版)
 严格按真实源码结构编写：
   - 列表页卡片: <a class="... lazyload" href="/{news|weihu|wap|m}/{id}.html" title="..." data-original="...">
   - 分类页路由: /so-show/{tid}-{area}---{lang}---{page}---{year}.html
   - 详情页: <h1 class="... title">、detail-content 简介、<h3 class="... title">线路名</h3> + 剧集 <a href="/tvplay/{id}-{sid}-{nid}.html">
   - 播放页: var player_aaaa={...} 中 url 字段为直链 m3u8
-  - 频率限制页: "请不要频繁操作，搜索时间间隔为3秒"
 """
 import re
 import sys
@@ -72,7 +71,7 @@ CLASSES = [
     {"type_id": "36", "type_name": "伦理片"},
 ]
 
-# 修复：大类映射到默认子类，防空白
+# 修复核心：大类直接拼出来是空页面，必须换成其子类 ID
 _DEFAULT_SUB_TID = {
     "1": "7",   # 电影 -> 动作片
     "2": "14",  # 电视剧 -> 国产剧
@@ -118,10 +117,8 @@ _LANGS = [
 ]
 
 _FILTERS_MAP = {
-    "1":  ["全部", "动作片", "喜剧片", "爱情片", "科幻片", "恐怖片", "剧情片",
-           "犯罪片", "战争片"],
-    "2":  ["全部", "国产剧", "港剧", "台湾剧", "韩剧", "日剧", "泰剧",
-           "欧美剧", "海外剧"],
+    "1":  ["全部", "动作片", "喜剧片", "爱情片", "科幻片", "恐怖片", "剧情片", "犯罪片", "战争片"],
+    "2":  ["全部", "国产剧", "港剧", "台湾剧", "韩剧", "日剧", "泰剧", "欧美剧", "海外剧"],
     "3":  ["全部", "大陆综艺", "日韩综艺", "港台综艺", "欧美综艺"],
     "4":  ["全部", "国产动漫", "日本动漫", "欧美动漫", "海外动漫"],
     "30": ["全部", "爽文短剧", "短剧"],
@@ -133,8 +130,7 @@ for c in CLASSES:
     tid = c["type_id"]
     FILTERS[tid] = [
         {"key": "class", "name": "分类",
-         "value": [{"n": x, "v": "" if x == "全部" else x}
-                   for x in _FILTERS_MAP.get(tid, ["全部"])]},
+         "value": [{"n": x, "v": "" if x == "全部" else x} for x in _FILTERS_MAP.get(tid, ["全部"])]},
         {"key": "area", "name": "地区", "value": _AREAS},
         {"key": "year", "name": "年份", "value": _YEARS},
         {"key": "lang", "name": "语言", "value": _LANGS},
@@ -143,7 +139,7 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
-# 修复：增加兼容性，不论属性顺序如何，都能精准抓取数据
+# 修复：解除了 HTML 属性顺序的限制，确保 <a href title> 和 <a title href> 都能抓取
 _RE_CARD = re.compile(
     r'<a[^>]+href="(/(?:news|weihu|wap|m)/\d+\.html)"[^>]*?title="([^"]*)"[^>]*?(?:data-original|src)="([^"]*)"', 
     re.S | re.I)
@@ -155,29 +151,22 @@ _RE_CARD_MIN = re.compile(
 _RE_H1 = re.compile(r'<h1[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)</h1>', re.I)
 _RE_H1_ANY = re.compile(r'<h1[^>]*>([\s\S]*?)</h1>', re.I)
 
-_RE_INTRO_FULL = re.compile(
-    r'<span[^>]*class="[^"]*detail-content[^"]*"[^>]*>([\s\S]*?)</span>', re.I)
-_RE_INTRO_SKETCH = re.compile(
-    r'<span[^>]*class="[^"]*detail-sketch[^"]*"[^>]*>([\s\S]*?)</span>', re.I)
-_RE_META_DESC = re.compile(
-    r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', re.I)
+_RE_INTRO_FULL = re.compile(r'<span[^>]*class="[^"]*detail-content[^"]*"[^>]*>([\s\S]*?)</span>', re.I)
+_RE_INTRO_SKETCH = re.compile(r'<span[^>]*class="[^"]*detail-sketch[^"]*"[^>]*>([\s\S]*?)</span>', re.I)
+_RE_META_DESC = re.compile(r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', re.I)
 
-_RE_ACTOR_BLOCK = re.compile(
-    r'<span[^>]*>\s*主演\s*[：:]\s*</span>([\s\S]*?)</p>', re.I)
-_RE_DIRECTOR_BLOCK = re.compile(
-    r'<span[^>]*>\s*导演\s*[：:]\s*</span>([\s\S]*?)</p>', re.I)
+_RE_ACTOR_BLOCK = re.compile(r'<span[^>]*>\s*主演\s*[：:]\s*</span>([\s\S]*?)</p>', re.I)
+_RE_DIRECTOR_BLOCK = re.compile(r'<span[^>]*>\s*导演\s*[：:]\s*</span>([\s\S]*?)</p>', re.I)
 _RE_A_TEXT = re.compile(r'<a[^>]*>([^<]*)</a>', re.I)
 
 _RE_SCORE = re.compile(r'<span[^>]*class="[^"]*branch[^"]*"[^>]*>\s*([\d.]+)\s*<', re.I)
-
 _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{.*?\})\s*</script>', re.S)
 
 _RE_LINE_BLOCK = re.compile(
     r'<h3[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+?)\s*</h3>'
     r'[\s\S]*?<ul[^>]*class="[^"]*stui-content__playlist[^"]*"[^>]*>([\s\S]*?)</ul>',
     re.I)
-_RE_EP_A = re.compile(
-    r'<a[^>]+href="([^"]*?/tvplay/[^"]+?\.html)"[^>]*>([^<]*)</a>', re.I)
+_RE_EP_A = re.compile(r'<a[^>]+href="([^"]*?/tvplay/[^"]+?\.html)"[^>]*>([^<]*)</a>', re.I)
 
 _RE_RATE_LIMIT = "请不要频繁操作"
 
@@ -325,7 +314,7 @@ class Spider(Spider):
         return {"list": self._extract_videos(html)}
 
     def _build_show_url(self, tid, extend, page):
-        # 1. 处理真实分类 ID
+        # 1. 映射子类 ID，防止查大类空白
         cls = extend.get("class", "")
         if cls:
             real_tid = _CLASS_ID_MAP.get(cls, tid)
@@ -337,7 +326,7 @@ class Spider(Spider):
         sort = extend.get("sort_field") or "time"
         year = extend.get("year") or ""
         
-        # 2. 关键修复：如果没传年份，强制用 2025，否则网站返回空
+        # 2. 致命修复：如果没传年份，强制用 2025，否则网站返回空
         if not year:
             year = "2025"
 
