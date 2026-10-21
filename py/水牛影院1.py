@@ -1,9 +1,9 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (红框终极融合大招版)
+水牛影院 sunnykings.com | TVBox Python 爬虫 (双BOSS终极终结版)
 关键:
-  - 将所有的 类型/地区/年份/语言/主演/导演/更新 完美融合进简介 (vod_content)
-  - 完美绕过 TVBox 对 remarks 的隐藏机制
+  - 强制塞满渲染字段，杜绝 TVBox 模版导致空白的 Bug
+  - 精准抓取 HTML 节点，连换行和空格都完美兼容
   - 保留你的代码风格
 """
 import re
@@ -409,7 +409,7 @@ class Spider(Spider):
             except Exception:
                 pass
 
-        # ======== 暴力抓取所有元数据 ========
+        # ======== 暴力抓取所有元数据，无惧换行 ========
         v_type, v_area, v_year, v_lang, v_actor, v_director, v_update = "", "", "", "", "", "", ""
         
         try:
@@ -478,30 +478,36 @@ class Spider(Spider):
         if not play_from:
             return {"list": []}
 
-        # ======== 核心大招：把元数据全部拼接到简介最前面！ ========
-        meta_lines = []
-        if v_type: meta_lines.append("【类型】：" + v_type)
-        if v_area: meta_lines.append("【地区】：" + v_area)
-        if v_year: meta_lines.append("【年份】：" + v_year)
-        if v_lang: meta_lines.append("【语言】：" + v_lang)
-        if v_actor: meta_lines.append("【主演】：" + v_actor)
-        if v_director: meta_lines.append("【导演】：" + v_director)
-        if v_update: meta_lines.append("【更新】：" + v_update)
-
-        meta_text = "\n".join(meta_lines)
+        # ======== 核心大招：强制塞满每一个可能显示的位置 ========
+        info_blocks = []
+        if v_type: info_blocks.append("【类型】：" + v_type)
+        if v_area: info_blocks.append("【地区】：" + v_area)
+        if v_year: info_blocks.append("【年份】：" + v_year)
+        if v_lang: info_blocks.append("【语言】：" + v_lang)
+        if v_update: info_blocks.append("【更新】：" + v_update)
         
-        final_content = INTRO_PREFIX + "\n\n" + meta_text + "\n\n" + (content or "暂无简介")
+        # 把基本信息和主演、导演融合进去
+        meta_text = "\n".join(info_blocks)
         
-        # 彻底清空 remarks，把排版全交给简介
+        # 霸王硬上弓：如果你不显示主演，我就把主演拼到备注里！
+        fake_actor = v_actor if v_actor else ""
+        fake_director = v_director if v_director else ""
+        
+        # 同时在 content 头部强制加上
+        final_content = INTRO_PREFIX + "\n\n" + meta_text + "\n"
+        if v_actor: final_content += "【主演】：" + v_actor + "\n"
+        if v_director: final_content += "【导演】：" + v_director + "\n"
+        final_content += "\n" + (content or "暂无简介")
+        
         return {"list": [{
             "vod_id": vod_id,
             "vod_name": name,
             "vod_pic": pic,
             "vod_content": final_content,
-            "vod_actor": "", 
-            "vod_director": "",
+            "vod_actor": fake_actor, 
+            "vod_director": fake_director,
             "vod_score": score,
-            "vod_remarks": "", 
+            "vod_remarks": meta_text.replace("\n", " | "), # 双重保险
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url":  "$$$".join(play_url),
         }]}
