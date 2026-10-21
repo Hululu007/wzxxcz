@@ -1,6 +1,6 @@
 # coding=utf-8
 """
-水牛影院 | TVBox Python 爬虫
+火龙果影视 | TVBox Python 爬虫
 自动生成于 Spider AutoGen — 请按需微调正则后再上线
 生成状态: 列表已命中 / 详情已命中 / 播放页 direct-m3u8
 """
@@ -53,21 +53,21 @@ except ImportError:
     Spider = _BaseSpider
 
 
-HOST = 'https://www.sunnykings.com'
+HOST = 'https://www.gljade.com'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 DEFAULT_PIC = HOST + '/favicon.ico'
 
 INTRO_PREFIX = '🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！'
 
 CLASSES = [
-    {"type_id": 'dianying', "type_name": '电影'},
-    {"type_id": 'dianshiju', "type_name": '电视剧'},
-    {"type_id": 'zongyi', "type_name": '综艺'},
-    {"type_id": 'dongman', "type_name": '动漫'},
-    {"type_id": 'duanju', "type_name": '短剧'},
+    {"type_id": 'rss', "type_name": 'Sogou'},
+    {"type_id": 'map', "type_name": '网站地图'},
+    {"type_id": 'medialist', "type_name": '更多'},
+    {"type_id": 'label', "type_name": '最近更新'},
+    {"type_id": 'cat', "type_name": '短剧'},
 ]
 
-_YEARS = [{"n": "全部", "v": ""}] + [{"n": y, "v": y} for y in ('2025', '2024', '2023', '2022', '2021', '2020', '2019', '2018', '2017', '2016', '2015', '2014', '2013', '2012', '2011', '2010', '2009', '2008', '2007', '2006')]
+_YEARS = [{"n": "全部", "v": ""}] + [{"n": y, "v": y} for y in ('2018', '2017', '2016', '2015', '2014', '2013', '2012', '2011', '2010', '2019', '2020', '2021', '2022', '2023', '2024', '2025', '2026')]
 _AREAS = [{"n": "全部", "v": ""}] + [{"n": a, "v": a} for a in ('中国大陆', '美国', '日本', '韩国', '中国香港', '中国台湾', '英国', '法国', '德国', '印度', '泰国')]
 _SORTS = [{"n": "热度最高", "v": 'play_hot'}, {"n": "最新更新", "v": 'time'}]
 
@@ -82,14 +82,13 @@ FILTERS = {
 
 
 # ===================== 正则 =====================
-# 列表卡片片段: <ul class="IWS99o stui-link__text clearfix">
-                                <li><a href="/tv/yhicymwjpi/mengx
+# 列表卡片片段: <a class="text-overflow" href="/video/957168.html" title="余红旧事">余红旧事</a>
 _RE_CARD = re.compile(
-    r'href="(/tv/kwuyeuncwl/[^"]+?\.html)[^"]*"[^>]*>'
+    r'href="(/video/[^"]+?\.html)[^"]*"[^>]*>'
     r'[\s\S]{0,200}?'
     r'<img[^>]*?alt="([^"]*)"[^>]*?src="([^"]*)"',
     re.S | re.I)
-_RE_HREF = re.compile(r'href="(/tv/kwuyeuncwl/[^"]+?\.html)', re.I)
+_RE_HREF = re.compile(r'href="(/video/[^"]+?\.html)', re.I)
 _RE_IMG = re.compile(
     r'<img[^>]*?alt="([^"]*)"[^>]*?src="([^"]*)"',
     re.S | re.I)
@@ -122,7 +121,7 @@ _LINE_ALIAS = {
 class Spider(Spider):
 
     def getName(self):
-        return '水牛影院'
+        return '火龙果影视'
 
     def init(self, extend=""):
         try:
