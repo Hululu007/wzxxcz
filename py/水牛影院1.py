@@ -148,11 +148,6 @@ _RE_POW_TARGET = re.compile(r"var\s+target\s*=\s*['\"]([a-f0-9]{40})['\"]")
 
 # 分页模板: {tid} 类型 -> 分类路径, {page} = 页码(从 0 或 1 视站点)
 CAT_TPLS = {
-    '8': '/so-show/8--------2---{page}.html',
-    '14': '/so-show/14--------2---{page}.html',
-    '21': '/so-show/21--------2---{page}.html',
-    '25': '/so-show/25--------2---{page}.html',
-    '30': '/so-show/30-%E5%A4%A7%E9%99%86-------2---{page}.html',
     '1': '/listnew/1-{page}.html',
     '2': '/listnew/2-{page}.html',
     '3': '/listnew/3-{page}.html',
@@ -202,6 +197,21 @@ class Spider(Spider):
         return '水牛影院'
 
     site_name = '水牛影院'
+    _session = None
+
+    @property
+    def _sess(self):
+        """内置 requests 会话兜底：宿主基类没有 fetch/_sess 时也能跑。"""
+        if getattr(self, '_session', None) is None:
+            try:
+                import requests
+                s = requests.Session()
+                s.verify = False
+                s.headers.update(self.headers)
+                self._session = s
+            except Exception:
+                self._session = None
+        return self._session
 
     def init(self, extend=""):
         try:
@@ -236,12 +246,25 @@ class Spider(Spider):
                 return None
         return None
 
+    def _raw(self, url, timeout=30, headers=None):
+        # 优先用基类 fetch（TVBox 环境下带代理与 UA），失败则回落内置 session
+        h = dict(self.headers)
+        if headers:
+            h.update(headers)
+        fn = getattr(self, "fetch", None)
+        if callable(fn):
+            try:
+                return fn(url, headers=h, timeout=timeout)
+            except Exception:
+                pass
+        s = self._sess
+        if s is None:
+            raise RuntimeError("no http client")
+        return s.get(url, headers=h, timeout=timeout)
+
     def _fetch(self, url, timeout=30, headers=None):
         try:
-            h = dict(self.headers)
-            if headers:
-                h.update(headers)
-            rsp = self.fetch(url, headers=h, timeout=timeout)
+            rsp = self._raw(url, timeout, headers)
             text = rsp.text if hasattr(rsp, "text") else (
                 rsp.content.decode("utf-8", "ignore") if hasattr(rsp, "content") else str(rsp))
             if "attack_key" in text and "sha1(hash" in text:
