@@ -1,11 +1,12 @@
 # coding=utf-8
 """
-水牛影院 sunnykings.com | TVBox Python 爬虫 (完美分类修复版)
+水牛影院 sunnykings.com | TVBox Python 爬虫 (分类修复版)
 严格按真实源码结构编写：
   - 列表页卡片: <a class="... lazyload" href="/{news|weihu|wap|m}/{id}.html" title="..." data-original="...">
   - 分类页路由: /so-show/{tid}-{area}---{lang}---{page}---{year}.html
   - 详情页: <h1 class="... title">、detail-content 简介、<h3 class="... title">线路名</h3> + 剧集 <a href="/tvplay/{id}-{sid}-{nid}.html">
   - 播放页: var player_aaaa={...} 中 url 字段为直链 m3u8
+  - 频率限制页: "请不要频繁操作，搜索时间间隔为3秒"
 """
 import re
 import sys
@@ -71,7 +72,7 @@ CLASSES = [
     {"type_id": "36", "type_name": "伦理片"},
 ]
 
-# 核心修复：一级分类不能直接用于 /so-show/，必须映射到其默认的子分类ID
+# 核心修复：一级分类（1,2,3,4）不能直接在 /so-show/ 里请求，必须映射到默认的子分类
 _DEFAULT_SUB_TID = {
     "1": "7",   # 电影 -> 动作片
     "2": "14",  # 电视剧 -> 国产剧
@@ -81,7 +82,6 @@ _DEFAULT_SUB_TID = {
     "36": "36", # 伦理片
 }
 
-# 用户明确选择了子分类时的映射
 _CLASS_ID_MAP = {
     "动作片": "7", "喜剧片": "8", "爱情片": "9", "科幻片": "10", 
     "恐怖片": "11", "剧情片": "12", "犯罪片": "29", "战争片": "13",
@@ -324,6 +324,41 @@ class Spider(Spider):
         html = self._fetch(self.site_url + "/")
         return {"list": self._extract_videos(html)}
 
+    def _build_show_url(self, tid, extend, page):
+        # 核心修复：大类无筛选时，映射至默认子分类 ID，防止返回空白页
+        cls = extend.get("class", "")
+        if cls:
+            real_tid = _CLASS_ID_MAP.get(cls, tid)
+        else:
+            real_tid = _DEFAULT_SUB_TID.get(tid, tid)
+
+        area = extend.get("area") or ""
+        lang = extend.get("lang") or ""
+        sort = extend.get("sort_field") or "time"
+        year = extend.get("year") or ""
+
+        # 真实格式形如：/so-show/14--------2---2025.html
+        # 占位符依次为：tid - area - class - lang - letter - sort - page --- year
+        parts = [real_tid]
+        if area:
+            parts.append("-%s" % urllib.parse.quote(area))
+        else:
+            parts.append("-")
+        # class 占位
+        parts.append("-")
+        if lang:
+            parts.append("-%s" % urllib.parse.quote(lang))
+        else:
+            parts.append("-")
+        # letter 占位
+        parts.append("-")
+        parts.append("-%s" % sort)
+        parts.append("-%d" % (page - 1))
+        head = "".join(parts)
+
+        url = "%s/so-show/%s---%s.html" % (self.site_url, head, year)
+        return url
+
     def categoryContent(self, tid, pg, filter, extend):
         page = int(pg) if pg else 1
         if isinstance(extend, str):
@@ -337,26 +372,7 @@ class Spider(Spider):
             if extend[k] in ("", None, "全部"):
                 del extend[k]
 
-        # 解决空白页：如果无子类则匹配默认子类，有子类则映射到真实ID
-        cls = extend.get("class", "")
-        if cls:
-            real_tid = _CLASS_ID_MAP.get(cls, tid)
-        else:
-            real_tid = _DEFAULT_SUB_TID.get(tid, tid)
-
-        area = urllib.parse.quote(extend.get("area") or "")
-        lang = urllib.parse.quote(extend.get("lang") or "")
-        sort = extend.get("sort_field") or "time"
-        year = extend.get("year") or ""
-
-        # 格式：/so-show/14--------2---2025.html
-        # 拆分：tid + 7个连字符断位 + page + 3个连字符 + year
-        url = "%s/so-show/%s-%s---%s----%s-%d---%s.html" % (
-            self.site_url, real_tid, area, "", lang, sort, page - 1, year
-        )
-        # 清理多余的占位符
-        url = url.replace("----", "-").replace("-----", "-").replace("------", "-").replace("-------", "-")
-
+        url = self._build_show_url(tid, extend, page)
         self.log("category: %s" % url)
         html = self._fetch(url)
 
@@ -370,10 +386,15 @@ class Spider(Spider):
     def searchContent(self, key, quick, pg="1"):
         page = int(pg) if pg else 1
         kw = urllib.parse.quote(key)
-        url = "%s/search/%s-------------.html" % (self.site_url, kw)
+        url = "%s/search/%s-------------%s.html" % (
+            self.site_url, kw, page - 1)
+        url2 = "%s/search/-------------.html?wd=%s" % (self.site_url, kw)
         self.log("search: %s" % url)
         html = self._fetch(url)
         videos = self._extract_videos(html)
+        if not videos and page == 1:
+            html = self._fetch(url2)
+            videos = self._extract_videos(html)
         return {
             "list": videos, "page": page,
             "pagecount": self._page_count(html, page),
