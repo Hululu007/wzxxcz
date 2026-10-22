@@ -36330,6 +36330,18 @@
             }
         },
         {
+            "key": "球通体育",
+            "name": "⚽球通体育",
+            "type": 3,
+            "api": "csp_SportQiutong",
+            "searchable": 0,
+            "quickSearch": 0,
+            "changeable": 0,
+            "style": {
+                "type": "list"
+            }
+        },
+        {
             "key": "哔哩直播",
             "name": "🍊哔哩直播",
             "type": 3,
