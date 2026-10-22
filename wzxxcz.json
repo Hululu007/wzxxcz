@@ -1480,7 +1480,7 @@
             "key": "vidhub视频库",
             "name": "🍊vidhub视频库",
             "type": 3,
-            "api": "./py/vidhub🍀TG @hshsjk9.py"
+            "api": "./py/vidhub.py"
         },
         {
             "key": "网飞影视",
