@@ -1,11 +1,12 @@
 # coding=utf-8
 """
-网飞TV wangfei.tv | TVBox Python 爬虫 (小橙子特供版 V9.0 完整重构版)
+网飞TV wangfei.tv | TVBox Python 爬虫 (小橙子特供版 V10.0 终极杀 Boss 版)
 关键:
   - 破解分类页假 ID 陷阱 (自动探测 22/31 等真实子类)
-  - 破解图片裂开陷阱 (强力补全缺失的 HTTP 协议和根路径)
+  - 破解 GFI 裂图陷阱 (强力补全缺失的 HTTP 协议和根路径，完美兜底)
   - 简介前缀保留，完全对齐豆花风格
-  - 解析 JSON-LD 获取 m3u8 直链 + 抓取外部恶意跳转的聚合线路
+  - 解析 JSON-LD 获取 m3u8 直链 (极速线路秒播)
+  - 彻底干掉外挂跳转，极简清爽
 """
 import ast
 import base64
@@ -13,7 +14,6 @@ import html as html_module
 import json
 import re
 import time
-import sys
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
 
 import requests
@@ -53,6 +53,7 @@ class Spider(BaseSpider):
         {"type_name": "纪录片", "type_id": "5"},
         {"type_name": "短剧", "type_id": "47"},
     ]
+    
     # 豆花风格前缀
     INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
     
@@ -293,8 +294,12 @@ class Spider(BaseSpider):
             )
             title = self._clean_text(title)
             if title.lower() in {"play", "detail", "more"}: title = ""
+            
+            # 图片兜底：如果扒出来的图有问题，直接换默认图
             pic = self._attr_first(image, ("data-original", "data-src", "data-lazy", "data-echo", "src"))
             pic = self._absolute(pic, page_url or self.host) if pic else ""
+            if not pic or not pic.startswith("http"):
+                pic = "https://www.wangfei.tv/upload/vod/20251211-1/569089b2bfc36db5559b19b6db5e9d8c.jpg"
 
             card = anchor
             for _ in range(4):
@@ -339,10 +344,15 @@ class Spider(BaseSpider):
             pic_match = re.search(r"(?:data-original|data-src|data-lazy|data-echo|src)=[\"']([^\"']+)[\"']", snippet, re.I)
             title = self._clean_text(title_match.group(1) if title_match else "")
             if not title: continue
+            
+            pic = self._absolute(pic_match.group(1), page_url or self.host) if pic_match else ""
+            if not pic or not pic.startswith("http"):
+                pic = "https://www.wangfei.tv/upload/vod/20251211-1/569089b2bfc36db5559b19b6db5e9d8c.jpg"
+                
             records.append({
                 "vod_id": vod_id,
                 "vod_name": title,
-                "vod_pic": self._absolute(pic_match.group(1), page_url or self.host) if pic_match else "",
+                "vod_pic": pic,
                 "vod_remarks": "",
             })
         return records
@@ -433,7 +443,7 @@ class Spider(BaseSpider):
         
         metadata = self._parse_detail_metadata(source, detail_url)
         
-        # ========== 核心 Boss 斩杀：强杀线路 ==========
+        # ========== 核心 Boss 斩杀：只留极速线路，干掉外挂 ==========
         lines = []
         
         # 1. 从 JSON-LD 中提取最高清 m3u8 直链
@@ -447,20 +457,9 @@ class Spider(BaseSpider):
                         self._log("发现隐藏极速M3U8")
                         break
             except Exception: pass
-            
-        # 2. 抓取外挂 xyz 聚合线路
-        eps = []
-        for m in re.finditer(r'<a[^>]*class="module-play-list-link"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', source, re.S | re.I):
-            href, txt = m.groups()
-            href = self._absolute(href, detail_url)
-            if "xyz" in href and "voddetail" in href:
-                eps.append(f"{self._clean_text(txt)}${href}")
-        if eps:
-            lines.append(("外挂聚合", "#".join(eps)))
-            self._log(f"发现外挂线路 {len(eps)} 条")
 
+        # 兜底：传统的提取方式
         if not lines:
-            # 兜底：传统的提取方式
             line_links = self._extract_line_links(source, detail_url)
             lines = self._fetch_provider_lines(line_links, detail_url)
 
