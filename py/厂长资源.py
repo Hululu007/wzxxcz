@@ -86,7 +86,6 @@ _LANGS = [{"n": "全部", "v": ""}, {"n": "国语", "v": "国语"},
           {"n": "日语", "v": "日语"}, {"n": "法语", "v": "法语"},
           {"n": "德语", "v": "德语"}, {"n": "其它", "v": "其它"}]
 
-# 🚀 修复分类为空：将子分类真实映射为苹果CMS的 type_id
 _FILTERS_MAP = {
     "1": [{"n": "动作电影", "v": "6"}, {"n": "喜剧电影", "v": "7"}, {"n": "爱情片", "v": "8"}, 
           {"n": "科幻电影", "v": "9"}, {"n": "恐怖电影", "v": "10"}, {"n": "剧情片", "v": "11"}, 
@@ -142,7 +141,7 @@ class Spider(Spider):
         self.log("init: site=%s" % self.site_url)
 
     # ---------- 基础工具 ----------
-    def _fetch(self, url, timeout=20, headers=None):
+    def _fetch(self, url, timeout=15, headers=None):
         try:
             h = dict(self.headers)
             if headers:
@@ -448,7 +447,7 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # ---------- 播放（剥洋葱找子m3u8防跳源版） ----------
+    # ---------- 播放（极速敲门无陷阱版） ----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("========== 准备播放 ==========")
@@ -460,54 +459,35 @@ class Spider(Spider):
             if now - ts < 600:
                 return res
 
-        # 极速拉取播放页，超时限制到 8 秒
+        # 拉取播放页，超时设置稍微短一点，保证 TVBox 不卡死
         html = self._fetch(play_page, timeout=8)
         
         # 提取 m3u8
         m3u8 = self._extract_player_url(html) if html else ""
         
         if m3u8:
-            self.log("✅ 成功提取到原始 M3U8: %s" % m3u8)
+            self.log("✅ 成功提取到 M3U8: %s" % m3u8)
             
-            # 构造基础防盗链 Header
+            # 🚀 修复：Referer 必须用主域名，完美视频的 CDN 不认具体播放页
             headers = {
                 "User-Agent": UA,
-                "Referer": self.site_url + "/", 
-                "Origin": self.site_url,
-                "Accept": "*/*",
-                "Accept-Language": "zh-CN,zh;q=0.9",
-                "Connection": "keep-alive"
+                "Referer": self.site_url + "/",  
+                "Origin": self.site_url
             }
             
-            # 🚀 隐藏大BOSS：手动剥洋葱！
-            # 向 m3u8 发起请求，如果是多码率（Master Playlist），直接提取里面第一个真实的子 m3u8 链接返回。
-            # 这样播放器就不需要自己去解析嵌套列表，直接单线程拉流，杜绝超时跳源。
-            real_m3u8 = m3u8
+            # 🚀 1.5秒极速敲门，不剥离、不拉 TS，能敲开就敲，敲不开让 TVBox 自己拉。
+            # 这样能最大程度触发 CDN 缓存，同时绝不阻塞主流程超过 1.5 秒。
             try:
-                self.log("🔥 正在检查主 M3U8 并提取子流...")
-                rsp = self.fetch(m3u8, headers=headers, timeout=3)
-                text = rsp.text if hasattr(rsp, 'text') else ""
-                if "#EXTM3U" in text and "#EXT-X-STREAM-INF" in text:
-                    lines = [ln.strip() for ln in text.split('\n') if ln.strip()]
-                    for i, line in enumerate(lines):
-                        if line.startswith("#EXT-X-STREAM-INF"):
-                            if i + 1 < len(lines):
-                                sub = lines[i + 1].strip()
-                                if sub.startswith("http"):
-                                    real_m3u8 = sub
-                                elif sub.startswith("/"):
-                                    real_m3u8 = m3u8.split('/', 3)[0] + '//' + m3u8.split('/', 3)[2] + sub
-                                else:
-                                    real_m3u8 = m3u8.rsplit('/', 1)[0] + '/' + sub
-                                self.log("🔥 成功剥离子流: %s" % real_m3u8)
-                                break
-            except Exception as e:
-                self.log("剥离警告 (忽略直接播放主M3U8): %s" % e)
+                self.log("🔥 极速敲门，触发 CDN 缓存...")
+                self.fetch(m3u8, headers=headers, timeout=1.5)
+                self.log("🔥 敲门结束，立刻交棒给播放器！")
+            except Exception:
+                pass # 超时忽略，直接交棒
             
             res = {
                 "parse": 0,              # 0 代表直接播放
                 "playUrl": "",           # 留空，坚决防止跳转
-                "url": real_m3u8,        # 最终的直链 m3u8 (大概率是子流)
+                "url": m3u8,             # 直链 m3u8
                 "header": headers,
             }
             self._play_cache[play_page] = (now, res)
@@ -516,7 +496,7 @@ class Spider(Spider):
             self.log("❌ 未提取到 M3U8，可能被拦截或页面结构改变")
             self.log("网页片段: %s" % html[:200])
 
-        # 兜底：如果真没抓到，返回原播放页让 TVBox 嗅探
+        # 兜底
         res = {
             "parse": 1, 
             "playUrl": "", 
@@ -550,7 +530,7 @@ class Spider(Spider):
         encrypt = obj.get("encrypt", 0)
         
         if encrypt != 0:
-            self.log("⚠️ 警告: encrypt=%s 非0，此视频有加密，大概率无法直链播放" % encrypt)
+            self.log("⚠️ 警告: encrypt=%s 非0" % encrypt)
             
         if url.startswith("//"):
             url = "https:" + url
