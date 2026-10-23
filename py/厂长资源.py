@@ -110,24 +110,6 @@ for c in CLASSES:
 
 
 # ============ 正则 ============
-_RE_CARD = re.compile(
-    r'<a[^>]*class="stui-vodlist__thumb lazyload"[^>]*'
-    r'href="(/cdvoddetail/(\d+)\.html)"[\s\S]*?'
-    r'title="([^"]*)"[\s\S]*?'
-    r'(?:data-original|src)="([^"]*)"[\s\S]*?>'
-    r'[\s\S]{0,200}?'
-    r'<span class="pic-text[^"]*">([^<]*)</span>',
-    re.S | re.I)
-
-_RE_SEARCH_CARD = re.compile(
-    r'<a[^>]*class="v-thumb stui-vodlist__thumb lazyload"[^>]*'
-    r'href="(/cdvoddetail/(\d+)\.html)"[\s\S]*?'
-    r'title="([^"]*)"[\s\S]*?'
-    r'(?:data-original|src)="([^"]*)"[\s\S]*?>'
-    r'[\s\S]{0,200}?'
-    r'<span class="pic-text[^"]*">([^<]*)</span>',
-    re.S | re.I)
-
 _RE_PAGECOUNT = re.compile(r'<span class="num">(\d+)/(\d+)</span>')
 _RE_PLAYER_AA = re.compile(r"var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>", re.I)
 
@@ -199,18 +181,42 @@ class Spider(Spider):
         videos, seen = [], set()
         if not html:
             return videos
-        reg = _RE_SEARCH_CARD if search else _RE_CARD
-        for m in reg.finditer(html):
-            href, vid, name, pic, remark = m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)
-            href = href.replace("&amp;", "&")
-            if href in seen:
+            
+        # 🚀 修复：改成先抓取 <a> 标签块，再分步提取属性，防止因为某个字段缺失导致整体匹配失败
+        pattern = r'<a[^>]*class="[^"]*stui-vodlist__thumb[^"]*"[^>]*>([\s\S]*?)</a>'
+        matches = re.finditer(pattern, html, re.I)
+        
+        for m in matches:
+            full_a_tag = m.group(0)
+            inner_html = m.group(1)
+            
+            # 排除侧边栏热播等不需要的块
+            if 'm-thumb' in full_a_tag:
                 continue
+                
+            href_m = re.search(r'href="([^"]+)"', full_a_tag, re.I)
+            if not href_m: continue
+            href = href_m.group(1).replace("&amp;", "&")
+            if not href.startswith("/cdvoddetail/"): continue
+            
+            title_m = re.search(r'title="([^"]*)"', full_a_tag, re.I)
+            name = title_m.group(1) if title_m else ""
+            
+            pic_m = re.search(r'(?:data-original|src)="([^"]+)"', full_a_tag, re.I)
+            pic = pic_m.group(1) if pic_m else ""
+            
+            if href in seen: continue
             seen.add(href)
+            
+            # 提取副标题
+            remark_m = re.search(r'<span class="pic-text[^"]*">([\s\S]*?)</span>', inner_html, re.I)
+            remark = self._clean(remark_m.group(1)) if remark_m else ""
+            
             videos.append({
                 "vod_id": href,
-                "vod_name": self._clean(name) or ("影片" + vid),
+                "vod_name": self._clean(name) or href,
                 "vod_pic": self._fix_url(pic) or self.default_pic,
-                "vod_remarks": self._clean(remark),
+                "vod_remarks": remark,
             })
         return videos
 
@@ -326,7 +332,7 @@ class Spider(Spider):
             if m:
                 name = self._clean(m.group(1).split("-")[0].split("_")[0])
 
-        # 🚀 修复副标题/备注提取：只要包含 pic-text 的 span 都抓
+        # 🚀 修复副标题/备注提取：只要包含 pic-text 的 span 都抓，兼容嵌套标签
         pic = self.default_pic
         remark = ""
         m = re.search(r'<a[^>]*class="stui-vodlist__thumb picture v-thumb"[\s\S]{0,600}?'
@@ -334,8 +340,8 @@ class Spider(Spider):
         if m:
             pic = self._fix_url(m.group(1))
             
-        # 直接全局搜第一个 pic-text，不管是加粗、换行还是啥
-        m = re.search(r'<span class="pic-text[^"]*">\s*([^<]*)\s*</span>', html, re.I)
+        # 直接全局搜第一个 pic-text，支持内部包含其他标签
+        m = re.search(r'<span class="pic-text[^"]*">([\s\S]*?)</span>', html, re.I)
         if m:
             remark = self._clean(m.group(1))
 
