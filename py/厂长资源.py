@@ -7,6 +7,8 @@
 import re
 import sys
 import json
+import time
+import threading
 import urllib.parse
 
 sys.path.append('..')
@@ -86,7 +88,6 @@ _LANGS = [{"n": "全部", "v": ""}, {"n": "国语", "v": "国语"},
           {"n": "日语", "v": "日语"}, {"n": "法语", "v": "法语"},
           {"n": "德语", "v": "德语"}, {"n": "其它", "v": "其它"}]
 
-# 🚀 修复分类为空：将子分类真实映射为苹果CMS的 type_id
 _FILTERS_MAP = {
     "1": [{"n": "动作电影", "v": "6"}, {"n": "喜剧电影", "v": "7"}, {"n": "爱情片", "v": "8"}, 
           {"n": "科幻电影", "v": "9"}, {"n": "恐怖电影", "v": "10"}, {"n": "剧情片", "v": "11"}, 
@@ -142,7 +143,7 @@ class Spider(Spider):
         self.log("init: site=%s" % self.site_url)
 
     # ---------- 基础工具 ----------
-    def _fetch(self, url, timeout=20, headers=None):
+    def _fetch(self, url, timeout=15, headers=None):
         try:
             h = dict(self.headers)
             if headers:
@@ -187,7 +188,6 @@ class Spider(Spider):
         if not html:
             return videos
             
-        # 抓取块：限定必须包含 lazyload，避免抓到轮播图
         pattern = r'<a[^>]*class="[^"]*stui-vodlist__thumb lazyload[^"]*"[^>]*>([\s\S]*?)</a>'
         matches = re.finditer(pattern, html, re.I)
         
@@ -206,7 +206,6 @@ class Spider(Spider):
             title_m = re.search(r'title="([^"]*)"', full_a_tag, re.I)
             name = title_m.group(1) if title_m else ""
             
-            # 修复封面：优先 data-original，再次 src，避免拿到 load.gif 占位图
             pic = ""
             pic_m = re.search(r'data-original="([^"]+)"', full_a_tag, re.I)
             if pic_m:
@@ -219,7 +218,6 @@ class Spider(Spider):
             if href in seen: continue
             seen.add(href)
             
-            # 修复副标题
             remark_m = re.search(r'<span[^>]*class="[^"]*pic-text[^"]*"[^>]*>([\s\S]*?)</span>', inner_html, re.I)
             remark = self._clean(remark_m.group(1)) if remark_m else ""
             
@@ -273,7 +271,6 @@ class Spider(Spider):
                 extend = {}
         extend = extend or {}
         
-        # 🚀 智能分类映射：如果传了数字 class（分类ID），直接当作 type_id 替换掉旧的 tid
         if "class" in extend and str(extend["class"]).isdigit():
             tid = str(extend["class"])
             del extend["class"]
@@ -291,7 +288,6 @@ class Spider(Spider):
         html = self._fetch(url)
         videos = self._extract_videos(html)
         
-        # 🚀 防错回退：如果没数据（可能因为年份不对），去掉所有筛选条件再试一次
         if not videos and extend:
             self.log("category retry without extend...")
             url = "%s/cdvodshow/%s-----------.html" % (self.site_url, tid)
@@ -302,7 +298,6 @@ class Spider(Spider):
             if videos:
                 html = html2
         
-        # 🚀 终极防错：尝试旧版路由
         if not videos:
             url_fallback = "%s/cdvodtype/%s.html" % (self.site_url, tid)
             if page > 1:
@@ -350,7 +345,6 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # 标题
         name = ""
         m = re.search(r'<h1[^>]*class="title"[^>]*>([\s\S]*?)</h1>', html, re.I)
         if m:
@@ -360,7 +354,6 @@ class Spider(Spider):
             if m:
                 name = self._clean(m.group(1).split("-")[0].split("_")[0])
 
-        # 修复详情页封面
         pic = self.default_pic
         remark = ""
         m = re.search(r'<a[^>]*class="stui-vodlist__thumb picture v-thumb"[\s\S]{0,600}?'
@@ -368,12 +361,10 @@ class Spider(Spider):
         if m:
             pic = self._fix_url(m.group(1))
             
-        # 修复详情页副标题提取
         m = re.search(r'<span[^>]*class="[^"]*pic-text[^"]*"[^>]*>([\s\S]*?)</span>', html, re.I)
         if m:
             remark = self._clean(m.group(1))
 
-        # 提取元信息（为了放进副标题，不放简介里）
         meta_parts = []
         m = re.search(r'<span class="text-muted">类型：</span>([\s\S]*?)<span class="split-line">', html, re.I)
         if m:
@@ -390,7 +381,6 @@ class Spider(Spider):
             years = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
             if years: meta_parts.append(",".join(years))
 
-        # 主演 / 导演
         actor = ""
         m = re.search(r'<span class="text-muted">主演：</span>([\s\S]*?)</p>', html, re.I)
         if m:
@@ -400,13 +390,11 @@ class Spider(Spider):
         if m:
             director = ", ".join(self._clean(x) for x in re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1)))
 
-        # 评分
         score = ""
         m = re.search(r'<span class="branch">([\d.]+)</span>', html, re.I)
         if m:
             score = m.group(1)
 
-        # 简介（干净无杂质）
         content = ""
         m = re.search(r'<span class="detail-content"[^>]*>([\s\S]*?)</span>', html, re.I)
         if m:
@@ -422,13 +410,11 @@ class Spider(Spider):
                 
         content = INTRO_PREFIX + ("\n" + content if content else "")
 
-        # 合并元信息到副标题
         meta_str = " | ".join(meta_parts)
         final_remark = remark
         if meta_str:
             final_remark = (final_remark + " | " if final_remark else "") + meta_str
 
-        # 剧集
         play_from, play_url = [], []
         block_re = re.compile(
             r'<div class="stui-pannel-box b playlist mb">([\s\S]*?)</ul>\s*</div>\s*</div>\s*</div>',
@@ -463,20 +449,41 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # ---------- 播放（终极分片预热防跳源版） ----------
+    # ---------- 后台异步预热线程 ----------
+    def _async_warm_up(self, m3u8, headers):
+        try:
+            self.log("🔥 后台异步预热开始...")
+            # 1. 先拉 M3U8
+            rsp = self.fetch(m3u8, headers=headers, timeout=5)
+            if hasattr(rsp, 'text') and '#EXTM3U' in rsp.text:
+                lines = rsp.text.split('\n')
+                ts_url = None
+                for line in lines:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        ts_url = urllib.parse.urljoin(m3u8, line)
+                        break
+                # 2. 再拉第一个 TS 分片，彻底打通 CDN 缓存
+                if ts_url:
+                    self.fetch(ts_url, headers=headers, timeout=5)
+            self.log("🔥 后台异步预热成功！")
+        except Exception as e:
+            self.log("🔥 预热警告: %s" % e)
+
+    # ---------- 播放（终极异步防跳源版） ----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("========== 准备播放 ==========")
         self.log("解析播放页: %s" % play_page)
 
-        now = int(__import__("time").time())
+        now = int(time.time())
         if play_page in self._play_cache:
             ts, res = self._play_cache[play_page]
             if now - ts < 600:
                 return res
 
-        # 极速拉取播放页
-        html = self._fetch(play_page, timeout=10)
+        # 极速拉取：加快响应，防止 TVBox 判定超时
+        html = self._fetch(play_page, timeout=8)
         
         # 提取 m3u8
         m3u8 = self._extract_player_url(html) if html else ""
@@ -484,43 +491,27 @@ class Spider(Spider):
         if m3u8:
             self.log("✅ 成功提取到 M3U8: %s" % m3u8)
             
-            # 只保留必须的伪装头
+            # 精简 Header，兼容 TVBox 各种底层内核
             headers = {
                 "User-Agent": UA,
                 "Referer": play_page
             }
             
-            # 🚀 隐藏大BOSS：分片级深度预热！
-            # 我们不仅在后台预请求 m3u8，还把 m3u8 里的第一个 ts 切片也拉下来。
-            # 这样 CDN 直接热缓存，TVBox 播放器一请求直接秒出画面，绝对不给它超时跳源的机会！
-            try:
-                self.log("🔥 正在深度预热视频流(含TS分片)...")
-                rsp = self.fetch(m3u8, headers=headers, timeout=5)
-                if hasattr(rsp, 'text') and '#EXTM3U' in rsp.text:
-                    lines = rsp.text.split('\n')
-                    ts_url = None
-                    for line in lines:
-                        line = line.strip()
-                        if line and not line.startswith('#'):
-                            ts_url = urllib.parse.urljoin(m3u8, line)
-                            break
-                    if ts_url:
-                        self.fetch(ts_url, headers=headers, timeout=5)
-                self.log("🔥 预热成功，坐等秒开！")
-            except Exception as e:
-                self.log("预热警告: %s" % e)
+            # 🚀 开启后台线程去预热，不阻塞主线程，让播放器瞬间拿到地址去并发拉流！
+            t = threading.Thread(target=self._async_warm_up, args=(m3u8, headers))
+            t.daemon = True
+            t.start()
             
             res = {
-                "parse": 0,              # 0 代表直接播放
-                "playUrl": "",           # 留空，坚决防止跳转
-                "url": m3u8,             # 直链 m3u8
+                "parse": 0,              
+                "playUrl": "",           
+                "url": m3u8,             
                 "header": headers,
             }
             self._play_cache[play_page] = (now, res)
             return res
         else:
             self.log("❌ 未提取到 M3U8，可能被拦截或页面结构改变")
-            self.log("网页片段: %s" % html[:200])
 
         # 兜底
         res = {
@@ -541,7 +532,7 @@ class Spider(Spider):
         if not raw:
             m2 = re.search(r'"url"\s*:\s*"([^"]+\.m3u8[^"]*)"', html, re.I)
             if m2:
-                return m2.group(1).replace("\\/", "/").replace("\\u0026", "&")
+                return m2.group(1).replace("\\/", "/").replace("\\u0026", "&").replace("\\", "")
             return ""
 
         raw = raw.replace("\\/", "/").replace("\\u0026", "&").replace("\\u0022", '"')
@@ -561,6 +552,8 @@ class Spider(Spider):
         if url.startswith("//"):
             url = "https:" + url
             
+        # 清理反斜杠，确保给到播放器的地址是干净的
+        url = url.replace("\\", "")
         return url
 
     # ---------- 其他 ----------
