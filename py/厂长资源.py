@@ -111,20 +111,22 @@ for c in CLASSES:
 
 
 # ============ 正则 ============
+# 改良版：更加宽松，不依赖 title 和 data-original 的相对位置
 _RE_CARD = re.compile(
     r'<a[^>]*class="stui-vodlist__thumb lazyload"[^>]*'
-    r'href="(/cdvoddetail/(\d+)\.html)"[^>]*'
-    r'title="([^"]*)"[^>]*'
-    r'data-original="([^"]*)"[^>]*>'
+    r'href="(/cdvoddetail/(\d+)\.html)"[\s\S]*?'
+    r'title="([^"]*)"[\s\S]*?'
+    r'(?:data-original|src)="([^"]*)"[\s\S]*?>'
     r'[\s\S]{0,200}?'
     r'<span class="pic-text[^"]*">([^<]*)</span>',
     re.S | re.I)
 
+# 搜索页专用
 _RE_SEARCH_CARD = re.compile(
     r'<a[^>]*class="v-thumb stui-vodlist__thumb lazyload"[^>]*'
-    r'href="(/cdvoddetail/(\d+)\.html)"[^>]*'
-    r'title="([^"]*)"[^>]*'
-    r'data-original="([^"]*)"[^>]*>'
+    r'href="(/cdvoddetail/(\d+)\.html)"[\s\S]*?'
+    r'title="([^"]*)"[\s\S]*?'
+    r'(?:data-original|src)="([^"]*)"[\s\S]*?>'
     r'[\s\S]{0,200}?'
     r'<span class="pic-text[^"]*">([^<]*)</span>',
     re.S | re.I)
@@ -148,6 +150,7 @@ class Spider(Spider):
             "User-Agent": UA,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "X-Requested-With": "XMLHttpRequest",  # 伪装 AJAX 防拦截
             "Referer": self.site_url + "/",
         }
         self.default_pic = DEFAULT_PIC
@@ -259,10 +262,34 @@ class Spider(Spider):
         for k in list(extend.keys()):
             if extend[k] in ("", None, "全部"):
                 del extend[k]
-        url = self._build_show_url(tid, page, extend)
-        self.log("category: %s" % url)
+        
+        # 路由 1：现代 /cdvodshow/ 路由 (第 1 页)
+        if not extend and page == 1:
+            url = "%s/cdvodshow/%s-----------.html" % (self.site_url, tid)
+        else:
+            url = self._build_show_url(tid, page, extend)
+            
+        self.log("category(show): %s" % url)
         html = self._fetch(url)
         videos = self._extract_videos(html)
+        
+        # 路由 2：如果空，尝试旧版 /cdvodtype/ 路由
+        if not videos:
+            url_fallback = "%s/cdvodtype/%s.html" % (self.site_url, tid)
+            if page > 1:
+                # 苹果CMS某些模板翻页是 /type/1-2.html
+                url_fallback = "%s/cdvodtype/%s-%d.html" % (self.site_url, tid, page)
+            self.log("category(fallback): %s" % url_fallback)
+            html2 = self._fetch(url_fallback)
+            videos = self._extract_videos(html2)
+            if videos:
+                html = html2
+                
+        # 终极查错：如果还没数据，打印 HTML 前 500 字符看看是什么鬼
+        if not videos:
+            snippet = html[:500].replace("\n", " ") if html else "HTML为空"
+            self.log("⚠️ 解析失败，网页内容: %s" % snippet)
+
         return {"list": videos, "page": page, "pagecount": self._page_count(html),
                 "limit": 24, "total": 9999}
 
