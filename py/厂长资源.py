@@ -440,7 +440,7 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # ---------- 播放（终极防跳源版） ----------
+    # ---------- 播放（终极预热+防跳源版） ----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("========== 准备播放 ==========")
@@ -452,7 +452,7 @@ class Spider(Spider):
             if now - ts < 600:
                 return res
 
-        # 🚀 极速拉取：缩短超时时间到 10 秒，避免 TVBox 等待过长误判超时跳源
+        # 极速拉取播放页
         html = self._fetch(play_page, timeout=10)
         
         # 提取 m3u8
@@ -461,15 +461,22 @@ class Spider(Spider):
         if m3u8:
             self.log("✅ 成功提取到 M3U8: %s" % m3u8)
             
-            # 🚀 补齐所有可能触发防盗链的 Header，防止第一次加载被 403 踢回
+            # 精简且致命的 Header
             headers = {
                 "User-Agent": UA,
                 "Referer": play_page, 
-                "Origin": self.site_url,
-                "Accept": "*/*",
-                "Accept-Language": "zh-CN,zh;q=0.9",
-                "Connection": "keep-alive"
+                "Accept": "*/*"
             }
+            
+            # 🚀 隐藏大BOSS：预热M3U8！
+            # 我们在后台先发一个请求，让DNS解析和CDN握手在后台完成。
+            # 这样当TVBox播放器拿去播放时，直接秒开，就不会因为等待过久判定超时跳源了！
+            try:
+                self.log("🔥 正在预热视频流，打通CDN通道...")
+                self.fetch(m3u8, headers=headers, timeout=5)
+                self.log("🔥 预热成功，坐等秒开！")
+            except Exception as e:
+                self.log("预热警告: %s" % e)
             
             res = {
                 "parse": 0,              # 0 代表直接播放
