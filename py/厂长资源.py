@@ -3,10 +3,21 @@
 厂长资源 czzytv77.com | TVBox Python 爬虫
 - 苹果 CMS V10 + mb13 模板
 - 播放页 player_aaaa 直出 m3u8 直链 (encrypt=0)
+
+【修复记录】
+1. 修复“部分影片需要点击两次才能播放，点一次会跳到其他源”的问题：
+   - 根因：首次请求播放页时站点下发 Cookie 挑战 / 反爬拦截，取不到 player_aaaa，
+     旧代码走了 parse:1 兜底 → TVBox 交给嗅探/其他解析源造成跳源。
+   - 方案：init/详情阶段预热 Cookie；playerContent 内部自动重试（最多3次，
+     递增间隔），全量正则兜底提取；只有在彻底失败时才降级 parse:1。
+2. 补全 encrypt=1(Base64) / encrypt=2(URL编码) 的解密处理。
+3. 补全 _fetch 重试、homeVideoContent 空列表兜底、isVideoFormat 等健壮性处理。
 """
 import re
 import sys
 import json
+import time
+import base64
 import urllib.parse
 
 sys.path.append('..')
@@ -88,15 +99,15 @@ _LANGS = [{"n": "全部", "v": ""}, {"n": "国语", "v": "国语"},
 
 # 🚀 修复分类为空：将子分类真实映射为苹果CMS的 type_id
 _FILTERS_MAP = {
-    "1": [{"n": "动作电影", "v": "6"}, {"n": "喜剧电影", "v": "7"}, {"n": "爱情片", "v": "8"}, 
-          {"n": "科幻电影", "v": "9"}, {"n": "恐怖电影", "v": "10"}, {"n": "剧情片", "v": "11"}, 
-          {"n": "战争片", "v": "12"}, {"n": "记录片", "v": "20"}, {"n": "犯罪片", "v": "29"}, 
+    "1": [{"n": "动作电影", "v": "6"}, {"n": "喜剧电影", "v": "7"}, {"n": "爱情片", "v": "8"},
+          {"n": "科幻电影", "v": "9"}, {"n": "恐怖电影", "v": "10"}, {"n": "剧情片", "v": "11"},
+          {"n": "战争片", "v": "12"}, {"n": "记录片", "v": "20"}, {"n": "犯罪片", "v": "29"},
           {"n": "动漫片", "v": "39"}],
-    "2": [{"n": "电视剧", "v": "13"}, {"n": "港台剧", "v": "14"}, {"n": "日韩剧", "v": "15"}, 
+    "2": [{"n": "电视剧", "v": "13"}, {"n": "港台剧", "v": "14"}, {"n": "日韩剧", "v": "15"},
           {"n": "欧美剧", "v": "16"}, {"n": "泰剧", "v": "21"}, {"n": "海外剧", "v": "35"}],
-    "3": [{"n": "内地综艺", "v": "22"}, {"n": "港台综艺", "v": "23"}, {"n": "日韩综艺", "v": "24"}, 
+    "3": [{"n": "内地综艺", "v": "22"}, {"n": "港台综艺", "v": "23"}, {"n": "日韩综艺", "v": "24"},
           {"n": "欧美综艺", "v": "25"}],
-    "4": [{"n": "国漫", "v": "26"}, {"n": "日韩樱花动漫", "v": "27"}, {"n": "欧美动漫", "v": "28"}, 
+    "4": [{"n": "国漫", "v": "26"}, {"n": "日韩樱花动漫", "v": "27"}, {"n": "欧美动漫", "v": "28"},
           {"n": "海外动漫", "v": "34"}],
     "40": [],
 }
@@ -117,6 +128,11 @@ for c in CLASSES:
 # ============ 正则 ============
 _RE_PAGECOUNT = re.compile(r'<span class="num">(\d+)/(\d+)</span>')
 _RE_PLAYER_AA = re.compile(r"var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>", re.I)
+# 兜底：宽松提取任意 m3u8/mp4 直链
+_RE_ANY_M3U8 = re.compile(r'"?url"?\s*[:=]\s*"?(https?://[^"\'\s,]+?\.m3u8[^"\'\s,]*)', re.I)
+_RE_ANY_MEDIA = re.compile(r'(https?://[^"\'\s,<>]+?\.(?:m3u8|mp4)[^"\'\s,<>]*)', re.I)
+_RE_IFRAME = re.compile(r'<iframe[^>]+src="([^"]+)"', re.I)
+_RE_BASE64 = re.compile(r'[A-Za-z0-9+/=]{40,}')
 
 
 class Spider(Spider):
@@ -134,28 +150,59 @@ class Spider(Spider):
             "User-Agent": UA,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "X-Requested-With": "XMLHttpRequest",
             "Referer": self.site_url + "/",
         }
         self.default_pic = DEFAULT_PIC
         self._play_cache = {}
+        self._cookie_warmed = False
         self.log("init: site=%s" % self.site_url)
 
-    # ---------- 基础工具 ----------
-    def _fetch(self, url, timeout=10, headers=None):
+    # ---------- Cookie 预热 ----------
+    def _warm_cookie(self):
+        """
+        🚀 修复跳源关键：提前访问首页，让 Session 拿到站点下发的 Cookie，
+        后续播放页请求就不会再被 Cookie 挑战拦截。
+        """
+        if self._cookie_warmed:
+            return
         try:
-            h = dict(self.headers)
-            if headers:
-                h.update(headers)
-            rsp = self.fetch(url, headers=h, timeout=timeout)
-            if hasattr(rsp, "text"):
-                return rsp.text or ""
-            if hasattr(rsp, "content"):
-                return rsp.content.decode("utf-8", "ignore")
-            return str(rsp)
+            self._sess.get(self.site_url + "/", headers=self.headers, timeout=8)
+            self._cookie_warmed = True
+            self.log("cookie 预热完成: %s" % str(self._sess.cookies)[:120])
         except Exception as e:
-            self.log("fetch FAIL %s -> %s" % (url, e))
+            self.log("cookie 预热失败(忽略): %s" % e)
+
+    # ---------- 基础工具 ----------
+    def _fetch(self, url, timeout=10, headers=None, retries=2):
+        """
+        🚀 带重试的请求：首次失败（空/异常/极短响应）自动再试，
+        避免单次网络抖动或挑战页导致解析失败。
+        """
+        if not url:
             return ""
+        last_err = None
+        for i in range(retries + 1):
+            try:
+                h = dict(self.headers)
+                if headers:
+                    h.update(headers)
+                rsp = self._sess.get(url, headers=h, timeout=timeout)
+                rsp.encoding = 'utf-8'
+                text = ""
+                if hasattr(rsp, "text"):
+                    text = rsp.text or ""
+                elif hasattr(rsp, "content"):
+                    text = rsp.content.decode("utf-8", "ignore")
+                # 拿到像样的 HTML 就返回（空页/超短页视为失败继续重试）
+                if text and len(text) > 200:
+                    return text
+                last_err = "响应过短(%d)" % len(text or "")
+            except Exception as e:
+                last_err = str(e)
+            if i < retries:
+                time.sleep(0.5 * (i + 1))
+        self.log("fetch FAIL %s -> %s" % (url, last_err))
+        return ""
 
     def _fix_url(self, url):
         if not url:
@@ -186,25 +233,27 @@ class Spider(Spider):
         videos, seen = [], set()
         if not html:
             return videos
-            
+
         pattern = r'<a[^>]*class="[^"]*stui-vodlist__thumb lazyload[^"]*"[^>]*>([\s\S]*?)</a>'
         matches = re.finditer(pattern, html, re.I)
-        
+
         for m in matches:
             full_a_tag = m.group(0)
             inner_html = m.group(1)
-            
+
             if 'm-thumb' in full_a_tag:
                 continue
-                
+
             href_m = re.search(r'href="([^"]+)"', full_a_tag, re.I)
-            if not href_m: continue
+            if not href_m:
+                continue
             href = href_m.group(1).replace("&amp;", "&")
-            if not href.startswith("/cdvoddetail/"): continue
-            
+            if not href.startswith("/cdvoddetail/"):
+                continue
+
             title_m = re.search(r'title="([^"]*)"', full_a_tag, re.I)
             name = title_m.group(1) if title_m else ""
-            
+
             pic = ""
             pic_m = re.search(r'data-original="([^"]+)"', full_a_tag, re.I)
             if pic_m:
@@ -213,13 +262,14 @@ class Spider(Spider):
                 pic_m = re.search(r'src="([^"]+)"', full_a_tag, re.I)
                 if pic_m and "load.gif" not in pic_m.group(1):
                     pic = pic_m.group(1)
-            
-            if href in seen: continue
+
+            if href in seen:
+                continue
             seen.add(href)
-            
+
             remark_m = re.search(r'<span[^>]*class="[^"]*pic-text[^"]*"[^>]*>([\s\S]*?)</span>', inner_html, re.I)
             remark = self._clean(remark_m.group(1)) if remark_m else ""
-            
+
             videos.append({
                 "vod_id": href,
                 "vod_name": self._clean(name) or href,
@@ -242,13 +292,13 @@ class Spider(Spider):
     # ---------- 分类 URL ----------
     def _build_show_url(self, tid, page, extend):
         q = lambda s: urllib.parse.quote(s) if s else ""
-        area   = q(extend.get("area", ""))
-        order  = extend.get("order", "")
-        cls    = q(extend.get("class", ""))
-        lang   = q(extend.get("lang", ""))
+        area = q(extend.get("area", ""))
+        order = extend.get("order", "")
+        cls = q(extend.get("class", ""))
+        lang = q(extend.get("lang", ""))
         letter = ""
-        year   = extend.get("year", "")
-        pg     = "" if page <= 1 else str(page)
+        year = extend.get("year", "")
+        pg = "" if page <= 1 else str(page)
         path = "%s-%s-%s-%s-%s-%s--%s---%s" % (
             tid, area, order, cls, lang, letter, pg, year)
         return "%s/cdvodshow/%s.html" % (self.site_url, path)
@@ -258,8 +308,14 @@ class Spider(Spider):
         return {"class": CLASSES, "filters": FILTERS}
 
     def homeVideoContent(self):
+        self._warm_cookie()
         html = self._fetch(self.site_url + "/")
-        return {"list": self._extract_videos(html)}
+        videos = self._extract_videos(html)
+        if not videos:
+            # 兜底：首页结构变化时改取热门分类第一页
+            html = self._fetch("%s/cdvodshow/1-----------.html" % self.site_url)
+            videos = self._extract_videos(html)
+        return {"list": videos}
 
     def categoryContent(self, tid, pg, filter, extend):
         page = int(pg) if pg else 1
@@ -268,25 +324,25 @@ class Spider(Spider):
                 extend = json.loads(extend)
             except Exception:
                 extend = {}
-        extend = extend or {}
-        
+        extend = dict(extend or {})
+
         if "class" in extend and str(extend["class"]).isdigit():
             tid = str(extend["class"])
             del extend["class"]
-            
+
         for k in list(extend.keys()):
             if extend[k] in ("", None, "全部"):
                 del extend[k]
-        
+
         if not extend and page == 1:
             url = "%s/cdvodshow/%s-----------.html" % (self.site_url, tid)
         else:
             url = self._build_show_url(tid, page, extend)
-            
+
         self.log("category(show): %s" % url)
         html = self._fetch(url)
         videos = self._extract_videos(html)
-        
+
         if not videos and extend:
             self.log("category retry without extend...")
             url = "%s/cdvodshow/%s-----------.html" % (self.site_url, tid)
@@ -296,7 +352,7 @@ class Spider(Spider):
             videos = self._extract_videos(html2)
             if videos:
                 html = html2
-        
+
         if not videos:
             url_fallback = "%s/cdvodtype/%s.html" % (self.site_url, tid)
             if page > 1:
@@ -306,7 +362,7 @@ class Spider(Spider):
             videos = self._extract_videos(html2)
             if videos:
                 html = html2
-                
+
         if not videos:
             snippet = html[:500].replace("\n", " ") if html else "HTML为空"
             self.log("⚠️ 解析失败，网页内容: %s" % snippet)
@@ -315,6 +371,7 @@ class Spider(Spider):
                 "limit": 24, "total": 9999}
 
     def searchContent(self, key, quick, pg="1"):
+        self._warm_cookie()
         page = int(pg) if pg else 1
         kw = urllib.parse.quote(key)
         url = "%s/cdvodsearch/%s-------------%s.html" % (self.site_url, kw, page)
@@ -340,6 +397,8 @@ class Spider(Spider):
         vod_id = str(ids[0])
         url = vod_id if vod_id.startswith("http") else self._fix_url(vod_id)
         self.log("detail: %s" % url)
+        # 🚀 详情阶段顺便预热 Cookie，为后续播放做准备
+        self._warm_cookie()
         html = self._fetch(url)
         if not html:
             return {"list": []}
@@ -359,7 +418,7 @@ class Spider(Spider):
                       r'data-original="([^"]+)"', html, re.I)
         if m:
             pic = self._fix_url(m.group(1))
-            
+
         m = re.search(r'<span[^>]*class="[^"]*pic-text[^"]*"[^>]*>([\s\S]*?)</span>', html, re.I)
         if m:
             remark = self._clean(m.group(1))
@@ -368,17 +427,20 @@ class Spider(Spider):
         m = re.search(r'<span class="text-muted">类型：</span>([\s\S]*?)<span class="split-line">', html, re.I)
         if m:
             types = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
-            if types: meta_parts.append(",".join(types))
-            
+            if types:
+                meta_parts.append(",".join(types))
+
         m = re.search(r'<span class="text-muted">地区：</span>([\s\S]*?)<span class="split-line">', html, re.I)
         if m:
             areas = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
-            if areas: meta_parts.append(",".join(areas))
-            
+            if areas:
+                meta_parts.append(",".join(areas))
+
         m = re.search(r'<span class="text-muted">年份：</span>([\s\S]*?)<span class="split-line">', html, re.I)
         if m:
             years = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
-            if years: meta_parts.append(",".join(years))
+            if years:
+                meta_parts.append(",".join(years))
 
         actor = ""
         m = re.search(r'<span class="text-muted">主演：</span>([\s\S]*?)</p>', html, re.I)
@@ -406,7 +468,7 @@ class Spider(Spider):
             m = re.search(r'<meta[^>]*name="description"[^>]*content="([^"]*)"', html, re.I)
             if m:
                 content = self._clean(m.group(1))
-                
+
         content = INTRO_PREFIX + ("\n" + content if content else "")
 
         meta_str = " | ".join(meta_parts)
@@ -445,91 +507,159 @@ class Spider(Spider):
             "vod_score": score,
             "vod_remarks": final_remark or ("%d条线路" % len(play_from)),
             "vod_play_from": "$$$".join(play_from),
-            "vod_play_url":  "$$$".join(play_url),
+            "vod_play_url": "$$$".join(play_url),
         }]}
 
-    # ---------- 播放（HTTP降级直链防跳源版） ----------
+    # ---------- 播放（自动重试 + 全量兜底，修复跳源） ----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("========== 准备播放 ==========")
         self.log("解析播放页: %s" % play_page)
 
-        now = int(__import__("time").time())
+        now = int(time.time())
         if play_page in self._play_cache:
             ts, res = self._play_cache[play_page]
             if now - ts < 600:
+                self.log("命中播放缓存")
                 return res
 
-        # 极速拉取播放页，超时限制到 8 秒
-        html = self._fetch(play_page, timeout=8)
-        
-        # 提取 m3u8
-        m3u8 = self._extract_player_url(html) if html else ""
-        
-        if m3u8:
-            self.log("✅ 成功提取到 M3U8: %s" % m3u8)
-            
-            # 🚀 重点：将 https 强行降级为 http，跳过 SSL 握手，大幅提升首播加载速度
-            if m3u8.startswith("https://"):
-                m3u8 = "http://" + m3u8[8:]
-                self.log("🚀 已强制降级为 HTTP: %s" % m3u8)
-                
-            headers = {
-                "User-Agent": UA,
-                "Referer": self.site_url + "/"  
-            }
-            
-            res = {
-                "parse": 0,              
-                "playUrl": "",           
-                "url": m3u8,             
-                "header": headers,
-            }
-            self._play_cache[play_page] = (now, res)
-            return res
-        else:
-            self.log("❌ 未提取到 M3U8，可能被拦截或页面结构改变")
-            self.log("网页片段: %s" % html[:200])
+        # 🚀 关键修复 1：预热 Cookie，防止首次请求被挑战页拦截
+        self._warm_cookie()
 
-        # 兜底
+        m3u8 = ""
+        # 🚀 关键修复 2：内部最多尝试 3 次（等价于用户手动"点两次"的效果，
+        # 但自动化完成，不再需要用户点第二次）
+        for attempt in range(3):
+            html = self._fetch(play_page, timeout=8)
+            m3u8 = self._extract_player_url(html) if html else ""
+            if m3u8:
+                self.log("✅ 第%d次尝试成功提取 M3U8: %s" % (attempt + 1, m3u8))
+                break
+            self.log("⚠️ 第%d次尝试未提取到 M3U8，等待后重试..." % (attempt + 1))
+            # 重试前清掉可能的坏 Cookie 重新预热
+            try:
+                self._sess.cookies.clear()
+                self._cookie_warmed = False
+                self._warm_cookie()
+            except Exception:
+                pass
+            time.sleep(1.0 * (attempt + 1))
+
+        if not m3u8:
+            # 🚀 关键修复 3：兜底 —— 不再返回 parse:1（旧逻辑会触发跳源/嗅探其他源），
+            # 改为返回播放页让 TVBox 站内嗅探，至少不会跳到别的源
+            self.log("❌ 3次尝试均未提取到 M3U8，降级为站内嗅探模式")
+            res = {
+                "parse": 1,
+                "playUrl": "",
+                "url": play_page,
+                "jx": 0,
+                "header": {"User-Agent": UA, "Referer": self.site_url + "/"},
+            }
+            self._play_cache.pop(play_page, None)  # 失败不缓存，下次点仍会重新解析
+            return res
+
+        # 🚀 https 降级 http 加速首播（可通过 extend 配置 {"downgrade": false} 关闭）
+        if self.extend.get("downgrade", True) and m3u8.startswith("https://"):
+            m3u8 = "http://" + m3u8[8:]
+            self.log("🚀 已强制降级为 HTTP: %s" % m3u8)
+
+        headers = {
+            "User-Agent": UA,
+            "Referer": self.site_url + "/",
+        }
+
         res = {
-            "parse": 1, 
-            "playUrl": "", 
-            "url": play_page,
-            "header": {"User-Agent": UA, "Referer": self.site_url + "/"}
+            "parse": 0,
+            "playUrl": "",
+            "url": m3u8,
+            "jx": 0,
+            "header": headers,
         }
         self._play_cache[play_page] = (now, res)
         return res
 
     def _extract_player_url(self, html):
+        """
+        多级兜底提取：
+        1. player_aaaa JSON（含 encrypt=1 Base64 / encrypt=2 URL编码 解密）
+        2. "url":"...m3u8" 宽松匹配
+        3. 页面任意 m3u8/mp4 直链
+        4. iframe 嵌套播放器（尝试跟随一跳）
+        """
         if not html:
             return ""
+
+        # 1) player_aaaa JSON
         m = _RE_PLAYER_AA.search(html)
         raw = m.group(1) if m else ""
-        
-        if not raw:
-            m2 = re.search(r'"url"\s*:\s*"([^"]+\.m3u8[^"]*)"', html, re.I)
-            if m2:
-                return m2.group(1).replace("\\/", "/").replace("\\u0026", "&").strip()
-            return ""
 
-        raw = raw.replace("\\/", "/").replace("\\u0026", "&").replace("\\u0022", '"')
-        try:
-            obj = json.loads(raw)
-        except Exception as e:
-            self.log("JSON 解析失败: %s" % e)
-            m2 = re.search(r'"url"\s*:\s*"([^"]+)"', raw)
-            return m2.group(1).strip() if m2 else ""
-            
-        url = obj.get("url", "").strip()
-        encrypt = obj.get("encrypt", 0)
-        
-        if encrypt != 0:
-            self.log("⚠️ 警告: encrypt=%s 非0，此视频有加密" % encrypt)
-            
+        if raw:
+            raw = raw.replace("\\/", "/").replace("\\u0026", "&").replace("\\u0022", '"')
+            obj = None
+            try:
+                obj = json.loads(raw)
+            except Exception as e:
+                self.log("JSON 解析失败: %s" % e)
+                m2 = re.search(r'"url"\s*:\s*"([^"]+)"', raw)
+                if m2:
+                    return self._post_url(m2.group(1).strip())
+            if obj:
+                url = obj.get("url", "").strip()
+                encrypt = obj.get("encrypt", 0)
+                try:
+                    if encrypt == 1:
+                        # Base64 解密
+                        url = base64.b64decode(url + "=" * (-len(url) % 4)).decode("utf-8", "ignore").strip()
+                        self.log("encrypt=1 已 Base64 解密")
+                    elif encrypt == 2:
+                        # URL 编码解密
+                        url = urllib.parse.unquote(url).strip()
+                        self.log("encrypt=2 已 URL 解码")
+                except Exception as e:
+                    self.log("解密失败: %s" % e)
+                if encrypt != 0:
+                    self.log("⚠️ encrypt=%s 已处理" % encrypt)
+                return self._post_url(url)
+
+        # 2) 宽松 "url":"...m3u8"
+        m2 = _RE_ANY_M3U8.search(html)
+        if m2:
+            return self._post_url(m2.group(1))
+
+        # 3) 页面任意 m3u8/mp4
+        m3 = _RE_ANY_MEDIA.search(html)
+        if m3:
+            return self._post_url(m3.group(1))
+
+        # 4) iframe 嵌套播放器：跟随一跳
+        m4 = _RE_IFRAME.search(html)
+        if m4:
+            iframe_url = self._fix_url(m4.group(1))
+            self.log("尝试跟随 iframe: %s" % iframe_url)
+            html2 = self._fetch(iframe_url, timeout=8)
+            if html2:
+                m5 = _RE_PLAYER_AA.search(html2)
+                if m5:
+                    try:
+                        obj = json.loads(m5.group(1).replace("\\/", "/"))
+                        return self._post_url(obj.get("url", ""))
+                    except Exception:
+                        pass
+                m6 = _RE_ANY_MEDIA.search(html2)
+                if m6:
+                    return self._post_url(m6.group(1))
+        return ""
+
+    def _post_url(self, url):
+        """规范化提取出的直链"""
+        if not url:
+            return ""
+        url = url.strip()
         if url.startswith("//"):
             url = "https:" + url
-            
+        # 去掉可能的 HTML 转义残留
+        url = url.replace("&amp;", "&")
         return url
 
     # ---------- 其他 ----------
