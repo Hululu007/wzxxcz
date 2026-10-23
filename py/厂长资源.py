@@ -86,7 +86,7 @@ _LANGS = [{"n": "全部", "v": ""}, {"n": "国语", "v": "国语"},
           {"n": "日语", "v": "日语"}, {"n": "法语", "v": "法语"},
           {"n": "德语", "v": "德语"}, {"n": "其它", "v": "其它"}]
 
-# 修复分类为空：将子分类真实映射为苹果CMS的 type_id
+# 🚀 修复分类为空：将子分类真实映射为苹果CMS的 type_id
 _FILTERS_MAP = {
     "1": [{"n": "动作电影", "v": "6"}, {"n": "喜剧电影", "v": "7"}, {"n": "爱情片", "v": "8"}, 
           {"n": "科幻电影", "v": "9"}, {"n": "恐怖电影", "v": "10"}, {"n": "剧情片", "v": "11"}, 
@@ -142,7 +142,7 @@ class Spider(Spider):
         self.log("init: site=%s" % self.site_url)
 
     # ---------- 基础工具 ----------
-    def _fetch(self, url, timeout=15, headers=None):
+    def _fetch(self, url, timeout=10, headers=None):
         try:
             h = dict(self.headers)
             if headers:
@@ -448,7 +448,7 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # ---------- 播放（绝对秒传，零延迟防跳源版） ----------
+    # ---------- 播放（HTTP降级直链防跳源版） ----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("========== 准备播放 ==========")
@@ -460,7 +460,7 @@ class Spider(Spider):
             if now - ts < 600:
                 return res
 
-        # 极速拉取播放页
+        # 极速拉取播放页，超时限制到 8 秒
         html = self._fetch(play_page, timeout=8)
         
         # 提取 m3u8
@@ -469,22 +469,20 @@ class Spider(Spider):
         if m3u8:
             self.log("✅ 成功提取到 M3U8: %s" % m3u8)
             
-            # 🚀 卸下所有包袱！绝对不发任何多余的请求！
-            # 直接给它配上最正宗的浏览器 Header，让它去跟 CDN 硬刚！
+            # 🚀 重点：将 https 强行降级为 http，跳过 SSL 握手，大幅提升首播加载速度
+            if m3u8.startswith("https://"):
+                m3u8 = "http://" + m3u8[8:]
+                self.log("🚀 已强制降级为 HTTP: %s" % m3u8)
+                
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Referer": self.site_url + "/", 
-                "Origin": self.site_url,
-                "Accept": "*/*",
-                "Accept-Language": "zh-CN,zh;q=0.9",
-                "Connection": "keep-alive"
+                "User-Agent": UA,
+                "Referer": self.site_url + "/"  
             }
             
-            # 0.01秒瞬间返回，TVBox 连跳源的判定都来不及触发！
             res = {
-                "parse": 0,              # 0 代表直接播放
-                "playUrl": "",           # 留空，坚决防止跳转
-                "url": m3u8,             # 直链 m3u8
+                "parse": 0,              
+                "playUrl": "",           
+                "url": m3u8,             
                 "header": headers,
             }
             self._play_cache[play_page] = (now, res)
@@ -493,7 +491,7 @@ class Spider(Spider):
             self.log("❌ 未提取到 M3U8，可能被拦截或页面结构改变")
             self.log("网页片段: %s" % html[:200])
 
-        # 兜底：如果真没抓到，返回原播放页让 TVBox 嗅探
+        # 兜底
         res = {
             "parse": 1, 
             "playUrl": "", 
@@ -512,7 +510,7 @@ class Spider(Spider):
         if not raw:
             m2 = re.search(r'"url"\s*:\s*"([^"]+\.m3u8[^"]*)"', html, re.I)
             if m2:
-                return m2.group(1).replace("\\/", "/").replace("\\u0026", "&")
+                return m2.group(1).replace("\\/", "/").replace("\\u0026", "&").strip()
             return ""
 
         raw = raw.replace("\\/", "/").replace("\\u0026", "&").replace("\\u0022", '"')
@@ -521,13 +519,13 @@ class Spider(Spider):
         except Exception as e:
             self.log("JSON 解析失败: %s" % e)
             m2 = re.search(r'"url"\s*:\s*"([^"]+)"', raw)
-            return m2.group(1) if m2 else ""
+            return m2.group(1).strip() if m2 else ""
             
-        url = obj.get("url", "")
+        url = obj.get("url", "").strip()
         encrypt = obj.get("encrypt", 0)
         
         if encrypt != 0:
-            self.log("⚠️ 警告: encrypt=%s 非0，此视频有加密，大概率无法直链播放" % encrypt)
+            self.log("⚠️ 警告: encrypt=%s 非0，此视频有加密" % encrypt)
             
         if url.startswith("//"):
             url = "https:" + url
