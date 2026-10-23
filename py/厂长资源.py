@@ -7,8 +7,6 @@
 import re
 import sys
 import json
-import time
-import threading
 import urllib.parse
 
 sys.path.append('..')
@@ -88,6 +86,7 @@ _LANGS = [{"n": "全部", "v": ""}, {"n": "国语", "v": "国语"},
           {"n": "日语", "v": "日语"}, {"n": "法语", "v": "法语"},
           {"n": "德语", "v": "德语"}, {"n": "其它", "v": "其它"}]
 
+# 🚀 修复分类为空：将子分类真实映射为苹果CMS的 type_id
 _FILTERS_MAP = {
     "1": [{"n": "动作电影", "v": "6"}, {"n": "喜剧电影", "v": "7"}, {"n": "爱情片", "v": "8"}, 
           {"n": "科幻电影", "v": "9"}, {"n": "恐怖电影", "v": "10"}, {"n": "剧情片", "v": "11"}, 
@@ -143,7 +142,7 @@ class Spider(Spider):
         self.log("init: site=%s" % self.site_url)
 
     # ---------- 基础工具 ----------
-    def _fetch(self, url, timeout=15, headers=None):
+    def _fetch(self, url, timeout=20, headers=None):
         try:
             h = dict(self.headers)
             if headers:
@@ -449,40 +448,19 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # ---------- 后台异步预热线程 ----------
-    def _async_warm_up(self, m3u8, headers):
-        try:
-            self.log("🔥 后台异步预热开始...")
-            # 1. 先拉 M3U8
-            rsp = self.fetch(m3u8, headers=headers, timeout=5)
-            if hasattr(rsp, 'text') and '#EXTM3U' in rsp.text:
-                lines = rsp.text.split('\n')
-                ts_url = None
-                for line in lines:
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        ts_url = urllib.parse.urljoin(m3u8, line)
-                        break
-                # 2. 再拉第一个 TS 分片，彻底打通 CDN 缓存
-                if ts_url:
-                    self.fetch(ts_url, headers=headers, timeout=5)
-            self.log("🔥 后台异步预热成功！")
-        except Exception as e:
-            self.log("🔥 预热警告: %s" % e)
-
-    # ---------- 播放（终极异步防跳源版） ----------
+    # ---------- 播放（无陷阱秒返回版） ----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("========== 准备播放 ==========")
         self.log("解析播放页: %s" % play_page)
 
-        now = int(time.time())
+        now = int(__import__("time").time())
         if play_page in self._play_cache:
             ts, res = self._play_cache[play_page]
             if now - ts < 600:
                 return res
 
-        # 极速拉取：加快响应，防止 TVBox 判定超时
+        # 极速拉取播放页，超时限制到 8 秒
         html = self._fetch(play_page, timeout=8)
         
         # 提取 m3u8
@@ -491,29 +469,30 @@ class Spider(Spider):
         if m3u8:
             self.log("✅ 成功提取到 M3U8: %s" % m3u8)
             
-            # 精简 Header，兼容 TVBox 各种底层内核
+            # 🚀 直接返回，绝不预热！
+            # 把 Header 配齐，让 TVBox 底层的播放器自己去拉流，这样没有任何超时风险。
             headers = {
                 "User-Agent": UA,
-                "Referer": play_page
+                "Referer": self.site_url + "/", 
+                "Origin": self.site_url,
+                "Accept": "*/*",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+                "Connection": "keep-alive"
             }
             
-            # 🚀 开启后台线程去预热，不阻塞主线程，让播放器瞬间拿到地址去并发拉流！
-            t = threading.Thread(target=self._async_warm_up, args=(m3u8, headers))
-            t.daemon = True
-            t.start()
-            
             res = {
-                "parse": 0,              
-                "playUrl": "",           
-                "url": m3u8,             
+                "parse": 0,              # 0 代表直接播放
+                "playUrl": "",           # 留空，坚决防止跳转
+                "url": m3u8,             # 直链 m3u8
                 "header": headers,
             }
             self._play_cache[play_page] = (now, res)
             return res
         else:
             self.log("❌ 未提取到 M3U8，可能被拦截或页面结构改变")
+            self.log("网页片段: %s" % html[:200])
 
-        # 兜底
+        # 兜底：如果真没抓到，返回原播放页让 TVBox 嗅探
         res = {
             "parse": 1, 
             "playUrl": "", 
@@ -532,7 +511,7 @@ class Spider(Spider):
         if not raw:
             m2 = re.search(r'"url"\s*:\s*"([^"]+\.m3u8[^"]*)"', html, re.I)
             if m2:
-                return m2.group(1).replace("\\/", "/").replace("\\u0026", "&").replace("\\", "")
+                return m2.group(1).replace("\\/", "/").replace("\\u0026", "&")
             return ""
 
         raw = raw.replace("\\/", "/").replace("\\u0026", "&").replace("\\u0022", '"')
@@ -552,8 +531,6 @@ class Spider(Spider):
         if url.startswith("//"):
             url = "https:" + url
             
-        # 清理反斜杠，确保给到播放器的地址是干净的
-        url = url.replace("\\", "")
         return url
 
     # ---------- 其他 ----------
