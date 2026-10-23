@@ -182,7 +182,7 @@ class Spider(Spider):
         if not html:
             return videos
             
-        # 🚀 修复：改成先抓取 <a> 标签块，再分步提取属性，防止因为某个字段缺失导致整体匹配失败
+        # 抓取块
         pattern = r'<a[^>]*class="[^"]*stui-vodlist__thumb[^"]*"[^>]*>([\s\S]*?)</a>'
         matches = re.finditer(pattern, html, re.I)
         
@@ -190,7 +190,6 @@ class Spider(Spider):
             full_a_tag = m.group(0)
             inner_html = m.group(1)
             
-            # 排除侧边栏热播等不需要的块
             if 'm-thumb' in full_a_tag:
                 continue
                 
@@ -208,8 +207,8 @@ class Spider(Spider):
             if href in seen: continue
             seen.add(href)
             
-            # 提取副标题
-            remark_m = re.search(r'<span class="pic-text[^"]*">([\s\S]*?)</span>', inner_html, re.I)
+            # 🚀 修复副标题：极度宽松匹配，哪怕 class 里多几个空格或其他字符也能抓到
+            remark_m = re.search(r'<span[^>]*class="[^"]*pic-text[^"]*"[^>]*>([\s\S]*?)</span>', inner_html, re.I)
             remark = self._clean(remark_m.group(1)) if remark_m else ""
             
             videos.append({
@@ -241,7 +240,6 @@ class Spider(Spider):
         letter = ""
         year   = extend.get("year", "")
         pg     = "" if page <= 1 else str(page)
-        # type-area-order-class-lang-letter-state-page---year
         path = "%s-%s-%s-%s-%s-%s--%s---%s" % (
             tid, area, order, cls, lang, letter, pg, year)
         return "%s/cdvodshow/%s.html" % (self.site_url, path)
@@ -332,7 +330,7 @@ class Spider(Spider):
             if m:
                 name = self._clean(m.group(1).split("-")[0].split("_")[0])
 
-        # 🚀 修复副标题/备注提取：只要包含 pic-text 的 span 都抓，兼容嵌套标签
+        # 🚀 修复详情页副标题提取
         pic = self.default_pic
         remark = ""
         m = re.search(r'<a[^>]*class="stui-vodlist__thumb picture v-thumb"[\s\S]{0,600}?'
@@ -340,34 +338,28 @@ class Spider(Spider):
         if m:
             pic = self._fix_url(m.group(1))
             
-        # 直接全局搜第一个 pic-text，支持内部包含其他标签
-        m = re.search(r'<span class="pic-text[^"]*">([\s\S]*?)</span>', html, re.I)
+        m = re.search(r'<span[^>]*class="[^"]*pic-text[^"]*"[^>]*>([\s\S]*?)</span>', html, re.I)
         if m:
             remark = self._clean(m.group(1))
 
-        # 提取缺失的元信息（类型、地区、年份、语言、更新）
+        # 提取元信息
         meta_parts = []
-        # 提取类型
         m = re.search(r'<span class="text-muted">类型：</span>([\s\S]*?)<span class="split-line">', html, re.I)
         if m:
             types = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
             if types: meta_parts.append("类型：" + ",".join(types))
-        # 提取地区
         m = re.search(r'<span class="text-muted">地区：</span>([\s\S]*?)<span class="split-line">', html, re.I)
         if m:
             areas = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
             if areas: meta_parts.append("地区：" + ",".join(areas))
-        # 提取年份
         m = re.search(r'<span class="text-muted">年份：</span>([\s\S]*?)<span class="split-line">', html, re.I)
         if m:
             years = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
             if years: meta_parts.append("年份：" + ",".join(years))
-        # 提取语言
         m = re.search(r'<span class="text-muted">语言：</span>([\s\S]*?)</p>', html, re.I)
         if m:
             langs = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
             if langs: meta_parts.append("语言：" + ",".join(langs))
-        # 提取更新
         m = re.search(r'<span class="text-muted">更新：</span>([^<]+)</p>', html, re.I)
         if m:
             meta_parts.append("更新：" + self._clean(m.group(1)))
@@ -388,7 +380,7 @@ class Spider(Spider):
         if m:
             score = m.group(1)
 
-        # 简介：优先 detail-content
+        # 简介
         content = ""
         m = re.search(r'<span class="detail-content"[^>]*>([\s\S]*?)</span>', html, re.I)
         if m:
@@ -405,7 +397,7 @@ class Spider(Spider):
         meta_str = " | ".join(meta_parts) + "\n" if meta_parts else ""
         content = INTRO_PREFIX + "\n" + meta_str + content
 
-        # 剧集：按线路块
+        # 剧集
         play_from, play_url = [], []
         block_re = re.compile(
             r'<div class="stui-pannel-box b playlist mb">([\s\S]*?)</ul>\s*</div>\s*</div>\s*</div>',
@@ -461,14 +453,11 @@ class Spider(Spider):
         if m3u8:
             self.log("✅ 成功提取到 M3U8: %s" % m3u8)
             
-            # 构造终极伪装 Header，欺骗 CDN 防盗链
+            # 🚀 核心修复：Referer 必须是当前播放页，才能骗过 CDN 防盗链
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Referer": self.site_url + "/",  
+                "User-Agent": UA,
+                "Referer": play_page, 
                 "Origin": self.site_url,
-                "Accept": "*/*",
-                "Accept-Language": "zh-CN,zh;q=0.9",
-                "Connection": "keep-alive"
             }
             
             res = {
@@ -496,18 +485,15 @@ class Spider(Spider):
     def _extract_player_url(self, html):
         if not html:
             return ""
-        # 精确匹配 player_aaaa
         m = _RE_PLAYER_AA.search(html)
         raw = m.group(1) if m else ""
         
         if not raw:
-            # 兜底匹配直接的 m3u8 链接
             m2 = re.search(r'"url"\s*:\s*"([^"]+\.m3u8[^"]*)"', html, re.I)
             if m2:
                 return m2.group(1).replace("\\/", "/").replace("\\u0026", "&")
             return ""
 
-        # 清理转义字符
         raw = raw.replace("\\/", "/").replace("\\u0026", "&").replace("\\u0022", '"')
         try:
             obj = json.loads(raw)
