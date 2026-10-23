@@ -3,7 +3,6 @@
 厂长资源 czzytv77.com | TVBox Python 爬虫
 - 苹果 CMS V10 + mb13 模板
 - 播放页 player_aaaa 直出 m3u8 直链 (encrypt=0)
-- 简介前缀: INTRO_PREFIX
 """
 import re
 import sys
@@ -111,7 +110,7 @@ for c in CLASSES:
 
 
 # ============ 正则 ============
-# 改良版：更加宽松，不依赖 title 和 data-original 的相对位置
+# 列表页通用卡片
 _RE_CARD = re.compile(
     r'<a[^>]*class="stui-vodlist__thumb lazyload"[^>]*'
     r'href="(/cdvoddetail/(\d+)\.html)"[\s\S]*?'
@@ -121,7 +120,7 @@ _RE_CARD = re.compile(
     r'<span class="pic-text[^"]*">([^<]*)</span>',
     re.S | re.I)
 
-# 搜索页专用
+# 搜索页专用卡片
 _RE_SEARCH_CARD = re.compile(
     r'<a[^>]*class="v-thumb stui-vodlist__thumb lazyload"[^>]*'
     r'href="(/cdvoddetail/(\d+)\.html)"[\s\S]*?'
@@ -150,7 +149,7 @@ class Spider(Spider):
             "User-Agent": UA,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "X-Requested-With": "XMLHttpRequest",  # 伪装 AJAX 防拦截
+            "X-Requested-With": "XMLHttpRequest",
             "Referer": self.site_url + "/",
         }
         self.default_pic = DEFAULT_PIC
@@ -277,7 +276,6 @@ class Spider(Spider):
         if not videos:
             url_fallback = "%s/cdvodtype/%s.html" % (self.site_url, tid)
             if page > 1:
-                # 苹果CMS某些模板翻页是 /type/1-2.html
                 url_fallback = "%s/cdvodtype/%s-%d.html" % (self.site_url, tid, page)
             self.log("category(fallback): %s" % url_fallback)
             html2 = self._fetch(url_fallback)
@@ -285,7 +283,6 @@ class Spider(Spider):
             if videos:
                 html = html2
                 
-        # 终极查错：如果还没数据，打印 HTML 前 500 字符看看是什么鬼
         if not videos:
             snippet = html[:500].replace("\n", " ") if html else "HTML为空"
             self.log("⚠️ 解析失败，网页内容: %s" % snippet)
@@ -415,7 +412,8 @@ class Spider(Spider):
     # ---------- 播放 ----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
-        self.log("player: %s" % play_page)
+        self.log("========== 准备播放 ==========")
+        self.log("解析播放页: %s" % play_page)
 
         now = int(__import__("time").time())
         if play_page in self._play_cache:
@@ -423,52 +421,80 @@ class Spider(Spider):
             if now - ts < 600:
                 return res
 
+        # 1. 获取网页源码
         html = self._fetch(play_page)
+        
+        # 2. 提取 m3u8
         m3u8 = self._extract_player_url(html) if html else ""
-        self.log("  m3u8: %s" % (m3u8[:160] if m3u8 else "EMPTY"))
-
+        
         if m3u8:
+            self.log("✅ 成功提取到 M3U8: %s" % m3u8)
+            
+            # 3. 构造终极伪装 Header，欺骗 CDN 防盗链
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": self.site_url + "/",  
+                "Origin": self.site_url,
+                "Accept": "*/*",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+                "Connection": "keep-alive"
+            }
+            
             res = {
-                "parse": 0,
-                "playUrl": "",
-                "url": m3u8,
-                "header": {
-                    "User-Agent": UA,
-                    "Referer": self.site_url + "/",
-                },
+                "parse": 0,              # 0 代表直接播放
+                "playUrl": "",           # 留空，防止跳转其他源
+                "url": m3u8,             # 直链 m3u8
+                "header": headers,
             }
             self._play_cache[play_page] = (now, res)
             return res
+        else:
+            self.log("❌ 未提取到 M3U8，可能被拦截或页面结构改变")
+            self.log("网页片段: %s" % html[:200])
 
-        # 兜底：交给 TVBox 嗅探
-        res = {"parse": 1, "playUrl": "", "url": play_page,
-               "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
+        # 兜底：如果真没抓到，返回原播放页让 TVBox 嗅探
+        res = {
+            "parse": 1, 
+            "playUrl": "", 
+            "url": play_page,
+            "header": {"User-Agent": UA, "Referer": self.site_url + "/"}
+        }
         self._play_cache[play_page] = (now, res)
         return res
 
     def _extract_player_url(self, html):
         if not html:
             return ""
+        # 精确匹配 player_aaaa
         m = _RE_PLAYER_AA.search(html)
         raw = m.group(1) if m else ""
+        
         if not raw:
-            # 兜底：直接搜 url 字段
+            # 兜底匹配直接的 m3u8 链接
             m2 = re.search(r'"url"\s*:\s*"([^"]+\.m3u8[^"]*)"', html, re.I)
             if m2:
                 return m2.group(1).replace("\\/", "/").replace("\\u0026", "&")
             return ""
+
+        # 清理转义字符
         raw = raw.replace("\\/", "/").replace("\\u0026", "&").replace("\\u0022", '"')
         try:
             obj = json.loads(raw)
-        except Exception:
+        except Exception as e:
+            self.log("JSON 解析失败: %s" % e)
             m2 = re.search(r'"url"\s*:\s*"([^"]+)"', raw)
             return m2.group(1) if m2 else ""
+            
         url = obj.get("url", "")
         encrypt = obj.get("encrypt", 0)
+        
+        # 如果是加密的，通常还得额外写算法解密，这里我们提醒一下
         if encrypt != 0:
-            self.log("  encrypt=%s 非0，仍尝试直链" % encrypt)
+            self.log("⚠️ 警告: encrypt=%s 非0，此视频有加密，大概率无法直链播放" % encrypt)
+            
         if url.startswith("//"):
             url = "https:" + url
+            
         return url
 
     # ---------- 其他 ----------
