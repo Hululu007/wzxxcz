@@ -326,19 +326,20 @@ class Spider(Spider):
             if m:
                 name = self._clean(m.group(1).split("-")[0].split("_")[0])
 
-        # 封面 + 备注
+        # 🚀 修复副标题/备注提取：只要包含 pic-text 的 span 都抓
         pic = self.default_pic
         remark = ""
-        m = re.search(r'<a[^>]*class="stui-vodlist__thumb picture v-thumb"[\s\S]{0,400}?'
+        m = re.search(r'<a[^>]*class="stui-vodlist__thumb picture v-thumb"[\s\S]{0,600}?'
                       r'data-original="([^"]+)"', html, re.I)
         if m:
             pic = self._fix_url(m.group(1))
-        m = re.search(r'<a[^>]*class="stui-vodlist__thumb picture v-thumb"[\s\S]{0,400}?'
-                      r'<span class="pic-text[^"]*">([^<]*)</span>', html, re.I)
+            
+        # 直接全局搜第一个 pic-text，不管是加粗、换行还是啥
+        m = re.search(r'<span class="pic-text[^"]*">\s*([^<]*)\s*</span>', html, re.I)
         if m:
             remark = self._clean(m.group(1))
 
-        # 🚀 提取缺失的元信息（类型、地区、年份、语言、更新）
+        # 提取缺失的元信息（类型、地区、年份、语言、更新）
         meta_parts = []
         # 提取类型
         m = re.search(r'<span class="text-muted">类型：</span>([\s\S]*?)<span class="split-line">', html, re.I)
@@ -395,7 +396,6 @@ class Spider(Spider):
             if m:
                 content = self._clean(m.group(1))
                 
-        # 将提取到的元信息拼接到简介前面
         meta_str = " | ".join(meta_parts) + "\n" if meta_parts else ""
         content = INTRO_PREFIX + "\n" + meta_str + content
 
