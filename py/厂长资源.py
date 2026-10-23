@@ -182,7 +182,7 @@ class Spider(Spider):
         if not html:
             return videos
             
-        # 🚀 抓取块：限定必须包含 lazyload，避免抓到轮播图
+        # 抓取块：限定必须包含 lazyload，避免抓到轮播图
         pattern = r'<a[^>]*class="[^"]*stui-vodlist__thumb lazyload[^"]*"[^>]*>([\s\S]*?)</a>'
         matches = re.finditer(pattern, html, re.I)
         
@@ -201,7 +201,7 @@ class Spider(Spider):
             title_m = re.search(r'title="([^"]*)"', full_a_tag, re.I)
             name = title_m.group(1) if title_m else ""
             
-            # 🚀 修复封面：优先 data-original，再次 src，避免拿到 load.gif 占位图
+            # 修复封面：优先 data-original，再次 src，避免拿到 load.gif 占位图
             pic = ""
             pic_m = re.search(r'data-original="([^"]+)"', full_a_tag, re.I)
             if pic_m:
@@ -214,7 +214,7 @@ class Spider(Spider):
             if href in seen: continue
             seen.add(href)
             
-            # 🚀 修复副标题
+            # 修复副标题
             remark_m = re.search(r'<span[^>]*class="[^"]*pic-text[^"]*"[^>]*>([\s\S]*?)</span>', inner_html, re.I)
             remark = self._clean(remark_m.group(1)) if remark_m else ""
             
@@ -337,7 +337,7 @@ class Spider(Spider):
             if m:
                 name = self._clean(m.group(1).split("-")[0].split("_")[0])
 
-        # 🚀 修复详情页封面
+        # 修复详情页封面
         pic = self.default_pic
         remark = ""
         m = re.search(r'<a[^>]*class="stui-vodlist__thumb picture v-thumb"[\s\S]{0,600}?'
@@ -345,7 +345,7 @@ class Spider(Spider):
         if m:
             pic = self._fix_url(m.group(1))
             
-        # 🚀 修复详情页副标题提取
+        # 修复详情页副标题提取
         m = re.search(r'<span[^>]*class="[^"]*pic-text[^"]*"[^>]*>([\s\S]*?)</span>', html, re.I)
         if m:
             remark = self._clean(m.group(1))
@@ -399,7 +399,7 @@ class Spider(Spider):
                 
         content = INTRO_PREFIX + ("\n" + content if content else "")
 
-        # 🚀 合并元信息到副标题
+        # 合并元信息到副标题
         meta_str = " | ".join(meta_parts)
         final_remark = remark
         if meta_str:
@@ -440,7 +440,7 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # ---------- 播放 ----------
+    # ---------- 播放（终极防跳源版） ----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("========== 准备播放 ==========")
@@ -452,8 +452,8 @@ class Spider(Spider):
             if now - ts < 600:
                 return res
 
-        # 获取网页源码
-        html = self._fetch(play_page)
+        # 🚀 极速拉取：缩短超时时间到 10 秒，避免 TVBox 等待过长误判超时跳源
+        html = self._fetch(play_page, timeout=10)
         
         # 提取 m3u8
         m3u8 = self._extract_player_url(html) if html else ""
@@ -461,16 +461,19 @@ class Spider(Spider):
         if m3u8:
             self.log("✅ 成功提取到 M3U8: %s" % m3u8)
             
-            # 🚀 终极防盗链伪装
+            # 🚀 补齐所有可能触发防盗链的 Header，防止第一次加载被 403 踢回
             headers = {
                 "User-Agent": UA,
                 "Referer": play_page, 
                 "Origin": self.site_url,
+                "Accept": "*/*",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+                "Connection": "keep-alive"
             }
             
             res = {
                 "parse": 0,              # 0 代表直接播放
-                "playUrl": "",           # 留空，防止跳转其他源
+                "playUrl": "",           # 留空，坚决防止跳转
                 "url": m3u8,             # 直链 m3u8
                 "header": headers,
             }
@@ -480,7 +483,7 @@ class Spider(Spider):
             self.log("❌ 未提取到 M3U8，可能被拦截或页面结构改变")
             self.log("网页片段: %s" % html[:200])
 
-        # 兜底：如果真没抓到，返回原播放页让 TVBox 嗅探
+        # 兜底
         res = {
             "parse": 1, 
             "playUrl": "", 
