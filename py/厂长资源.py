@@ -110,7 +110,6 @@ for c in CLASSES:
 
 
 # ============ 正则 ============
-# 列表页通用卡片
 _RE_CARD = re.compile(
     r'<a[^>]*class="stui-vodlist__thumb lazyload"[^>]*'
     r'href="(/cdvoddetail/(\d+)\.html)"[\s\S]*?'
@@ -120,7 +119,6 @@ _RE_CARD = re.compile(
     r'<span class="pic-text[^"]*">([^<]*)</span>',
     re.S | re.I)
 
-# 搜索页专用卡片
 _RE_SEARCH_CARD = re.compile(
     r'<a[^>]*class="v-thumb stui-vodlist__thumb lazyload"[^>]*'
     r'href="(/cdvoddetail/(\d+)\.html)"[\s\S]*?'
@@ -262,7 +260,6 @@ class Spider(Spider):
             if extend[k] in ("", None, "全部"):
                 del extend[k]
         
-        # 路由 1：现代 /cdvodshow/ 路由 (第 1 页)
         if not extend and page == 1:
             url = "%s/cdvodshow/%s-----------.html" % (self.site_url, tid)
         else:
@@ -272,7 +269,6 @@ class Spider(Spider):
         html = self._fetch(url)
         videos = self._extract_videos(html)
         
-        # 路由 2：如果空，尝试旧版 /cdvodtype/ 路由
         if not videos:
             url_fallback = "%s/cdvodtype/%s.html" % (self.site_url, tid)
             if page > 1:
@@ -298,7 +294,6 @@ class Spider(Spider):
         html = self._fetch(url)
         videos = self._extract_videos(html, search=True)
         if not videos:
-            # 兜底：?wd= 形式
             url2 = "%s/cdvodsearch/-------------.html?wd=%s" % (self.site_url, kw)
             html2 = self._fetch(url2)
             videos = self._extract_videos(html2, search=True)
@@ -343,6 +338,33 @@ class Spider(Spider):
         if m:
             remark = self._clean(m.group(1))
 
+        # 🚀 提取缺失的元信息（类型、地区、年份、语言、更新）
+        meta_parts = []
+        # 提取类型
+        m = re.search(r'<span class="text-muted">类型：</span>([\s\S]*?)<span class="split-line">', html, re.I)
+        if m:
+            types = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
+            if types: meta_parts.append("类型：" + ",".join(types))
+        # 提取地区
+        m = re.search(r'<span class="text-muted">地区：</span>([\s\S]*?)<span class="split-line">', html, re.I)
+        if m:
+            areas = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
+            if areas: meta_parts.append("地区：" + ",".join(areas))
+        # 提取年份
+        m = re.search(r'<span class="text-muted">年份：</span>([\s\S]*?)<span class="split-line">', html, re.I)
+        if m:
+            years = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
+            if years: meta_parts.append("年份：" + ",".join(years))
+        # 提取语言
+        m = re.search(r'<span class="text-muted">语言：</span>([\s\S]*?)</p>', html, re.I)
+        if m:
+            langs = re.findall(r'<a[^>]*>([^<]+)</a>', m.group(1))
+            if langs: meta_parts.append("语言：" + ",".join(langs))
+        # 提取更新
+        m = re.search(r'<span class="text-muted">更新：</span>([^<]+)</p>', html, re.I)
+        if m:
+            meta_parts.append("更新：" + self._clean(m.group(1)))
+
         # 主演 / 导演
         actor = ""
         m = re.search(r'<span class="text-muted">主演：</span>([\s\S]*?)</p>', html, re.I)
@@ -372,7 +394,10 @@ class Spider(Spider):
             m = re.search(r'<meta[^>]*name="description"[^>]*content="([^"]*)"', html, re.I)
             if m:
                 content = self._clean(m.group(1))
-        content = INTRO_PREFIX + ("\n" + content if content else "")
+                
+        # 将提取到的元信息拼接到简介前面
+        meta_str = " | ".join(meta_parts) + "\n" if meta_parts else ""
+        content = INTRO_PREFIX + "\n" + meta_str + content
 
         # 剧集：按线路块
         play_from, play_url = [], []
@@ -421,16 +446,16 @@ class Spider(Spider):
             if now - ts < 600:
                 return res
 
-        # 1. 获取网页源码
+        # 获取网页源码
         html = self._fetch(play_page)
         
-        # 2. 提取 m3u8
+        # 提取 m3u8
         m3u8 = self._extract_player_url(html) if html else ""
         
         if m3u8:
             self.log("✅ 成功提取到 M3U8: %s" % m3u8)
             
-            # 3. 构造终极伪装 Header，欺骗 CDN 防盗链
+            # 构造终极伪装 Header，欺骗 CDN 防盗链
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Referer": self.site_url + "/",  
@@ -488,7 +513,6 @@ class Spider(Spider):
         url = obj.get("url", "")
         encrypt = obj.get("encrypt", 0)
         
-        # 如果是加密的，通常还得额外写算法解密，这里我们提醒一下
         if encrypt != 0:
             self.log("⚠️ 警告: encrypt=%s 非0，此视频有加密，大概率无法直链播放" % encrypt)
             
