@@ -86,12 +86,18 @@ _LANGS = [{"n": "全部", "v": ""}, {"n": "国语", "v": "国语"},
           {"n": "日语", "v": "日语"}, {"n": "法语", "v": "法语"},
           {"n": "德语", "v": "德语"}, {"n": "其它", "v": "其它"}]
 
+# 🚀 修复分类为空：将子分类真实映射为苹果CMS的 type_id
 _FILTERS_MAP = {
-    "1": ["动作电影", "喜剧电影", "爱情片", "科幻电影", "恐怖电影",
-          "剧情片", "战争片", "记录片", "犯罪片", "动漫片"],
-    "2": ["电视剧", "港台剧", "日韩剧", "欧美剧", "泰剧", "海外剧"],
-    "3": ["内地综艺", "港台综艺", "日韩综艺", "欧美综艺"],
-    "4": ["国漫", "日韩樱花动漫", "欧美动漫", "海外动漫"],
+    "1": [{"n": "动作电影", "v": "6"}, {"n": "喜剧电影", "v": "7"}, {"n": "爱情片", "v": "8"}, 
+          {"n": "科幻电影", "v": "9"}, {"n": "恐怖电影", "v": "10"}, {"n": "剧情片", "v": "11"}, 
+          {"n": "战争片", "v": "12"}, {"n": "记录片", "v": "20"}, {"n": "犯罪片", "v": "29"}, 
+          {"n": "动漫片", "v": "39"}],
+    "2": [{"n": "电视剧", "v": "13"}, {"n": "港台剧", "v": "14"}, {"n": "日韩剧", "v": "15"}, 
+          {"n": "欧美剧", "v": "16"}, {"n": "泰剧", "v": "21"}, {"n": "海外剧", "v": "35"}],
+    "3": [{"n": "内地综艺", "v": "22"}, {"n": "港台综艺", "v": "23"}, {"n": "日韩综艺", "v": "24"}, 
+          {"n": "欧美综艺", "v": "25"}],
+    "4": [{"n": "国漫", "v": "26"}, {"n": "日韩樱花动漫", "v": "27"}, {"n": "欧美动漫", "v": "28"}, 
+          {"n": "海外动漫", "v": "34"}],
     "40": [],
 }
 
@@ -99,8 +105,7 @@ FILTERS = {}
 for c in CLASSES:
     tid = c["type_id"]
     fs = [{"key": "class", "name": "分类",
-           "value": [{"n": "全部", "v": ""}] +
-                    [{"n": x, "v": x} for x in _FILTERS_MAP.get(tid, [])]},
+           "value": [{"n": "全部", "v": ""}] + _FILTERS_MAP.get(tid, [])},
           {"key": "area", "name": "地区", "value": _AREAS},
           {"key": "year", "name": "年份", "value": _YEARS},
           {"key": "order", "name": "排序", "value": _ORDERS}]
@@ -267,6 +272,12 @@ class Spider(Spider):
             except Exception:
                 extend = {}
         extend = extend or {}
+        
+        # 🚀 智能分类映射：如果传了数字 class（分类ID），直接当作 type_id 替换掉旧的 tid
+        if "class" in extend and str(extend["class"]).isdigit():
+            tid = str(extend["class"])
+            del extend["class"]
+            
         for k in list(extend.keys()):
             if extend[k] in ("", None, "全部"):
                 del extend[k]
@@ -280,6 +291,18 @@ class Spider(Spider):
         html = self._fetch(url)
         videos = self._extract_videos(html)
         
+        # 🚀 防错回退：如果没数据（可能因为年份不对），去掉所有筛选条件再试一次
+        if not videos and extend:
+            self.log("category retry without extend...")
+            url = "%s/cdvodshow/%s-----------.html" % (self.site_url, tid)
+            if page > 1:
+                url = "%s/cdvodshow/%s--------%d---.html" % (self.site_url, tid, page)
+            html2 = self._fetch(url)
+            videos = self._extract_videos(html2)
+            if videos:
+                html = html2
+        
+        # 🚀 终极防错：尝试旧版路由
         if not videos:
             url_fallback = "%s/cdvodtype/%s.html" % (self.site_url, tid)
             if page > 1:
@@ -440,7 +463,7 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # ---------- 播放（终极预热+防跳源版） ----------
+    # ---------- 播放（终极防跳源版） ----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("========== 准备播放 ==========")
@@ -452,7 +475,7 @@ class Spider(Spider):
             if now - ts < 600:
                 return res
 
-        # 极速拉取播放页
+        # 极速拉取：缩短超时时间到 10 秒，避免 TVBox 等待过长误判超时跳源
         html = self._fetch(play_page, timeout=10)
         
         # 提取 m3u8
@@ -461,11 +484,14 @@ class Spider(Spider):
         if m3u8:
             self.log("✅ 成功提取到 M3U8: %s" % m3u8)
             
-            # 精简且致命的 Header
+            # 补齐所有可能触发防盗链的 Header，防止第一次加载被 403 踢回
             headers = {
                 "User-Agent": UA,
                 "Referer": play_page, 
-                "Accept": "*/*"
+                "Origin": self.site_url,
+                "Accept": "*/*",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+                "Connection": "keep-alive"
             }
             
             # 🚀 隐藏大BOSS：预热M3U8！
