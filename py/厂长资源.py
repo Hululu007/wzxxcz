@@ -448,7 +448,7 @@ class Spider(Spider):
             "vod_play_url":  "$$$".join(play_url),
         }]}
 
-    # ---------- 播放（无陷阱秒返回版） ----------
+    # ---------- 播放（剥洋葱找子m3u8防跳源版） ----------
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("========== 准备播放 ==========")
@@ -467,10 +467,9 @@ class Spider(Spider):
         m3u8 = self._extract_player_url(html) if html else ""
         
         if m3u8:
-            self.log("✅ 成功提取到 M3U8: %s" % m3u8)
+            self.log("✅ 成功提取到原始 M3U8: %s" % m3u8)
             
-            # 🚀 直接返回，绝不预热！
-            # 把 Header 配齐，让 TVBox 底层的播放器自己去拉流，这样没有任何超时风险。
+            # 构造基础防盗链 Header
             headers = {
                 "User-Agent": UA,
                 "Referer": self.site_url + "/", 
@@ -480,10 +479,35 @@ class Spider(Spider):
                 "Connection": "keep-alive"
             }
             
+            # 🚀 隐藏大BOSS：手动剥洋葱！
+            # 向 m3u8 发起请求，如果是多码率（Master Playlist），直接提取里面第一个真实的子 m3u8 链接返回。
+            # 这样播放器就不需要自己去解析嵌套列表，直接单线程拉流，杜绝超时跳源。
+            real_m3u8 = m3u8
+            try:
+                self.log("🔥 正在检查主 M3U8 并提取子流...")
+                rsp = self.fetch(m3u8, headers=headers, timeout=3)
+                text = rsp.text if hasattr(rsp, 'text') else ""
+                if "#EXTM3U" in text and "#EXT-X-STREAM-INF" in text:
+                    lines = [ln.strip() for ln in text.split('\n') if ln.strip()]
+                    for i, line in enumerate(lines):
+                        if line.startswith("#EXT-X-STREAM-INF"):
+                            if i + 1 < len(lines):
+                                sub = lines[i + 1].strip()
+                                if sub.startswith("http"):
+                                    real_m3u8 = sub
+                                elif sub.startswith("/"):
+                                    real_m3u8 = m3u8.split('/', 3)[0] + '//' + m3u8.split('/', 3)[2] + sub
+                                else:
+                                    real_m3u8 = m3u8.rsplit('/', 1)[0] + '/' + sub
+                                self.log("🔥 成功剥离子流: %s" % real_m3u8)
+                                break
+            except Exception as e:
+                self.log("剥离警告 (忽略直接播放主M3U8): %s" % e)
+            
             res = {
                 "parse": 0,              # 0 代表直接播放
                 "playUrl": "",           # 留空，坚决防止跳转
-                "url": m3u8,             # 直链 m3u8
+                "url": real_m3u8,        # 最终的直链 m3u8 (大概率是子流)
                 "header": headers,
             }
             self._play_cache[play_page] = (now, res)
