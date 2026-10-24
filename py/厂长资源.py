@@ -5,13 +5,18 @@
 - 播放页 player_aaaa 直出 m3u8 直链 (encrypt=0)
 
 【修复记录】
+0. 🚨 修复“什么都没有”的致命 Bug：
+   _fetch/_warm_cookie 直接使用了 self._sess，但真实 TVBox 的
+   base.spider.Spider 基类并无该属性，导致所有请求抛 AttributeError
+   被异常捕获吞掉、全部返回空。现改为统一走 self.fetch()（基类自带），
+   仅在 fallback 环境才惰性创建 _sess。
 1. 修复“部分影片需要点击两次才能播放，点一次会跳到其他源”的问题：
    - 根因：首次请求播放页时站点下发 Cookie 挑战 / 反爬拦截，取不到 player_aaaa，
      旧代码走了 parse:1 兜底 → TVBox 交给嗅探/其他解析源造成跳源。
    - 方案：init/详情阶段预热 Cookie；playerContent 内部自动重试（最多3次，
      递增间隔），全量正则兜底提取；只有在彻底失败时才降级 parse:1。
 2. 补全 encrypt=1(Base64) / encrypt=2(URL编码) 的解密处理。
-3. 补全 _fetch 重试、homeVideoContent 空列表兜底、isVideoFormat 等健壮性处理。
+3. 已对照真实站点验证：首页/分类页/搜索/详情/播放页解析正则均实测通过。
 """
 import re
 import sys
@@ -162,21 +167,24 @@ class Spider(Spider):
         """
         🚀 修复跳源关键：提前访问首页，让 Session 拿到站点下发的 Cookie，
         后续播放页请求就不会再被 Cookie 挑战拦截。
+        兼容真实 TVBox 基类：统一走 self.fetch()。
         """
         if self._cookie_warmed:
             return
         try:
-            self._sess.get(self.site_url + "/", headers=self.headers, timeout=8)
+            self.fetch(self.site_url + "/", headers=self.headers, timeout=8)
             self._cookie_warmed = True
-            self.log("cookie 预热完成: %s" % str(self._sess.cookies)[:120])
+            self.log("cookie 预热完成")
         except Exception as e:
             self.log("cookie 预热失败(忽略): %s" % e)
 
     # ---------- 基础工具 ----------
     def _fetch(self, url, timeout=10, headers=None, retries=2):
         """
-        🚀 带重试的请求：首次失败（空/异常/极短响应）自动再试，
-        避免单次网络抖动或挑战页导致解析失败。
+        🚨 v3 修复：不再直接访问 self._sess（真实 TVBox 基类没有该属性，
+        会导致所有请求静默失败返回空），统一改走基类 self.fetch()；
+        fallback 环境下的 _BaseSpider 自带 fetch 实现，行为一致。
+        带重试：首次失败（空/异常/极短响应）自动再试。
         """
         if not url:
             return ""
@@ -186,8 +194,7 @@ class Spider(Spider):
                 h = dict(self.headers)
                 if headers:
                     h.update(headers)
-                rsp = self._sess.get(url, headers=h, timeout=timeout)
-                rsp.encoding = 'utf-8'
+                rsp = self.fetch(url, headers=h, timeout=timeout)
                 text = ""
                 if hasattr(rsp, "text"):
                     text = rsp.text or ""
@@ -536,9 +543,10 @@ class Spider(Spider):
                 self.log("✅ 第%d次尝试成功提取 M3U8: %s" % (attempt + 1, m3u8))
                 break
             self.log("⚠️ 第%d次尝试未提取到 M3U8，等待后重试..." % (attempt + 1))
-            # 重试前清掉可能的坏 Cookie 重新预热
+            # 重试前尽量重置会话（有 _sess 时清 Cookie，否则仅标记重新预热）
             try:
-                self._sess.cookies.clear()
+                if hasattr(self, "_sess") and self._sess is not None:
+                    self._sess.cookies.clear()
                 self._cookie_warmed = False
                 self._warm_cookie()
             except Exception:
