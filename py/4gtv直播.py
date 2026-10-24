@@ -2,17 +2,16 @@
 """
 4GTV 双代理直播源 | TVBox Python 爬虫 
 关键:
-  - 静态频道表 CHANNELS，按内容类型分 10 类：
-    新聞財經 / 綜合娛樂 / 影視戲劇 / 兒童卡通 / 體育電競 /
-    音樂頻道 / 生活旅遊 / 紀實知識 / 宗教國會 / 購物其他
+  - 静态频道表 CHANNELS，按内容类型分 10 类（全简体）
   - 双代理：4GTV 组经 caonizuzong.cc.cd；歐菲组经 live.yiwo.uk:50002
   - 每个频道标注来源 (4GTV / 歐菲)，vod_remarks 与播放线路名均显示来源
-  - 同一频道多源并存时，各自成条目，方便源挂了切换
-  - 直接返回代理网址 (parse=0)，无需嗅探；播放结果做 10 分钟内存缓存
+  - 补全请求头，并使用本地代理解决防盗链/跨域导致的网络读取失败
+  - 播放结果做 10 分钟内存缓存
 """
 import sys
 import json
 import time
+import urllib.parse
 
 sys.path.append('..')
 
@@ -60,16 +59,17 @@ except ImportError:
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
+# 已全部转为简体
 CATEGORY_ORDER = [
-    "新聞財經", "綜合娛樂", "影視戲劇", "兒童卡通", "體育電競",
-    "音樂頻道", "生活旅遊", "紀實知識", "宗教國會", "購物其他",
+    "新闻财经", "综合娱乐", "影视戏剧", "儿童卡通", "体育电竞",
+    "音乐频道", "生活旅游", "纪实知识", "宗教国会", "购物其他",
 ]
 
 # 每条频道：[名称, 播放地址, Logo, 来源]
 # 来源：'4GTV' 或 '歐菲'
 # 注意：Bloomberg TV 与 东森购物四 原始 URL 均为 4gtv-live049，疑似原数据重复，保留待核
 CHANNELS = {
-    '新聞財經': [
+    '新闻财经': [
         # ---- 4GTV 源 ----
         ['东森新闻', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv152', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_litv-ftv14_mobile.png', '4GTV'],
         ['台视新闻', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv051', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv051_mobile.png', '4GTV'],
@@ -91,17 +91,17 @@ CHANNELS = {
         ['DW德国之声', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live071', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live071_mobile.png', '4GTV'],
         ['镜电视新闻', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv075', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv075_mobile.png', '4GTV'],
         # ---- 歐菲 源 ----
-        ['中天新聞台', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv009&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv009_mobile.png', '歐菲'],
-        ['華視新聞', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv052&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv052_mobile.png', '歐菲'],
-        ['中視新聞', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv074&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv074_mobile.png', '歐菲'],
-        ['第1商業台', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv104&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
-        ['寰宇新聞台灣台', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv156&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv156.png', '歐菲'],
-        ['寰宇財經台', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv158&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv158.png', '歐菲'],
-        ['三立新聞iNEWS', 'http://live.yiwo.uk:50002/index.m3u8?pid=iNEWS&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
-        ['寰宇新聞台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-longturn14&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_litv-longturn14.png', '歐菲'],
-        ['倪珍播新聞', 'http://live.yiwo.uk:50002/index.m3u8?pid=nnews-zh&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
+        ['中天新闻台', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv009&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv009_mobile.png', '歐菲'],
+        ['华视新闻', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv052&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv052_mobile.png', '歐菲'],
+        ['中视新闻', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv074&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv074_mobile.png', '歐菲'],
+        ['第1商业台', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv104&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
+        ['寰宇新闻台湾台', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv156&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv156.png', '歐菲'],
+        ['寰宇财经台', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv158&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv158.png', '歐菲'],
+        ['三立新闻iNEWS', 'http://live.yiwo.uk:50002/index.m3u8?pid=iNEWS&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
+        ['寰宇新闻台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-longturn14&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_litv-longturn14.png', '歐菲'],
+        ['倪珍播新闻', 'http://live.yiwo.uk:50002/index.m3u8?pid=nnews-zh&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
     ],
-    '綜合娛樂': [
+    '综合娱乐': [
         # ---- 4GTV 源 ----
         ['民视', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv002', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv002_mobile.png', '4GTV'],
         ['中视', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv040', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv040_mobile.png', '4GTV'],
@@ -132,10 +132,10 @@ CHANNELS = {
         ['Lifetime 娱乐频道', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live029', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live029_mobile.png', '4GTV'],
         ['八大精彩', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv034', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv034_mobile_0211.png', '4GTV'],
         # ---- 歐菲 源 ----
-        ['中視', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv040&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv040_mobile.png', '歐菲'],
-        ['華視', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv041&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv041_mobile.png', '歐菲'],
+        ['中视', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv040&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv040_mobile.png', '歐菲'],
+        ['华视', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv041&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv041_mobile.png', '歐菲'],
     ],
-    '影視戲劇': [
+    '影视戏剧': [
         # ---- 4GTV 源 ----
         ['中视经典', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv080', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live014_mobile.webp', '4GTV'],
         ['TVBS台剧', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live088', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/4gtv-live088.png', '4GTV'],
@@ -157,15 +157,15 @@ CHANNELS = {
         ['经典电影', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live021', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live021_mobile.png', '4GTV'],
         ['戏剧免费看1', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live010', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live010_mobile.png', '4GTV'],
         # ---- 歐菲 源 ----
-        ['龍華洋片台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang02&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
-        ['龍華電影台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang03&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
-        ['龍華日韓台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang11&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
-        ['龍華偶像台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang12&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
-        ['龍華戲劇台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang18&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
-        ['龍華經典台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang21&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
-        ['台灣戲劇台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang22&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
+        ['龙华洋片台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang02&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
+        ['龙华电影台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang03&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
+        ['龙华日韩台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang11&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
+        ['龙华偶像台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang12&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
+        ['龙华戏剧台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang18&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
+        ['龙华经典台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang21&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
+        ['台湾戏剧台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang22&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
     ],
-    '兒童卡通': [
+    '儿童卡通': [
         # ---- 4GTV 源 ----
         ['Nick Jr. 儿童频道', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live032', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live032.png', '4GTV'],
         ['尼克儿童频道', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live105', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live105.png', '4GTV'],
@@ -176,9 +176,9 @@ CHANNELS = {
         ['经典卡通', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live022', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live022_mobile.png', '4GTV'],
         ['精选动漫', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live024', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live024_mobile.png', '4GTV'],
         # ---- 歐菲 源 ----
-        ['龍華卡通台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang01&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
+        ['龙华卡通台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang01&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
     ],
-    '體育電競': [
+    '体育电竞': [
         # ---- 4GTV 源 ----
         ['TRACESportStars', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv077', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv077_mobile.png', '4GTV'],
         ['智林体育', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv101', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv101_mobile.png', '4GTV'],
@@ -186,7 +186,7 @@ CHANNELS = {
         ['车迷TV', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live201', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live201_mobile.png', '4GTV'],
         ['GINXEsportsTV', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv053', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv053_mobile.png', '4GTV'],
     ],
-    '音樂頻道': [
+    '音乐频道': [
         # ---- 4GTV 源 ----
         ['电影原声', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live031', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live031_mobile.png', '4GTV'],
         ['TRACEUrban', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv082', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv082_mobile.png', '4GTV'],
@@ -194,7 +194,7 @@ CHANNELS = {
         ['MezzoLiveHD', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv083', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv083_mobile.png', '4GTV'],
         ['CLASSICA古典乐', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv059', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv059_mobile.png', '4GTV'],
     ],
-    '生活旅遊': [
+    '生活旅游': [
         # ---- 4GTV 源 ----
         ['PetClubTV', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live110', '', '4GTV'],
         ['民视旅游Fre', 'https://www.caonizuzong.cc.cd/4gtv?id=litv-ftv07', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_litv-ftv07_mobile.png', '4GTV'],
@@ -208,10 +208,10 @@ CHANNELS = {
         ['LiveABC互动英语频道', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live030', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live030_mobile.png', '4GTV'],
         ['ELTV生活英语', 'https://www.caonizuzong.cc.cd/4gtv?id=litv-longturn20', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_litv-longturn20_mobile.png', '4GTV'],
         # ---- 歐菲 源 ----
-        ['亞洲旅遊台', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv076&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_litv-longturn17_mobile.png', '歐菲'],
-        ['ELTV生活英語台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang20&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_litv-longturn20_mobile.webp', '歐菲'],
+        ['亚洲旅游台', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv076&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_litv-longturn17_mobile.png', '歐菲'],
+        ['ELTV生活英语台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang20&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_litv-longturn20_mobile.webp', '歐菲'],
     ],
-    '紀實知識': [
+    '纪实知识': [
         # ---- 4GTV 源 ----
         ['Global Trekker', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live112', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live112_mobile.png', '4GTV'],
         ['达文西频道', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv018', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv018_mobile.png', '4GTV'],
@@ -221,9 +221,9 @@ CHANNELS = {
         ['视纳华仁纪实频道', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv013', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv013_mobile.png', '4GTV'],
         ['影迷数位纪实', 'https://www.caonizuzong.cc.cd/4gtv?id=litv-ftv15', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live023_mobile.png', '4GTV'],
         # ---- 歐菲 源 ----
-        ['Smart知識台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang19&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
+        ['Smart知识台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-xinchuang19&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
     ],
-    '宗教國會': [
+    '宗教国会': [
         # ---- 4GTV 源 ----
         ['大爱电视', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv007', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv007_mobile.png', '4GTV'],
         ['好消息', 'https://www.caonizuzong.cc.cd/4gtv?id=litv-ftv16', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_litv-ftv16_mobile.png', '4GTV'],
@@ -233,21 +233,21 @@ CHANNELS = {
         ['国会频道1', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv084', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv084_mobile_0204.png', '4GTV'],
         ['国会频道2', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv085', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv085_mobile_0204.png', '4GTV'],
         # ---- 歐菲 源 ----
-        ['國會頻道1台', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv084&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv084_mobile_0204.png', '歐菲'],
-        ['國會頻道2台', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv085&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv085_mobile_0204.png', '歐菲'],
+        ['国会频道1台', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv084&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv084_mobile_0204.png', '歐菲'],
+        ['国会频道2台', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv085&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv085_mobile_0204.png', '歐菲'],
         ['DayStar', 'http://live.yiwo.uk:50002/index.m3u8?pid=daystar&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
         ['好消息', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-ftv16&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_litv-ftv16_mobile.png', '歐菲'],
         ['好消息2台', 'http://live.yiwo.uk:50002/index.m3u8?pid=litv-ftv17&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_litv-ftv17_mobile.png', '歐菲'],
     ],
-    '購物其他': [
+    '购物其他': [
         # ---- 4GTV 源 ----
         ['东森购物四', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live049', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live047_mobile.webp', '4GTV'],
         ['东森购物一', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live047', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live047_mobile.png', '4GTV'],
         ['东森购物二', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live046', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live047_mobile.webp', '4GTV'],
         ['东森购物三', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live048', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live047_mobile.png', '4GTV'],
         # ---- 歐菲 源 ----
-        ['東森購物1台', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv102&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
-        ['東森購物2台', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv103&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv103_mobile.png', '歐菲'],
+        ['东森购物1台', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv102&sd=1080&proxy=false&token=yiwo', '', '歐菲'],
+        ['东森购物2台', 'http://live.yiwo.uk:50002/index.m3u8?pid=4gtv-4gtv103&sd=1080&proxy=false&token=yiwo', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv103_mobile.png', '歐菲'],
     ],
 }
 
@@ -277,7 +277,6 @@ class Spider(Spider):
 
     # ---------- 工具 ----------
     def _fetch(self, url, timeout=15, headers=None):
-        """预留：频道表为静态数据，当前无需网络请求，保留以统一风格。"""
         try:
             h = dict(self.headers)
             if headers:
@@ -303,7 +302,6 @@ class Spider(Spider):
         return {"class": classes}
 
     def homeVideoContent(self):
-        # 每类取前 3 个做首页推荐
         vods = []
         for tid in CATEGORY_ORDER:
             for i, item in enumerate(CHANNELS.get(tid, [])[:3]):
@@ -362,11 +360,27 @@ class Spider(Spider):
             self.log("player 解析失败: %s" % e)
             return {"parse": 1, "playUrl": "", "url": "", "header": {}}
 
+        # 【请求头补全修复】：根据来源补全 Referer，防止被上游拦截
+        if source == "4GTV":
+            headers = {
+                "User-Agent": UA,
+                "Referer": "https://www.4gtv.tv/",
+                "Origin": "https://www.4gtv.tv"
+            }
+        else:
+            headers = {
+                "User-Agent": UA,
+                "Referer": "https://live.yiwo.uk/"
+            }
+
+        # 【防断流修复】：转成 TVBox 内置的代理链接，解决跨域和分片被拒问题
+        proxy_url = "proxy://do=live&type=m3u8&url=%s" % urllib.parse.quote(url, safe="")
+
         res = {
             "parse": 0,
             "playUrl": "",
-            "url": url,
-            "header": {"User-Agent": UA},
+            "url": proxy_url,
+            "header": headers,
         }
         self._play_cache[id] = (now, res)
         self.log("player: %s (%s)" % (name, source))
@@ -387,7 +401,6 @@ class Spider(Spider):
 
     # ---------- 其他 ----------
     def localProxy(self, param):
-        # 4GTV 频道 Logo 来自官方图床，暂不需要本地代理
         return [200, "image/jpeg", b"", ""]
 
     def isVideoFormat(self, url):
