@@ -1,13 +1,17 @@
 # coding=utf-8
 """
-4GTV 双代理直播源 | TVBox Python 爬虫 (V1.3 终极完美版)
-特点：
-  - 将原有的 142 条线路（113 台 4GTV + 29 台 欧菲）全部重构进 10 个友好分类
-  - 分类与频道名全简体化，名称直观清晰
-  - 每条线路保留来源标签（4GTV / 欧菲），列表备注及播放线路名均显示
-  - 补全匹配的防盗链请求头，并使用本地代理（proxy://）彻底解决“网络读取失败”
+4GTV 双代理直播源 | TVBox Python 爬虫 (V2.0 旗舰完善版)
+关键:
+  - 静态频道表 CHANNELS，按内容类型分 10 类（全简体）
+  - 双代理：4GTV 组经 caonizuzong.cc.cd；欧菲组经 live.yiwo.uk:50002
+  - 每个频道标注来源 (4GTV / 欧菲)，vod_remarks 与播放线路名均显示来源
+  - 【完善】继承 _BaseSpider，内置 requests 降级处理、Session 复用和日志系统
+  - 【完善】补全匹配的防盗链请求头，并加入 10 分钟播放缓存机制
+  - 【修复】取消部分播放器不兼容的 proxy:// 转发，直接抛出真实地址，保证全盘正常播放
 """
 import sys
+import json
+import time
 import urllib.parse
 
 sys.path.append('..')
@@ -15,17 +19,54 @@ sys.path.append('..')
 try:
     from base.spider import Spider
 except ImportError:
-    class Spider:
-        def __init__(self):
-            pass
+    import requests as _rq
+    try:
+        import urllib3
+        urllib3.disable_warnings()
+    except Exception:
+        pass
 
-# 分类列表
+    class _BaseSpider:
+        def __init__(self):
+            self._session = None
+
+        @property
+        def _sess(self):
+            if self._session is None:
+                self._session = _rq.Session()
+                self._session.verify = False
+                adapter = _rq.adapters.HTTPAdapter(
+                    pool_connections=10, pool_maxsize=10, max_retries=0)
+                self._session.mount('https://', adapter)
+                self._session.mount('http://', adapter)
+            return self._session
+
+        def fetch(self, url, headers=None, **kw):
+            timeout = kw.pop('timeout', 15)
+            r = self._sess.get(url, headers=headers, timeout=timeout, **kw)
+            r.encoding = 'utf-8'
+            return r
+
+        def log(self, *a, **kw):
+            try:
+                print("[4gtv2]", *a)
+            except Exception:
+                pass
+
+    Spider = _BaseSpider
+
+
+# ===================== 常量 =====================
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
 CATEGORY_ORDER = [
     "新闻财经", "综合娱乐", "影视戏剧", "儿童卡通", "体育电竞",
     "音乐频道", "生活旅游", "纪实知识", "宗教国会", "购物其他",
 ]
 
-# 数据结构：[频道名, 播放地址, 图标, 来源('4GTV'或'欧菲')]
+# 每条频道：[名称, 播放地址, Logo, 来源]
+# 来源：'4GTV' 或 '欧菲'
 CHANNELS = {
     '新闻财经': [
         # ---- 4GTV 源 ----
@@ -35,7 +76,6 @@ CHANNELS = {
         ['民视新闻', 'https://www.caonizuzong.cc.cd/4gtv?id=live-ftv13', '', '4GTV'],
         ['三立新闻iNEWS', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live089', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live089_mobile.png', '4GTV'],
         ['TVBS新闻', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv072', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv072_mobile.png', '4GTV'],
-        ['TVBS', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv073', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv073_mobile.png', '4GTV'],
         ['东森财经新闻', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv153', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv019_mobile.png', '4GTV'],
         ['中视新闻', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv074', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv074_mobile.png', '4GTV'],
         ['中天新闻', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv009', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv009_mobile.png', '4GTV'],
@@ -66,6 +106,7 @@ CHANNELS = {
         ['中视', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv040', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv040_mobile.png', '4GTV'],
         ['华视', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv041', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv041_mobile.png', '4GTV'],
         ['三立综合', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-live207', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live207_mobile.png', '4GTV'],
+        ['TVBS', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv073', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv073_mobile.png', '4GTV'],
         ['民视第一', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv003', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv003_mobile.png', '4GTV'],
         ['民视台湾', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv001', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-4gtv001_mobile.png', '4GTV'],
         ['TVBS精采', 'https://www.caonizuzong.cc.cd/4gtv?id=4gtv-4gtv067', 'https://4gtvimg2.4gtv.tv/4gtv-Image/Channel/mobile/logo_4gtv_4gtv-live086_mobile.png', '4GTV'],
@@ -210,16 +251,41 @@ CHANNELS = {
 }
 
 
+# ===================== 爬虫主体 =====================
 class Spider(Spider):
+
     def getName(self):
         return "4GTV双代理"
 
     def init(self, extend=""):
-        pass
+        try:
+            self.extend = json.loads(extend) if extend else {}
+        except Exception:
+            self.extend = {}
 
-    def homeContent(self, filter):
-        classes = [{"type_name": c, "type_id": c} for c in CATEGORY_ORDER]
-        return {"class": classes}
+        self.headers = {
+            "User-Agent": UA,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Referer": "https://www.4gtv.tv/",
+        }
+        self._play_cache = {}
+        self.log("init: 共 %d 个分类, %d 个频道条目" % (
+            len(CATEGORY_ORDER),
+            sum(len(v) for v in CHANNELS.values())))
+
+    # ---------- 工具 ----------
+    def _fetch(self, url, timeout=15, headers=None):
+        """预留：频道表为静态数据，当前无需网络请求，保留以统一风格。"""
+        try:
+            h = dict(self.headers)
+            if headers:
+                h.update(headers)
+            rsp = self.fetch(url, headers=h, timeout=timeout)
+            return getattr(rsp, "text", "") or ""
+        except Exception as e:
+            self.log("fetch FAIL %s -> %s" % (url, e))
+            return ""
 
     def _vod(self, tid, i, item):
         name, url, logo, source = item
@@ -230,11 +296,34 @@ class Spider(Spider):
             "vod_remarks": source,
         }
 
+    # ---------- 首页 ----------
+    def homeContent(self, filter=False):
+        classes = [{"type_name": c, "type_id": c} for c in CATEGORY_ORDER]
+        return {"class": classes}
+
+    def homeVideoContent(self):
+        # 每类取前 3 个做首页推荐
+        vods = []
+        for tid in CATEGORY_ORDER:
+            for i, item in enumerate(CHANNELS.get(tid, [])[:3]):
+                vods.append(self._vod(tid, i, item))
+        self.log("homeVideoContent: %d 条" % len(vods))
+        return {"list": vods}
+
+    # ---------- 分类 ----------
     def categoryContent(self, tid, pg, filter, extend):
         items = CHANNELS.get(tid, [])
         vods = [self._vod(tid, i, item) for i, item in enumerate(items)]
-        return {"page": 1, "pagecount": 1, "limit": len(vods), "total": len(vods), "list": vods}
+        self.log("categoryContent: %s -> %d 条" % (tid, len(vods)))
+        return {
+            "page": 1,
+            "pagecount": 1,
+            "limit": len(vods),
+            "total": len(vods),
+            "list": vods,
+        }
 
+    # ---------- 详情 ----------
     def detailContent(self, ids):
         if not ids:
             return {"list": []}
@@ -242,7 +331,8 @@ class Spider(Spider):
         try:
             tid, idx = vid.rsplit("|", 1)
             name, url, logo, source = CHANNELS[tid][int(idx)]
-        except Exception:
+        except Exception as e:
+            self.log("detail 解析失败: %s" % e)
             return {"list": []}
 
         vod = {
@@ -253,43 +343,64 @@ class Spider(Spider):
             "vod_play_from": source,
             "vod_play_url":  "直播$" + vid,
         }
+        self.log("detail: %s (%s)" % (name, source))
         return {"list": [vod]}
 
+    # ---------- 播放 ----------
     def playerContent(self, flag, id, vipFlags):
-        tid, idx = id.rsplit("|", 1)
-        name, url, logo, source = CHANNELS[tid][int(idx)]
+        now = int(time.time())
+        if id in self._play_cache:
+            ts, res = self._play_cache[id]
+            if now - ts < 600:
+                self.log("player cache hit: %s" % id)
+                return res
 
-        # 补全防盗链请求头
+        try:
+            tid, idx = id.rsplit("|", 1)
+            name, url, logo, source = CHANNELS[tid][int(idx)]
+        except Exception as e:
+            self.log("player 解析失败: %s" % e)
+            return {"parse": 1, "playUrl": "", "url": "", "header": {}}
+
+        # 【核心修复】：直接补全匹配的 Referer/Origin，不经过 proxy:// 避免播放器罢工
         if source == "4GTV":
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": UA,
                 "Referer": "https://www.4gtv.tv/",
                 "Origin": "https://www.4gtv.tv"
             }
         else:
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": UA,
                 "Referer": "https://live.yiwo.uk/"
             }
 
-        # 开启 TVBox 内置代理绕过跨域限制，解决网络读取失败
-        proxy_url = "proxy://do=live&type=m3u8&url=%s" % urllib.parse.quote(url, safe="")
-        
-        return {"parse": 0, "playUrl": "", "url": proxy_url, "header": headers}
+        res = {
+            "parse": 0,
+            "playUrl": "",
+            "url": url,
+            "header": headers,
+        }
+        self._play_cache[id] = (now, res)
+        self.log("player: %s (%s)" % (name, source))
+        return res
 
+    # ---------- 搜索 ----------
     def searchContent(self, key, quick, pg="1"):
         vods = []
         for tid in CATEGORY_ORDER:
             for i, item in enumerate(CHANNELS.get(tid, [])):
                 if key in item[0]:
                     vods.append(self._vod(tid, i, item))
+        self.log("search '%s' -> %d 条" % (key, len(vods)))
         return {"list": vods}
 
     def searchContentPage(self, key, quick, pg="1"):
         return self.searchContent(key, quick, pg)
 
+    # ---------- 其他 ----------
     def localProxy(self, param):
-        pass
+        return [200, "image/jpeg", b"", ""]
 
     def isVideoFormat(self, url):
         return False
@@ -297,5 +408,8 @@ class Spider(Spider):
     def manualVideoCheck(self):
         return False
 
-    def homeVideoContent(self):
-        return {"list": []}
+    def destroy(self):
+        self._play_cache = {}
+
+    def close(self):
+        self.destroy()
