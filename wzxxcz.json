@@ -393,12 +393,6 @@
             "api": "./py/央视频.py"
         },
         {
-            "key": "4gtv直播",
-            "name": "🍊小橙子4gtv直播",
-            "type": 3,
-            "api": "./py/4gtv直播.py"
-        },
-        {
             "key": "hipy_js_好趣网",
             "name": "🍊小橙子电视",
             "type": 3,
