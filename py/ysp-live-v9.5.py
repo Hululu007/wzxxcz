@@ -279,10 +279,50 @@ TWN_CHANNELS = [
     ("momo", "Momo亲子台", [
         "http://198.16.100.90:8278/momo1_twn/playlist.m3u8?tid=MFFF9797479997974799&ct=19249&tsum=0bd9dac79cd373cc918357d3199c8b22",
         "http://50.7.238.114:8278/momo1_twn/playlist.m3u8?tid=MFFF9797479997974799&ct=19249&tsum=0bd9dac79cd373cc918357d3199c8b22",
+    ]),    ("tvbsya", "TVBS亚洲台", [
+        "http://38.64.72.148/hls/modn/list/4005/playlist.m3u8",
+    ]),
+    ("ttn", "台视新闻", []),
+    ("dsxw", "东森新闻", []),
+    ("slxw", "三立新闻", []),
+    ("hyxw", "寰宇新闻", []),
+    ("yzmz", "原住民电视台", [
+        "https://streamipcfapp.akamaized.net/live/_definst_/live_720/key_b1500.m3u8",
+        "http://streamipcf.akamaized.net/live/_definst_/smil:liveabr.smil/playlist.m3u8",
+    ]),
+    ("kjtvtv", "客家电视台", [
+        "https://h5cul1yar48um3t.wcetv.com/hls/hakkatv.m3u8",
+    ]),
+    ("cgntv", "CGNTV", [
+        "https://d3e05csss9c272.cloudfront.net/out/v1/f0bf71c57581470fb9379f603e8f5d83/CGNWebLiveCN.m3u8",
+    ]),
+    ("bltv", "生命电视台", [
+        "https://5ddce30eb4b55.streamlock.net/bltvhd/bltv1/playlist.m3u8",
+    ]),
+    ("dali", "Dali TV", [
+        "http://www.dalitv.com.tw:4568/live/dali/index.m3u8",
+    ]),
+    ("wxtv", "WXTV", [
+        "https://mobile.ccdntech.com/transcoder/_definst_/vod164_Live/live/chunklist_w1177047531.m3u8",
     ]),
 ]
 TWN_PROBE_TRIES = 2
-TWN_PROBE_TIMEOUT = 6
+TWN_PROBE_TIMEOUT = 10
+TWN_PROBE_MINBYTES = 131072  # 探活要求实际拉到 ≥128KB，过滤播一秒就断的假源（那种只能拉到几十 KB）
+
+# YouTube 官方 24h 直播中转（各台湾新闻台的官方频道），quality 可 1080/720
+TWN_YT_RELAY = "https://iptv-go-am.vercel.app/youtube/%s?quality=%s"
+TWN_YT_IDS = {
+    "ztxw": "oIgbl7t0S_w",   # 中天新闻（官方 24h 直播）
+    "ftvn": "ylYJSBUgaMA",   # 民视新闻
+    "zsn": "TCnaIE_SAtM",    # 中视新闻
+    "ttn": "xL0ch83RAK8",    # 台视新闻
+    "hsn": "wM0g8EoUZ_E",    # 华视新闻
+    "dsxw": "quwqlazU-c8",   # 东森新闻
+    "slxw": "CKjSm5ZeehE",   # 三立新闻
+    "hyxw": "B7Zp3d6xXWw",   # 寰宇新闻
+}
+TWN_YT_QUALITIES = ("1080", "720")
 
 
 # ---------------------------------------------------------------------------
@@ -1071,20 +1111,7 @@ def _fengx_playurl(channel_id, http_get, http_post, http_probe=None):
         token = _fengx_token(http_post)
         _fengx_playurl._token = token
 
-    # -- 先试免签名 720p --
-    sc = _fengx_streamcode(channel_id)
-    if sc and http_probe is not None:
-        u720 = FENGX_HD720_URL % sc
-        hdr720 = {"User-Agent": FENGX_HEADERS_PLAY["User-Agent"],
-                  "Referer": FENGX_HD720_REFERER}
-        for _ in range(FENGX_HD720_TRIES):
-            try:
-                if http_probe(u720, dict(hdr720)) == 200:
-                    return {"url": u720, "header": hdr720}
-            except Exception:
-                pass
-
-    # -- 兜底：签名 hd（854×480）--
+    # -- 主路：签名 hd（854×480，稳定可长播）--
     qa_list = FENGX_QA_VIP if token else FENGX_QA_ANON
     url, err = _fengx_once(gid, http_get, qa_list)
 
@@ -1100,6 +1127,21 @@ def _fengx_playurl(channel_id, http_get, http_post, http_probe=None):
                     err = _err2 or err
         except Exception as e:
             print("[IPTV2.9.9] 凤凰探活异常: " + str(e))
+
+    # -- 备胎：签名主路失败时才试免签名 720p（该通道源站限流，时好时坏）--
+    if not url:
+        sc = _fengx_streamcode(channel_id)
+        u720 = FENGX_HD720_URL % sc if sc else ""
+        if u720:
+            hdr720 = {"User-Agent": FENGX_HEADERS_PLAY["User-Agent"],
+                      "Referer": FENGX_HD720_REFERER}
+            for _ in range(2):
+                try:
+                    if _sustained_probe(u720, dict(hdr720)):
+                        return {"url": u720, "header": hdr720}
+                except Exception:
+                    pass
+
     if not url:
         return {"url": "", "err": err or "接口未返回直播地址"}
     return {"url": url, "header": dict(FENGX_HEADERS_PLAY)}
@@ -1113,8 +1155,42 @@ def _twn_channels():
     return TWN_CHANNELS
 
 
+def _sustained_probe(url, headers=None, minbytes=TWN_PROBE_MINBYTES,
+                     timeout=TWN_PROBE_TIMEOUT):
+    """FLV/通用流持续探活：限时限速拉流，要求在 timeout 内拉到 minbytes，
+    过滤只放行缓冲头几秒就掐断的节点。可用返回 True"""
+    sess = getattr(_twn_probe_m3u8, "_session", None)
+    if sess is None:
+        _twn_probe_m3u8(url)  # 触发初始化
+        sess = getattr(_twn_probe_m3u8, "_session", None)
+        if sess is None:
+            return False
+    try:
+        rsp = sess.get(url, timeout=timeout, verify=False, stream=True,
+                       headers=headers or {"User-Agent": UA, "Connection": "close"})
+        if getattr(rsp, "status_code", 0) != 200:
+            try:
+                rsp.close()
+            except Exception:
+                pass
+            return False
+        buf = 0
+        for chunk in rsp.iter_content(65536):
+            buf += len(chunk)
+            if buf >= minbytes:
+                break
+        try:
+            rsp.close()
+        except Exception:
+            pass
+        return buf >= minbytes
+    except Exception:
+        return False
+
+
 def _twn_probe_m3u8(url, timeout=TWN_PROBE_TIMEOUT):
-    """轻量探活：GET 前 512 字节，确认是 HLS 播放列表。可用返回 True"""
+    """强化探活：不只是看 m3u8 头，而是真实跟到媒体片段并拉取 ≥512KB 数据，
+    过滤「播一秒就断」的假活源。可用返回 True"""
     sess = getattr(_twn_probe_m3u8, "_session", None)
     if sess is None:
         try:
@@ -1128,37 +1204,73 @@ def _twn_probe_m3u8(url, timeout=TWN_PROBE_TIMEOUT):
             _twn_probe_m3u8._session = sess
         except Exception:
             return False
-    try:
-        rsp = sess.get(url, timeout=timeout, verify=False, stream=True,
-                       headers={"User-Agent": UA, "Connection": "close"})
-        ok = (getattr(rsp, "status_code", 0) == 200)
-        head = b""
-        if ok:
-            try:
-                head = next(rsp.iter_content(512), b"") or b""
-            except Exception:
-                head = b""
+
+    def _fetch(url, limit, timeout=timeout):
         try:
-            rsp.close()
+            rsp = sess.get(url, timeout=timeout, verify=False, stream=True,
+                           headers={"User-Agent": UA, "Connection": "close"})
+            if getattr(rsp, "status_code", 0) != 200:
+                try:
+                    rsp.close()
+                except Exception:
+                    pass
+                return None
+            buf = b""
+            for chunk in rsp.iter_content(65536):
+                buf += chunk
+                if len(buf) >= limit:
+                    break
+            try:
+                rsp.close()
+            except Exception:
+                pass
+            return buf
         except Exception:
-            pass
-        return ok and head.lstrip()[:7] == b"#EXTM3U"
-    except Exception:
+            return None
+
+    body = _fetch(url, 65536)
+    if not body or body.lstrip()[:7] != b"#EXTM3U":
         return False
+    # 主播放列表 -> 取首个子播放列表/片段地址（最多跟两级）
+    for _ in range(2):
+        seg = None
+        for line in body.decode("utf-8", "replace").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                seg = line
+                break
+        if not seg:
+            return False
+        if "://" not in seg:
+            base = url.rsplit("/", 1)[0]
+            seg = base + "/" + seg
+        body = _fetch(seg, TWN_PROBE_MINBYTES)
+        if not body or body.lstrip()[:7] != b"#EXTM3U":
+            # 已是媒体片段：验证持续可拉流
+            return len(body or b"") >= TWN_PROBE_MINBYTES
+        # 还是播放列表，继续往下一级
+    return False
 
 
 def _twn_playurl(key, get_probe=None):
-    """按频道键在候选源里探活，返回 {"url":..., "header":...}"""
+    """按频道键在候选源里探活，返回 {"url":..., "header":...}
+    候选顺序：YouTube 官方直播中转（如有）-> 静态直连源（按配置顺序）"""
     cfg = None
     for k, _name, urls in TWN_CHANNELS:
         if k == key:
             cfg = urls
             break
-    if not cfg:
+    if cfg is None:
         return {"url": "", "err": "未知频道"}
+    candidates = []
+    yid = TWN_YT_IDS.get(key)
+    if yid:
+        for q in TWN_YT_QUALITIES:
+            candidates.append(TWN_YT_RELAY % (yid, q))
+    candidates += list(cfg)
     probe = get_probe or _twn_probe_m3u8
     last_err = "候选源全部不可用"
-    for u in cfg:
+    for u in candidates:
         for _ in range(TWN_PROBE_TRIES):
             if probe(u):
                 return {
