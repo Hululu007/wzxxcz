@@ -1,6 +1,6 @@
 # coding=utf-8
 """
-金牌影院(蓝兔子) www.lwdys.com | TVBox Python 爬虫 (V1.1)
+金牌影院(蓝兔子) www.lwdys.com | TVBox Python 爬虫 
 关键:
   - 全站走 /mw-movie/anonymous 接口, 服务端签名 sign = SHA1(MD5(排序参数 + key + t))
   - 分类 /anonymous/video/list (class/area/lang/year 与官网筛选一致)
@@ -10,7 +10,6 @@
       1080 蓝光 / 720 高清  (登录专享, 未登录服务器拒绝)
       480  标清  (免登录)
     以 3 条线路形式呈现, 可在 extend 配置 {"token": "登录token"} 解锁高清
-  - 简介添加指定前缀
 """
 import re
 import sys
@@ -337,6 +336,7 @@ class Spider(Spider):
         name = self._clean(data.get("vodName") or "") or vod_id
         pic = data.get("vodPic") or self.default_pic
 
+        # 1. 纯净的简介 (绝不拼接任何参数)
         content = self._clean(data.get("vodContent") or "") \
             or self._clean(data.get("vodBlurb") or "")
         if content:
@@ -344,6 +344,7 @@ class Spider(Spider):
         else:
             content = INTRO_PREFIX
 
+        # 2. 规范赋值，避免 UI 重复渲染前缀
         actor = self._clean(data.get("vodActor") or "")
         actor = re.sub(r",\s*", ", ", actor)
         director = self._clean(data.get("vodDirector") or "")
@@ -361,11 +362,7 @@ class Spider(Spider):
         year = data.get("vodYear") or ""
         area = data.get("vodArea") or ""
         vclass = data.get("vodClass") or ""
-        lang = data.get("vodLang") or ""
-        pubdate = data.get("vodPubdate") or ""
-        hits = data.get("vodHits") or 0
-        director_txt = ("导演：" + director) if director else ""
-
+        
         # ===== 剧集: 每个清晰度一条线路, id = "vodId-nid-清晰度下标" =====
         eps = data.get("episodeList") or []
         eps = sorted(eps, key=lambda e: e.get("sort") or 0)
@@ -382,32 +379,19 @@ class Spider(Spider):
                 play_from.append(line["name"])
                 play_url.append(eps_txt)
 
-        info = []
-        if remarks:
-            info.append("集数：" + remarks)
-        if year:
-            info.append("年份：" + str(year))
-        if area:
-            info.append("地区：" + str(area))
-        if vclass:
-            info.append("类型：" + str(vclass))
-        if lang:
-            info.append("语言：" + str(lang))
-        if pubdate:
-            info.append("上映：" + str(pubdate))
-        if hits:
-            info.append("热度：%s" % hits)
-        info_txt = "\n".join(info)
-
+        # 3. 返回数据：将元数据放入标准专属字段，让播放器自动上浮显示
         return {"list": [{
             "vod_id": vod_id,
             "vod_name": name,
             "vod_pic": pic,
-            "vod_content": info_txt + "\n\n" + content if info_txt else content,
-            "vod_actor": actor,
-            "vod_director": director_txt,
+            "vod_content": content,        # 纯简介
+            "vod_actor": actor,            # 系统自动渲染
+            "vod_director": director,      # 系统自动渲染，去掉重复的“导演：”
             "vod_score": score,
             "vod_remarks": remarks or ("共%d集" % len(eps) if eps else ""),
+            "vod_year": str(year),         # 系统自动提取到海报旁边
+            "vod_area": str(area),         # 系统自动提取到海报旁边
+            "vod_class": str(vclass),      # 系统自动提取到海报旁边
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url": "$$$".join(play_url),
         }]}
