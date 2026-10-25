@@ -3,7 +3,8 @@
 VS影院 vssdy.com | TVBox Python 爬虫 
 - 列表/搜索/分类：正则通吃
 - 详情：h1 + data-original + #desc + 线路 tabs + 剧集 UL
-- 播放：parse:1 交给 TVBox 嗅探（getPlay 在 dypck.js，异步 ajax + XOR 解密）
+- 播放：parse:1 交给 TVBox 嗅探（dypck.js 异步 + XOR）
+- 筛选：分类/地区/年份/类型 四维
 """
 import re
 import sys
@@ -64,6 +65,110 @@ CLASSES = [
     {"type_id": "短剧",   "type_name": "短剧"},
 ]
 
+# ===================== 筛选 =====================
+_ALL = {"n": "全部", "v": ""}
+
+_AREAS = [_ALL,
+    {"n": "中国大陆", "v": "中国大陆"},
+    {"n": "中国香港", "v": "中国香港"},
+    {"n": "中国台湾", "v": "中国台湾"},
+    {"n": "美国",     "v": "美国"},
+    {"n": "日本",     "v": "日本"},
+    {"n": "韩国",     "v": "韩国"},
+    {"n": "英国",     "v": "英国"},
+    {"n": "法国",     "v": "法国"},
+    {"n": "德国",     "v": "德国"},
+    {"n": "印度",     "v": "印度"},
+    {"n": "泰国",     "v": "泰国"},
+    {"n": "其他",     "v": "其他"},
+]
+
+_YEARS = [_ALL] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]
+
+_MOVIE_GENRES = [_ALL,
+    {"n": "动作", "v": "动作"},
+    {"n": "喜剧", "v": "喜剧"},
+    {"n": "爱情", "v": "爱情"},
+    {"n": "科幻", "v": "科幻"},
+    {"n": "恐怖", "v": "恐怖"},
+    {"n": "灾难", "v": "灾难"},
+    {"n": "战争", "v": "战争"},
+    {"n": "剧情", "v": "剧情"},
+    {"n": "悬疑", "v": "悬疑"},
+    {"n": "犯罪", "v": "犯罪"},
+    {"n": "动画", "v": "动画"},
+    {"n": "奇幻", "v": "奇幻"},
+    {"n": "冒险", "v": "冒险"},
+    {"n": "纪录片", "v": "纪录片"},
+]
+
+_TV_GENRES = [_ALL,
+    {"n": "剧情", "v": "剧情"},
+    {"n": "喜剧", "v": "喜剧"},
+    {"n": "爱情", "v": "爱情"},
+    {"n": "悬疑", "v": "悬疑"},
+    {"n": "犯罪", "v": "犯罪"},
+    {"n": "古装", "v": "古装"},
+    {"n": "动作", "v": "动作"},
+    {"n": "家庭", "v": "家庭"},
+    {"n": "国产", "v": "国产"},
+    {"n": "内地剧", "v": "内地剧"},
+]
+
+_VARIETY_GENRES = [_ALL,
+    {"n": "真人秀", "v": "真人秀"},
+    {"n": "脱口秀", "v": "脱口秀"},
+    {"n": "选秀", "v": "选秀"},
+    {"n": "访谈", "v": "访谈"},
+    {"n": "音乐", "v": "音乐"},
+    {"n": "生活", "v": "生活"},
+]
+
+_ANIME_GENRES = [_ALL,
+    {"n": "动画", "v": "动画"},
+    {"n": "日韩动漫", "v": "日韩动漫"},
+    {"n": "国产动漫", "v": "国产动漫"},
+    {"n": "欧美动漫", "v": "欧美动漫"},
+    {"n": "港台动漫", "v": "港台动漫"},
+]
+
+_DUANJU_GENRES = [_ALL,
+    {"n": "短剧", "v": "短剧"},
+    {"n": "爱情", "v": "爱情"},
+    {"n": "剧情", "v": "剧情"},
+    {"n": "爽文", "v": "爽文"},
+    {"n": "古装", "v": "古装"},
+    {"n": "穿越", "v": "穿越"},
+]
+
+FILTERS = {
+    "电影": [
+        {"key": "area",  "name": "地区", "value": _AREAS},
+        {"key": "year",  "name": "年份", "value": _YEARS},
+        {"key": "class", "name": "类型", "value": _MOVIE_GENRES},
+    ],
+    "电视剧": [
+        {"key": "area",  "name": "地区", "value": _AREAS},
+        {"key": "year",  "name": "年份", "value": _YEARS},
+        {"key": "class", "name": "类型", "value": _TV_GENRES},
+    ],
+    "综艺": [
+        {"key": "area",  "name": "地区", "value": _AREAS},
+        {"key": "year",  "name": "年份", "value": _YEARS},
+        {"key": "class", "name": "类型", "value": _VARIETY_GENRES},
+    ],
+    "动漫": [
+        {"key": "area",  "name": "地区", "value": _AREAS},
+        {"key": "year",  "name": "年份", "value": _YEARS},
+        {"key": "class", "name": "类型", "value": _ANIME_GENRES},
+    ],
+    "短剧": [
+        {"key": "area",  "name": "地区", "value": _AREAS},
+        {"key": "year",  "name": "年份", "value": _YEARS},
+        {"key": "class", "name": "类型", "value": _DUANJU_GENRES},
+    ],
+}
+
 # ===================== 列表正则 =====================
 _RE_CARD = re.compile(
     r'<a\s+class="[^"]*stui-vodlist__thumb lazyload[^"]*"\s+'
@@ -109,7 +214,6 @@ _RE_EPISODE_A = re.compile(
     r'<a title="([^"]*)" href="(/play/[^"]+)" target="_self">([^<]*)</a>',
     re.S | re.I)
 
-# ===================== 播放直链（尽力版）正则 =====================
 _RE_PLAY_PATH = re.compile(r'/play/(\d+)-(\d+)-(\d+)\.html', re.I)
 
 
@@ -208,7 +312,7 @@ class Spider(Spider):
         return 9999
 
     def homeContent(self, filter=False):
-        return {"class": CLASSES}
+        return {"class": CLASSES, "filters": FILTERS}
 
     def homeVideoContent(self):
         html = self._fetch(self.site_url + "/")
@@ -217,22 +321,20 @@ class Spider(Spider):
 
     def categoryContent(self, tid, pg, filter, extend):
         page = int(pg) if pg else 1
-        area = ""
-        year = ""
+
+        area, year, genre = "", "", ""
         if isinstance(extend, dict):
-            area = extend.get("area", "") or ""
-            year = extend.get("year", "") or ""
-            if area == "全部":
-                area = ""
-            if year == "全部":
-                year = ""
+            area  = extend.get("area", "")  or ""
+            year  = extend.get("year", "")  or ""
+            genre = extend.get("class", "") or ""
+            if area  == "全部": area  = ""
+            if year  == "全部": year  = ""
+            if genre == "全部": genre = ""
 
-        cls_enc = urllib.parse.quote(tid)
-        area_enc = urllib.parse.quote(area) if area else ""
-        year_enc = urllib.parse.quote(year) if year else ""
-
-        path = "/catalog/%s-%s-%s------%d-24.html" % (
-            cls_enc, area_enc, year_enc, page - 1)
+        # 模板：/catalog/{分类}-{地区}-{年份}-{类型}-----{page-1}-24.html
+        # 空字段留空；字母、排序不用；结尾 5 个 - 固定
+        path = "/catalog/%s-%s-%s-%s-----%d-24.html" % (
+            tid, area, year, genre, page - 1)
         url = self.site_url + path + "?order=&page=%d&size=24" % (page - 1)
         self.log("category: %s" % url)
 
@@ -354,7 +456,6 @@ class Spider(Spider):
         play_page = id if id.startswith("http") else self._fix_url(id)
         self.log("player: %s" % play_page)
 
-        # 优先：尝试直链（尽力版）
         if self.extend.get("direct"):
             direct = self._try_direct_m3u8(play_page)
             if direct:
@@ -366,7 +467,6 @@ class Spider(Spider):
                     "header": {"User-Agent": UA, "Referer": self.site_url + "/"},
                 }
 
-        # 兜底：交给 TVBox 嗅探
         self.log("  => parse:1 交给 TVBox 嗅探")
         return {
             "parse": 1,
@@ -375,22 +475,13 @@ class Spider(Spider):
             "header": {"User-Agent": UA, "Referer": self.site_url + "/"},
         }
 
-    # ---------- 直链（尽力版，可能因算法变动失效） ----------
     def _try_direct_m3u8(self, play_page):
-        """
-        复现 dypck.js 的 getPlay 逻辑：
-          1. 请求 /gpyj/{vid}&pid={line}&url={line}-{ep}&t={ts}&key={calc}
-          2. 拿到 hex 响应，XOR 解密
-          3. 返回最终 m3u8
-        任何一步算法变动都会失败，失败时返回 "" 由 parse:1 兜底。
-        """
         m = _RE_PLAY_PATH.search(play_page)
         if not m:
             return ""
         vid, line_idx, ep_idx = m.group(1), int(m.group(2)), int(m.group(3))
 
         ts = int(time.time())
-        # key 算法（基于 dypck.js 反混淆）
         key = ((ts * (ts % 0x10) % 0x5fb) +
                (ts * (ts % 0x20)) +
                0x3020d +
@@ -415,7 +506,6 @@ class Spider(Spider):
             self.log("  direct raw 异常: %r" % raw[:60])
             return ""
 
-        # XOR 解密
         try:
             half = len(raw) // 2
             out = []
