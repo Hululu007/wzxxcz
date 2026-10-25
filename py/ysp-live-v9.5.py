@@ -38,9 +38,24 @@ IPTV 2.9.9 源导出插件（组织风格参照 剧圈圈.py）
               证据：HTTP 200 + Content-Type: video/x-flv + FLV 文件头（单次取流 2～2.6 MB）
               注：接口下发的一次性签名地址偶发 403，插件在取流前做一次轻量探活，命中 403 时
               自动重新申请地址，避免偶发失败。
+              【清晰度实测结论】匿名（无有效 token）情况下每路凤凰频道源站只有两档真实流：
+                *48.flv = 854×480（对应 live_qa=hd）
+                *36.flv = 640×360（sd/uhd/shd/hhd/720p/1080p 等所有其它 qa 名一律映射到它，
+                                   名字叫 uhd/1080p 也是 360p，切勿被命名迷惑）
+              live_qa=fhd 需要有效 VIP token（fengshows 登录接口），匿名登录（code=852）源站
+              一律回「賬號錯誤」，因此 fhd 在无账号时恒不可用；854×480 即匿名可用上限。
+              dispatch.fengshows.cn:8484 会 301 跳转到 qctv.fengshows.cn（query 原样保留），
+              签名在 query 里不受影响，播放器跟随 301 即可。
   点播        国内一线 https://cj.lziapi.com/api.php/provide/vod/from/lzm3u8/ （JSON，约 16 万条）
               国内二线 https://bfzyapi.com/api.php/provide/vod/at/xml （XML，约 16.5 万条）
               列表 / 分类 / 详情 / 搜索 四类请求均实测通。
+  台湾直播     中国台湾 30 路（中天系/TVBS系/民视/三立/东森/中视/华视/公视/年代/
+              八大/大爱/龙华/靖天/Momo），来自公开聚合源（198.16.100.90 与 50.7.238.114
+              双节点互为镜像，中天系另有抖音 CDN 源）。
+              每路频道挂多条候选源，取流前逐路探活（校验 200 + #EXTM3U 头），
+              取第一个可用的；候选源列表可在 TWN_CHANNELS 里自行增补。
+              注意：聚合源稳定性一般且无法长期保证，若全部失效请补充新源；
+              中天官方 24h 直播在 YouTube「中天電視」有正版流，但需代理环境。
 
   说明：智播源站里 2 个键（btws、gxpd）的接口能给 playurl 且实测可播，但源站侧没有公开它们
   的频道名（央视频网页版频道列表里没有这两个 pid），故频道名标为「待确认频道」。
@@ -132,7 +147,142 @@ SEARCH_CACHE_TTL = 30
 CIRCUIT_FAILS = 3
 CIRCUIT_COOLDOWN = 30
 
-GROUP_NAMES = {"ysp": "央视频", "hebtv": "河北电视台", "fengx": "凤凰卫视"}
+GROUP_NAMES = {"ysp": "央视频", "hebtv": "河北电视台", "fengx": "凤凰卫视", "twn": "台湾直播"}
+
+# ---------------------------------------------------------------------------
+# 中天直播（中国台湾）：常量
+# 直播源为公开聚合源，按顺序探活，取第一个可用的（单源失效自动切下一路）。
+# 注：这些聚合源稳定性一般，且沙箱环境无法实测，若全部失效可自行在列表里补充新源；
+#     中天官方 24h 直播在 YouTube（中天電視）有正版流，但需代理环境，TVBox 场景不适用。
+# ---------------------------------------------------------------------------
+
+TWN_CHANNELS = [
+    ("ztxw", "中天新闻", [
+        "https://pull-l3-cny.douyincdn.com/live/7898d38d54c60879ba96a1fa42edbd53.m3u8",
+        "http://198.16.100.90:8278/ctinews/playlist.m3u8?tid=MB0B9546410395464103&ct=19249&tsum=30c62d7eec5ce9a49a64c3fa3ff8a8b7",
+        "http://50.7.238.114:8278/ctinews/playlist.m3u8?tid=MB0B9546410395464103&ct=19249&tsum=30c62d7eec5ce9a49a64c3fa3ff8a8b7",
+    ]),
+    ("ztzh", "中天综合", [
+        "https://pull-l3-cny.douyincdn.com/live/5f26752efeee9e0c53cf6b530640ce60.m3u8",
+        "http://198.16.100.90:8278/ctizhonghe/playlist.m3u8?tid=MB6B3888954738889547&ct=19254&tsum=d0cb922e44e8a16bea598530697c581e",
+        "http://50.7.238.114:8278/ctizhonghe/playlist.m3u8?tid=MB6B3888954738889547&ct=19254&tsum=d0cb922e44e8a16bea598530697c581e",
+    ]),
+    ("ztyl", "中天娱乐", [
+        "https://pull-l3-cny.douyincdn.com/live/37e4951f0608d79a74ebed4ab2da462a.m3u8",
+        "http://198.16.100.90:8278/ctient/playlist.m3u8?tid=MC9C7081133170811331&ct=19249&tsum=8b08b54208f3ee30e12f419d587f46ac",
+        "http://50.7.238.114:8278/ctient/playlist.m3u8?tid=MC9C7081133170811331&ct=19249&tsum=8b08b54208f3ee30e12f419d587f46ac",
+    ]),
+    ("ztyz", "中天亚洲", [
+        "http://198.16.100.90:8278/ctiasia_twn/playlist.m3u8?tid=MBAB5565131955651319&ct=19249&tsum=6c292a6f51658779ced6a108f779ed35",
+        "http://50.7.238.114:8278/ctiasia_twn/playlist.m3u8?tid=MBAB5565131955651319&ct=19249&tsum=6c292a6f51658779ced6a108f779ed35",
+    ]),
+    ("tvbs", "TVBS", [
+        "http://198.16.100.90:8278/tvbs/playlist.m3u8?tid=MEFE3093330530933305&ct=19249&tsum=ce6b5e9293b3618104ad53084745a223",
+        "http://50.7.238.114:8278/tvbs/playlist.m3u8?tid=MEFE3093330530933305&ct=19249&tsum=ce6b5e9293b3618104ad53084745a223",
+    ]),
+    ("tvbsn", "TVBS新闻", [
+        "http://198.16.100.90:8278/tvbs_n/playlist.m3u8?tid=MA4A2233260122332601&ct=19249&tsum=513a9dcb42fa8b98e1792d513dd3e2ee",
+        "http://50.7.238.114:8278/tvbs_n/playlist.m3u8?tid=MA4A2233260122332601&ct=19249&tsum=513a9dcb42fa8b98e1792d513dd3e2ee",
+    ]),
+    ("tvbsh", "TVBS欢乐", [
+        "http://198.16.100.90:8278/tvbshuanle_twn/playlist.m3u8?tid=MA5A9262292692622926&ct=19254&tsum=cd369d68a5d2c1a2fa04df748cda142c",
+        "http://50.7.238.114:8278/tvbshuanle_twn/playlist.m3u8?tid=MA5A9262292692622926&ct=19254&tsum=cd369d68a5d2c1a2fa04df748cda142c",
+    ]),
+    ("ftv", "民视", [
+        "http://198.16.100.90:8278/ftvhd_taiwan/playlist.m3u8?tid=MC8C5908644059086440&ct=19249&tsum=c96d2cd48b11d40ca9e97fb3addb1384",
+        "http://50.7.238.114:8278/ftvhd_taiwan/playlist.m3u8?tid=MC8C5908644059086440&ct=19249&tsum=c96d2cd48b11d40ca9e97fb3addb1384",
+    ]),
+    ("ftvn", "民视新闻", [
+        "http://198.16.100.90:8278/ftvnew_taiwan/playlist.m3u8?tid=MA7A6968320369683203&ct=19249&tsum=e3b040434ed43f12a738964a100a0e59",
+        "http://50.7.238.114:8278/ftvnew_taiwan/playlist.m3u8?tid=MA7A6968320369683203&ct=19249&tsum=e3b040434ed43f12a738964a100a0e59",
+    ]),
+    ("ftvtw", "民视台湾", [
+        "http://198.16.100.90:8278/ftvtaiwan_twn/playlist.m3u8?tid=MEFE5254515252545152&ct=19249&tsum=c17f872b1772df8f76032030cc40bdbd",
+        "http://50.7.238.114:8278/ftvtaiwan_twn/playlist.m3u8?tid=MEFE5254515252545152&ct=19249&tsum=c17f872b1772df8f76032030cc40bdbd",
+    ]),
+    ("slzh", "三立综合", [
+        "http://198.16.100.90:8278/sanlizhonghe/playlist.m3u8?tid=MF4F9472920894729208&ct=19249&tsum=874aaa2015440b417746e5c11fa40220",
+        "http://50.7.238.114:8278/sanlizhonghe/playlist.m3u8?tid=MF4F9472920894729208&ct=19249&tsum=874aaa2015440b417746e5c11fa40220",
+    ]),
+    ("slxj", "三立戏剧", [
+        "http://198.16.100.90:8278/sanlixiju_twn/playlist.m3u8?tid=MC3C7351075373510753&ct=19249&tsum=f70fc544635e38b2fd7b4bb39899df0e",
+        "http://50.7.238.114:8278/sanlixiju_twn/playlist.m3u8?tid=MC3C7351075373510753&ct=19249&tsum=f70fc544635e38b2fd7b4bb39899df0e",
+    ]),
+    ("ettvzh", "东森综合", [
+        "http://198.16.100.90:8278/ettvzhonghe/playlist.m3u8?tid=MC4C1214674912146749&ct=19254&tsum=9b96a50ba99dca1a02a27b05a6fb4b0d",
+        "http://50.7.238.114:8278/ettvzhonghe/playlist.m3u8?tid=MC4C1214674912146749&ct=19254&tsum=9b96a50ba99dca1a02a27b05a6fb4b0d",
+    ]),
+    ("ettvxj", "东森戏剧", [
+        "http://198.16.100.90:8278/ettvdrama/playlist.m3u8?tid=MA2A9945921599459215&ct=19249&tsum=c9097ecdf4a17c0922196dbf04b0c6e7",
+        "http://50.7.238.114:8278/ettvdrama/playlist.m3u8?tid=MA2A9945921599459215&ct=19249&tsum=c9097ecdf4a17c0922196dbf04b0c6e7",
+    ]),
+    ("ettvdy", "东森电影", [
+        "http://198.16.100.90:8278/ettvmovie/playlist.m3u8?tid=MBDB9268852192688521&ct=19254&tsum=7514b50ebc2e4b06f2e402578d0ac996",
+        "http://50.7.238.114:8278/ettvmovie/playlist.m3u8?tid=MBDB9268852192688521&ct=19254&tsum=7514b50ebc2e4b06f2e402578d0ac996",
+    ]),
+    ("ettvcs", "东森超视", [
+        "http://198.16.100.90:8278/ettvsuper/playlist.m3u8?tid=MB0B9022098390220983&ct=19249&tsum=594e3a93afe766cf27fd21b8addee391",
+        "http://50.7.238.114:8278/ettvsuper/playlist.m3u8?tid=MB0B9022098390220983&ct=19249&tsum=594e3a93afe766cf27fd21b8addee391",
+    ]),
+    ("ettvcj", "东森财经新闻", [
+        "http://198.16.100.90:8278/ettvcaijing_twn/playlist.m3u8?tid=MB8B2069463920694639&ct=19249&tsum=05ff51a1b274ce7d31d05bbf11df18ad",
+        "http://50.7.238.114:8278/ettvcaijing_twn/playlist.m3u8?tid=MB8B2069463920694639&ct=19249&tsum=05ff51a1b274ce7d31d05bbf11df18ad",
+    ]),
+    ("zs", "中视", [
+        "http://198.16.100.90:8278/zhongshihd_twn/playlist.m3u8?tid=MBDB6720263767202637&ct=19249&tsum=edd778f298b53c39b3b9706700032605",
+        "http://50.7.238.114:8278/zhongshihd_twn/playlist.m3u8?tid=MBDB6720263767202637&ct=19249&tsum=edd778f298b53c39b3b9706700032605",
+    ]),
+    ("zsn", "中视新闻", [
+        "http://198.16.100.90:8278/zhongshinews_twn/playlist.m3u8?tid=MD0D3377711133777111&ct=19249&tsum=ffaee3fe7040c96643b3c7f12bf2de8d",
+        "http://50.7.238.114:8278/zhongshinews_twn/playlist.m3u8?tid=MD0D3377711133777111&ct=19249&tsum=ffaee3fe7040c96643b3c7f12bf2de8d",
+    ]),
+    ("hs", "华视", [
+        "http://198.16.100.90:8278/ctshd_twn/playlist.m3u8?tid=MC3C3582911835829118&ct=19249&tsum=f2c0c86801d43be647206c4ddb8e9ce6",
+        "http://50.7.238.114:8278/ctshd_twn/playlist.m3u8?tid=MC3C3582911835829118&ct=19249&tsum=f2c0c86801d43be647206c4ddb8e9ce6",
+    ]),
+    ("pts", "公视", [
+        "http://198.16.100.90:8278/ctv_taiwan/playlist.m3u8?tid=MDCD6096520560965205&ct=19249&tsum=64237c7ffa0c00b62657a938247bcab0",
+        "http://50.7.238.114:8278/ctv_taiwan/playlist.m3u8?tid=MDCD6096520560965205&ct=19249&tsum=64237c7ffa0c00b62657a938247bcab0",
+    ]),
+    ("ndxw", "年代新闻", [
+        "http://198.16.100.90:8278/niandainews_twn/playlist.m3u8?tid=MBCB9184423891844238&ct=19249&tsum=ac0331d98099429b19c53fe6d20972ec",
+        "http://50.7.238.114:8278/niandainews_twn/playlist.m3u8?tid=MBCB9184423891844238&ct=19249&tsum=ac0331d98099429b19c53fe6d20972ec",
+    ]),
+    ("bdzh", "八大综合", [
+        "http://198.16.100.90:8278/badazhonghe/playlist.m3u8?tid=MCFC9951205299512052&ct=19249&tsum=dc4ca0de5e57c9f4caee0bb4e80c098a",
+        "http://50.7.238.114:8278/badazhonghe/playlist.m3u8?tid=MCFC9951205299512052&ct=19249&tsum=dc4ca0de5e57c9f4caee0bb4e80c098a",
+    ]),
+    ("bdxj", "八大戏剧", [
+        "http://198.16.100.90:8278/badadrama/playlist.m3u8?tid=MBCB2433143824331438&ct=19254&tsum=51660c351b3991d81434e43bd1ab720e",
+        "http://50.7.238.114:8278/badadrama/playlist.m3u8?tid=MBCB2433143824331438&ct=19254&tsum=51660c351b3991d81434e43bd1ab720e",
+    ]),
+    ("bddy", "八大第一", [
+        "http://198.16.100.90:8278/badafirst/playlist.m3u8?tid=MD2D8073200480732004&ct=19254&tsum=5cb051b366ad3740cebcc06a987d749e",
+        "http://50.7.238.114:8278/badafirst/playlist.m3u8?tid=MD2D8073200480732004&ct=19254&tsum=5cb051b366ad3740cebcc06a987d749e",
+    ]),
+    ("daai", "大爱一台", [
+        "http://198.16.100.90:8278/daai_twn/playlist.m3u8?tid=ME5E3594665135946651&ct=19249&tsum=1628ac38fd6a79879fccae39de8e845b",
+        "http://50.7.238.114:8278/daai_twn/playlist.m3u8?tid=ME5E3594665135946651&ct=19249&tsum=1628ac38fd6a79879fccae39de8e845b",
+    ]),
+    ("lhxj", "龙华戏剧", [
+        "http://198.16.100.90:8278/lunghuaxiju_twn/playlist.m3u8?tid=MF2F2793524427935244&ct=19249&tsum=db1ef83fbbbae9a364979295fd690f7d",
+        "http://50.7.238.114:8278/lunghuaxiju_twn/playlist.m3u8?tid=MF2F2793524427935244&ct=19249&tsum=db1ef83fbbbae9a364979295fd690f7d",
+    ]),
+    ("lhox", "龙华偶像", [
+        "http://198.16.100.90:8278/lunghuaidol_twn/playlist.m3u8?tid=MD6D6087277960872779&ct=19249&tsum=83e30fd8200429793355d21bf37719ff",
+        "http://50.7.238.114:8278/lunghuaidol_twn/playlist.m3u8?tid=MD6D6087277960872779&ct=19249&tsum=83e30fd8200429793355d21bf37719ff",
+    ]),
+    ("jtgj", "靖天国际", [
+        "http://198.16.100.90:8278/jingtianintl_twn/playlist.m3u8?tid=MC7C4153806141538061&ct=19254&tsum=79854f3ccdc23693ea39da52af54d35b",
+        "http://50.7.238.114:8278/jingtianintl_twn/playlist.m3u8?tid=MC7C4153806141538061&ct=19254&tsum=79854f3ccdc23693ea39da52af54d35b",
+    ]),
+    ("momo", "Momo亲子台", [
+        "http://198.16.100.90:8278/momo1_twn/playlist.m3u8?tid=MFFF9797479997974799&ct=19249&tsum=0bd9dac79cd373cc918357d3199c8b22",
+        "http://50.7.238.114:8278/momo1_twn/playlist.m3u8?tid=MFFF9797479997974799&ct=19249&tsum=0bd9dac79cd373cc918357d3199c8b22",
+    ]),
+]
+TWN_PROBE_TRIES = 2
+TWN_PROBE_TIMEOUT = 6
 
 
 # ---------------------------------------------------------------------------
@@ -264,9 +414,9 @@ HEBTV_CHANNELS = [
 FENGX_LOGIN = "https://m.fengshows.com/api/v3/mp/user/login"
 FENGX_AUTH = "https://api.fengshows.cn/hub/live/auth-url?live_qa=%s&live_id=%s"
 FENGX_CHANNELS = [
-    ("fhzw", "f7f48462-9b13-485b-8101-7b54716411ec", "凤凰中文"),
-    ("fhzx", "7c96b084-60e1-40a9-89c5-682b994fb680", "凤凰资讯"),
-    ("fhhk", "15e02d92-1698-416c-af2f-3e9a872b4d78", "凤凰香港"),
+    ("fhzw", "f7f48462-9b13-485b-8101-7b54716411ec", "凤凰中文", "pcc"),
+    ("fhzx", "7c96b084-60e1-40a9-89c5-682b994fb680", "凤凰资讯", "pin"),
+    ("fhhk", "15e02d92-1698-416c-af2f-3e9a872b4d78", "凤凰香港", "phk"),
 ]
 FENGX_HEADERS_REQ = {
     "User-Agent": "okhttp/3.14.9",
@@ -279,6 +429,18 @@ FENGX_HEADERS_PLAY = {
     "Connection": "close",
     "Referer": "dispatch.fengshows.cn",
 }
+# 匿名可用的 qa 只有 hd（854×480）；fhd 需 VIP token，其余 qa 名全部映射到 360p（勿用）
+FENGX_QA_ANON = ("hd",)
+FENGX_QA_VIP = ("fhd", "hd")
+
+# 720p 免签名通道（实测结论）：
+#   qctv.fengshows.cn 上的 *72.flv（1280×720）只校验 Referer 头、不校验 txSecret，
+#   带「Referer: www.fengshows.com」即可直接拉流（凤凰中文 pcc72 / 凤凰资讯 pin72 有效，
+#   凤凰香港 phk72 源站不存在，自动回退签名 480p）。
+#   注意 720p 节点为轮询负载，偶发 403，故取流前做最多 N 次探活，全失败再降级到签名 hd。
+FENGX_HD720_URL = "http://qctv.fengshows.cn/live/0701%s72.flv"
+FENGX_HD720_REFERER = "www.fengshows.com"
+FENGX_HD720_TRIES = 4
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +463,7 @@ CLASSES = [
     {"type_name": "央视频直播", "type_id": "live_ysp"},
     {"type_name": "河北电视台", "type_id": "live_hebtv"},
     {"type_name": "凤凰卫视", "type_id": "live_fengx"},
+    {"type_name": "台湾直播", "type_id": "live_twn"},
     {"type_name": "直播全部", "type_id": "live_all"},
     {"type_name": "国内一线", "type_id": "vod1"},
     {"type_name": "国内二线", "type_id": "vod2"},
@@ -370,6 +533,19 @@ def _md5_hex(s):
 
 def _strip(txt):
     return re.sub(r"\s+", " ", txt or "").strip()
+
+
+def _parse_extend(extend):
+    """兼容部分客户端把筛选参数传成 JSON 字符串的情况"""
+    if isinstance(extend, dict):
+        return extend
+    if isinstance(extend, str) and extend.strip():
+        try:
+            d = json.loads(extend)
+            return d if isinstance(d, dict) else {}
+        except Exception:
+            return {}
+    return {}
 
 
 def _urllib_get(url, headers=None, timeout=12):
@@ -827,12 +1003,24 @@ def _hebtv_playurl(idx, http_get):
 
 # ---------------------------------------------------------------------------
 # 凤凰卫视播放地址解析（移植 fhx.js 的直播分支）
-# 流程: 登录换 token（源站常返回账号错误，token 实际为空也可用）
-#       -> api.fengshows.cn/hub/live/auth-url?live_qa=fhd|hd&live_id=<guid>
+# 流程: 尝试登录换 token（源站常返回账号错误，匿名 token 实际为空也可用）
+#       -> api.fengshows.cn/hub/live/auth-url?live_qa=hd&live_id=<guid>
+# 清晰度说明（实测）：
+#   - hd  -> *48.flv = 854×480，匿名可用上限
+#   - fhd -> 需有效 VIP token，匿名恒被拒（賬號已過期）
+#   - sd/uhd/shd/hhd/720p/1080p 等其它 qa 名一律映射到 *36.flv = 640×360，不要用
+#   - dispatch.fengshows.cn:8484 会 301 跳 qctv.fengshows.cn，签名在 query 里不受影响
 # ---------------------------------------------------------------------------
 
 def _fengx_guids():
-    return dict((cid, gid) for cid, gid, _ in FENGX_CHANNELS)
+    return dict((cid, gid) for cid, gid, _n, _sc in FENGX_CHANNELS)
+
+
+def _fengx_streamcode(cid):
+    for c, _gid, _n, sc in FENGX_CHANNELS:
+        if c == cid:
+            return sc
+    return ""
 
 
 def _fengx_token(http_post):
@@ -848,17 +1036,12 @@ def _fengx_token(http_post):
     return ((data or {}).get("data") or {}).get("token", "") or ""
 
 
-def _fengx_once(gid, http_get, http_post, force_token=False):
-    """申请一次直播地址，返回 (url, err)"""
-    token = "" if force_token else (getattr(_fengx_once, "_token", "") or "")
-    if not token:
-        token = _fengx_token(http_post)
-        _fengx_once._token = token
+def _fengx_once(gid, http_get, qa_list):
+    """按给定 qa 顺序申请一次直播地址，返回 (url, err)"""
     headers = dict(FENGX_HEADERS_REQ)
-    headers["token"] = token
     url = ""
     err = ""
-    for qa in ("fhd", "hd"):
+    for qa in qa_list:
         text = http_get(FENGX_AUTH % (qa, gid), headers, 12)
         if not text:
             err = "接口请求失败"
@@ -876,22 +1059,116 @@ def _fengx_once(gid, http_get, http_post, force_token=False):
 
 def _fengx_playurl(channel_id, http_get, http_post, http_probe=None):
     """返回 {"url":..., "header":...}；
-    直播地址是一次性签名（txTime 存在有效期），实测偶发 403，故探活为 403 时自动再申请一次。"""
+    清晰度策略：凤凰中文/资讯优先走免签名 720p（qctv *72.flv + Referer www.fengshows.com，
+    探活失败自动降级），凤凰香港无 72 流，走签名 hd（854×480）。
+    签名地址是一次性的（txTime 有效期），实测偶发 403，探活为 403 时自动再申请一次。"""
     gid = _fengx_guids().get(channel_id)
     if not gid:
         return {"url": "", "err": "未知频道"}
-    url, err = _fengx_once(gid, http_get, http_post)
+
+    token = getattr(_fengx_playurl, "_token", None)
+    if token is None:
+        token = _fengx_token(http_post)
+        _fengx_playurl._token = token
+
+    # -- 先试免签名 720p --
+    sc = _fengx_streamcode(channel_id)
+    if sc and http_probe is not None:
+        u720 = FENGX_HD720_URL % sc
+        hdr720 = {"User-Agent": FENGX_HEADERS_PLAY["User-Agent"],
+                  "Referer": FENGX_HD720_REFERER}
+        for _ in range(FENGX_HD720_TRIES):
+            try:
+                if http_probe(u720, dict(hdr720)) == 200:
+                    return {"url": u720, "header": hdr720}
+            except Exception:
+                pass
+
+    # -- 兜底：签名 hd（854×480）--
+    qa_list = FENGX_QA_VIP if token else FENGX_QA_ANON
+    url, err = _fengx_once(gid, http_get, qa_list)
+
     if url and http_probe is not None:
         try:
             if http_probe(url, dict(FENGX_HEADERS_PLAY)) == 403:
-                url2, _err2 = _fengx_once(gid, http_get, http_post, force_token=True)
+                # 一次性签名偶发 403：重新申请地址即可（登录接口匿名恒失败，不必重登）
+                url2, _err2 = _fengx_once(gid, http_get, FENGX_QA_ANON)
                 if url2:
                     url = url2
+                else:
+                    url = ""
+                    err = _err2 or err
         except Exception as e:
             print("[IPTV2.9.9] 凤凰探活异常: " + str(e))
     if not url:
         return {"url": "", "err": err or "接口未返回直播地址"}
     return {"url": url, "header": dict(FENGX_HEADERS_PLAY)}
+
+
+# ---------------------------------------------------------------------------
+# 中天直播播放地址解析（公开聚合源，逐路探活取第一个可用的）
+# ---------------------------------------------------------------------------
+
+def _twn_channels():
+    return TWN_CHANNELS
+
+
+def _twn_probe_m3u8(url, timeout=TWN_PROBE_TIMEOUT):
+    """轻量探活：GET 前 512 字节，确认是 HLS 播放列表。可用返回 True"""
+    sess = getattr(_twn_probe_m3u8, "_session", None)
+    if sess is None:
+        try:
+            import requests as _rq
+            from requests.adapters import HTTPAdapter
+            sess = _rq.Session()
+            adapter = HTTPAdapter(pool_connections=10, pool_maxsize=10)
+            sess.mount("http://", adapter)
+            sess.mount("https://", adapter)
+            sess.trust_env = False
+            _twn_probe_m3u8._session = sess
+        except Exception:
+            return False
+    try:
+        rsp = sess.get(url, timeout=timeout, verify=False, stream=True,
+                       headers={"User-Agent": UA, "Connection": "close"})
+        ok = (getattr(rsp, "status_code", 0) == 200)
+        head = b""
+        if ok:
+            try:
+                head = next(rsp.iter_content(512), b"") or b""
+            except Exception:
+                head = b""
+        try:
+            rsp.close()
+        except Exception:
+            pass
+        return ok and head.lstrip()[:7] == b"#EXTM3U"
+    except Exception:
+        return False
+
+
+def _twn_playurl(key, get_probe=None):
+    """按频道键在候选源里探活，返回 {"url":..., "header":...}"""
+    cfg = None
+    for k, _name, urls in TWN_CHANNELS:
+        if k == key:
+            cfg = urls
+            break
+    if not cfg:
+        return {"url": "", "err": "未知频道"}
+    probe = get_probe or _twn_probe_m3u8
+    last_err = "候选源全部不可用"
+    for u in cfg:
+        for _ in range(TWN_PROBE_TRIES):
+            if probe(u):
+                return {
+                    "url": u,
+                    "header": {"User-Agent": UA, "Connection": "close"},
+                }
+        last_err = "源不可用: " + u
+    return {"url": "", "err": last_err}
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -1182,8 +1459,11 @@ class Spider(Spider):
             for idx, name in HEBTV_CHANNELS:
                 items.append(self._live_item("hebtv", idx, name, GROUP_NAMES["hebtv"]))
         if tid in ("live_fengx", "live_all"):
-            for cid, _gid, name in FENGX_CHANNELS:
+            for cid, _gid, name, _sc in FENGX_CHANNELS:
                 items.append(self._live_item("fengx", cid, name, GROUP_NAMES["fengx"]))
+        if tid in ("live_twn", "live_all"):
+            for cid, name, _urls in TWN_CHANNELS:
+                items.append(self._live_item("twn", cid, name, GROUP_NAMES["twn"]))
         return items
 
     def _live_category(self, tid, page):
@@ -1209,7 +1489,12 @@ class Spider(Spider):
                     return name
             return "河北电视台 " + str(key)
         if kind == "fengx":
-            for cid, _gid, name in FENGX_CHANNELS:
+            for cid, _gid, name, _sc in FENGX_CHANNELS:
+                if cid == key:
+                    return name
+            return str(key)
+        if kind == "twn":
+            for cid, name, _urls in TWN_CHANNELS:
                 if cid == key:
                     return name
             return str(key)
@@ -1238,7 +1523,7 @@ class Spider(Spider):
             if not api:
                 return {"list": [], "page": page, "pagecount": 1, "limit": VOD_PAGE_SIZE, "total": 0}
 
-            ext = extend or {}
+            ext = _parse_extend(extend)
             cls = str(ext.get("class", "") or "")
             cache_key = (tid, cls, page)
             now = time.time()
@@ -1383,6 +1668,12 @@ class Spider(Spider):
                     if r.get("url"):
                         return {"parse": 0, "url": r["url"], "header": r["header"]}
                     print("[IPTV2.9.9] 凤凰卫视取流失败: " + key + " err=" + str(r.get("err", "")))
+
+                elif kind == "twn":
+                    r = _twn_playurl(key)
+                    if r.get("url"):
+                        return {"parse": 0, "url": r["url"], "header": r["header"]}
+                    print("[IPTV2.9.9] 台湾直播取流失败: " + key + " err=" + str(r.get("err", "")))
 
                 return {"parse": 0, "url": ""}
         except Exception as e:
