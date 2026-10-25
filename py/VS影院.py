@@ -1,6 +1,6 @@
 # coding=utf-8
 """
-VS影院 vssdy.com | TVBox Python 爬虫 (V2.0 完美版)
+VS影院 vssdy.com | TVBox Python 爬虫 
 - 亮点：修复元信息抓取（类型/地区/年份/完整演员/导演）
 - 亮点：默认开启极速秒开（Python 复现 dypck.js 直链解密，告别 WebView 嗅探延迟）
 - 保留：筛选（分类/地区/年份/类型）四维支持
