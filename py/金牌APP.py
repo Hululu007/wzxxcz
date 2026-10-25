@@ -1,11 +1,16 @@
 # coding=utf-8
 """
-蓝兔子影院 www.lwdys.com | TVBox Python 爬虫 
+金牌影院(蓝兔子) www.lwdys.com | TVBox Python 爬虫 (V1.1)
 关键:
   - 全站走 /mw-movie/anonymous 接口, 服务端签名 sign = SHA1(MD5(排序参数 + key + t))
-  - 分类 /anonymous/video/list, 搜索 /anonymous/video/searchByWord
+  - 分类 /anonymous/video/list (class/area/lang/year 与官网筛选一致)
+  - 搜索 /anonymous/video/searchByWord
   - 详情 /anonymous/video/detail (含 episodeList)
-  - 播放 /anonymous/v2/video/episode/url -> 直链 m3u8 (parse=0)
+  - 播放 /anonymous/v2/video/episode/url -> 每集 3 个清晰度
+      1080 蓝光 / 720 高清  (登录专享, 未登录服务器拒绝)
+      480  标清  (免登录)
+    以 3 条线路形式呈现, 可在 extend 配置 {"token": "登录token"} 解锁高清
+  - 简介添加指定前缀
 """
 import re
 import sys
@@ -74,57 +79,79 @@ CLASSES = [
     {"type_id": "88", "type_name": "短剧"},
 ]
 
-_SORTS = [{"n": "综合排序", "v": ""},
-          {"n": "豆瓣评分", "v": "douban"},
-          {"n": "热度最高", "v": "hot"},
-          {"n": "最新上架", "v": "new"}]
-
-_YEARS = [{"n": "全部", "v": ""}] + \
-         [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]
-
-_AREAS = [
-    {"n": "全部", "v": ""},
-    {"n": "中国大陆", "v": "中国大陆"}, {"n": "美国", "v": "美国"},
-    {"n": "中国香港", "v": "中国香港"}, {"n": "中国台湾", "v": "中国台湾"},
-    {"n": "韩国", "v": "韩国"}, {"n": "日本", "v": "日本"},
-    {"n": "英国", "v": "英国"}, {"n": "法国", "v": "法国"},
-    {"n": "泰国", "v": "泰国"}, {"n": "印度", "v": "印度"},
-    {"n": "其它", "v": "其它"},
-]
-
+# ===== 筛选项与官网 /vod/show/id/N 页面完全一致 (V1.1 修正) =====
 _FILTERS_MAP = {
-    "1": ["全部", "剧情", "喜剧", "动作", "爱情", "惊悚", "犯罪", "恐怖",
-          "悬疑", "冒险", "奇幻", "科幻", "家庭", "历史", "战争", "纪录片",
-          "古装", "音乐", "动画", "传记", "武侠", "运动", "西部", "灾难", "歌舞"],
-    "2": ["全部", "剧情", "喜剧", "爱情", "犯罪", "悬疑", "家庭", "古装",
-          "惊悚", "动作", "奇幻", "科幻", "都市", "历史", "战争", "冒险",
-          "武侠", "恐怖", "青春", "传记", "谍战", "情感", "军旅", "甜宠"],
-    "3": ["全部", "真人秀", "脱口秀", "国产综艺", "喜剧", "晚会", "音乐",
-          "纪录", "游戏", "生活", "港台综艺", "日韩综艺", "欧美综艺", "美食", "竞技"],
-    "4": ["全部", "动画", "冒险", "喜剧", "奇幻", "剧情", "科幻", "动作",
-          "儿童", "悬疑", "都市", "家庭", "国漫", "日常", "爱情", "玄幻",
-          "日漫", "治愈", "古风", "武侠", "运动", "校园"],
-    "88": ["全部", "短剧", "剧情", "爱情", "爽文", "古装", "悬疑", "喜剧",
-           "奇幻", "都市", "玄幻", "家庭", "穿越", "武侠", "科幻"],
+    "1": {
+        "class": ["剧情", "喜剧", "动作", "爱情", "惊悚", "犯罪", "恐怖",
+                  "悬疑", "冒险", "奇幻", "科幻", "动画", "战争", "灾难", "伦理", "其他"],
+        "area": ["中国大陆", "中国香港", "中国台湾", "美国", "韩国", "日本",
+                 "英国", "法国", "泰国", "印度", "其他"],
+        "lang": ["国语", "粤语", "英语", "韩语", "日语", "其他"],
+        "year": ["2026", "2025", "2024", "2023", "2022", "2021", "2020",
+                 "2019", "2018", "2017", "2016", "2015", "2014", "2013",
+                 "2012", "2011", "2010", "2009~2000"],
+    },
+    "2": {
+        "class": ["剧情", "喜剧", "动作", "爱情", "悬疑", "犯罪", "家庭",
+                  "奇幻", "历史", "古装", "战争", "短片", "其他"],
+        "area": ["中国大陆", "中国香港", "中国台湾", "美国", "韩国", "日本",
+                 "泰国", "其他"],
+        "lang": ["国语", "粤语", "英语", "韩语", "日语", "泰语", "其他"],
+        "year": ["2026", "2025", "2024", "2023", "2022", "2021", "2020",
+                 "2019", "2018", "2017", "2016", "2015", "2014", "2013",
+                 "2012", "2011", "2010"],
+    },
+    "3": {
+        "class": ["真人秀", "脱口秀", "音乐"],
+        "area": ["中国大陆", "中国香港", "中国台湾", "美国", "韩国", "日本", "其他"],
+        "lang": ["国语", "粤语", "英语", "韩语", "日语", "其他"],
+        "year": ["2026", "2025", "2024", "2023", "2022", "2021", "2020"],
+    },
+    "4": {
+        "class": ["冒险", "动作", "动画", "喜剧", "战争", "热血", "科幻", "运动"],
+        "area": ["中国大陆", "日本", "美国", "其他"],
+        "lang": ["国语", "日语", "英语", "其他"],
+        "year": ["2026", "2025", "2024", "2023", "2022", "2021", "2020",
+                 "2019", "2018", "2017", "2016", "2015", "2014", "2013",
+                 "2012", "2011", "2010"],
+    },
+    "88": {
+        "class": ["爱情", "甜宠", "科幻", "穿越", "虐恋", "逆袭", "重生",
+                  "冒险", "剧情", "动作", "战争", "武侠", "其他"],
+        "year": ["2026", "2025", "2024", "2023", "2022", "2021", "2020", "更早"],
+    },
 }
+
+_FILTER_KEYS = [("class", "分类"), ("area", "地区"),
+                ("lang", "语言"), ("year", "年份")]
 
 FILTERS = {}
 for c in CLASSES:
     tid = c["type_id"]
-    FILTERS[tid] = [
-        {"key": "class", "name": "分类",
-         "value": [{"n": x, "v": "" if x == "全部" else x}
-                   for x in _FILTERS_MAP.get(tid, ["全部"])]},
-        {"key": "area", "name": "地区", "value": _AREAS},
-        {"key": "year", "name": "年份", "value": _YEARS},
-        {"key": "sort", "name": "排序", "value": _SORTS},
-    ]
+    fmap = _FILTERS_MAP.get(tid, {})
+    fl = []
+    for key, name in _FILTER_KEYS:
+        vals = fmap.get(key)
+        if not vals:
+            continue
+        fl.append({"key": key, "name": name,
+                   "value": [{"n": "全部", "v": ""}] +
+                            [{"n": x, "v": x} for x in vals]})
+    FILTERS[tid] = fl
+
+# ===== 清晰度线路 (与官网播放器清晰度菜单一致) =====
+# 接口按此顺序返回: 0=1080蓝光(登录专享) 1=720高清(登录专享) 2=480标清(免登录)
+_RES_LINES = [
+    {"name": "蓝光1080P(登录专享)", "resolution": 1080},
+    {"name": "高清720P(登录专享)",  "resolution": 720},
+    {"name": "标清480P",            "resolution": 480},
+]
 
 
 class Spider(Spider):
 
     def getName(self):
-        return "蓝兔子影院"
+        return "金牌影院"
 
     def init(self, extend=""):
         try:
@@ -132,6 +159,8 @@ class Spider(Spider):
         except Exception:
             self.extend = {}
         self.site_url = (self.extend.get("site") or HOST).rstrip("/")
+        # 可选: {"token": "登录后抓到的 authorization token"} 解锁1080/720
+        self.token = self.extend.get("token") or ""
         self.headers = {
             "User-Agent": UA,
             "Accept": "application/json, text/plain, */*",
@@ -141,7 +170,8 @@ class Spider(Spider):
         }
         self.default_pic = "https://obs.3688baihuo.com/upload/vod_default.webp"
         self._play_cache = {}
-        self.log("init: site=%s" % self.site_url)
+        self.log("init: site=%s token=%s" %
+                 (self.site_url, "有" if self.token else "无"))
 
     # ===================== 签名 =====================
     def _sign(self, params):
@@ -163,7 +193,7 @@ class Spider(Spider):
             headers.update({
                 "sign": sign,
                 "t": t,
-                "authorization": "",
+                "authorization": self.token,
                 "deviceId": "web-" + "0" * 16,
             })
             url = API + path
@@ -203,8 +233,10 @@ class Spider(Spider):
         name = self._clean(it.get("vodName") or "")[:100]
         remark = it.get("vodRemarks") or ""
         if not remark and it.get("vodScore"):
-            remark = "%.1f分" % it["vodScore"] if isinstance(
-                it.get("vodScore"), float) else str(it.get("vodScore"))
+            try:
+                remark = "%.1f分" % float(it["vodScore"])
+            except Exception:
+                remark = str(it.get("vodScore"))
         return {
             "vod_id": str(it.get("vodId", "")),
             "vod_name": name,
@@ -216,7 +248,7 @@ class Spider(Spider):
         return {"class": CLASSES, "filters": FILTERS}
 
     def homeVideoContent(self):
-        # 用电影分类首页第一页作为推荐位
+        # 用电影分类第一页作为推荐位
         data = self._api_get("/video/list",
                              {"type1": 1, "pageNum": 1, "pageSize": 24})
         videos = []
@@ -245,6 +277,8 @@ class Spider(Spider):
             params["year"] = extend["year"]
         if extend.get("area"):
             params["area"] = extend["area"]
+        if extend.get("lang"):
+            params["lang"] = extend["lang"]
 
         data = self._api_get("/video/list", params)
         videos = []
@@ -327,19 +361,30 @@ class Spider(Spider):
         year = data.get("vodYear") or ""
         area = data.get("vodArea") or ""
         vclass = data.get("vodClass") or ""
+        lang = data.get("vodLang") or ""
         pubdate = data.get("vodPubdate") or ""
         hits = data.get("vodHits") or 0
-        lang = data.get("vodLang") or ""
+        director_txt = ("导演：" + director) if director else ""
 
-        # 剧集 (episodeList: nid + name), id 编码为 "vodId-nid"
+        # ===== 剧集: 每个清晰度一条线路, id = "vodId-nid-清晰度下标" =====
         eps = data.get("episodeList") or []
         eps = sorted(eps, key=lambda e: e.get("sort") or 0)
-        play_url = "#".join(
-            "%s$%s-%s" % (self._clean(e.get("name") or ("第%d集" % (i + 1))),
-                          vod_id, e.get("nid"))
-            for i, e in enumerate(eps) if e.get("nid"))
+
+        play_from = []
+        play_url = []
+        for li, line in enumerate(_RES_LINES):
+            eps_txt = "#".join(
+                "%s$%s-%s-%d" % (self._clean(e.get("name") or
+                                             ("第%d集" % (i + 1))),
+                                 vod_id, e.get("nid"), li)
+                for i, e in enumerate(eps) if e.get("nid"))
+            if eps_txt:
+                play_from.append(line["name"])
+                play_url.append(eps_txt)
 
         info = []
+        if remarks:
+            info.append("集数：" + remarks)
         if year:
             info.append("年份：" + str(year))
         if area:
@@ -360,23 +405,26 @@ class Spider(Spider):
             "vod_pic": pic,
             "vod_content": info_txt + "\n\n" + content if info_txt else content,
             "vod_actor": actor,
-            "vod_director": director,
+            "vod_director": director_txt,
             "vod_score": score,
             "vod_remarks": remarks or ("共%d集" % len(eps) if eps else ""),
-            "vod_play_from": "蓝兔子专线",
-            "vod_play_url": play_url,
+            "vod_play_from": "$$$".join(play_from),
+            "vod_play_url": "$$$".join(play_url),
         }]}
 
     # ===================== 播放 =====================
     def playerContent(self, flag, id, vipFlags):
-        # id 格式: "vodId-nid" (兼容仅传 nid 的情况)
-        if "-" in str(id):
-            vod_id, nid = str(id).split("-", 1)
+        # id 格式: "vodId-nid-清晰度下标"
+        parts = str(id).split("-")
+        if len(parts) >= 3:
+            vod_id, nid, res_idx = parts[0], parts[1], int(parts[2])
+        elif len(parts) == 2:
+            vod_id, nid, res_idx = parts[0], parts[1], 2
         else:
-            vod_id, nid = "0", str(id)
-        self.log("player: vod=%s nid=%s flag=%s" % (vod_id, nid, flag))
+            vod_id, nid, res_idx = "0", str(id), 2
+        self.log("player: vod=%s nid=%s res_idx=%d" % (vod_id, nid, res_idx))
 
-        cache_key = str(id)
+        cache_key = "%s-%s-%d-%s" % (vod_id, nid, res_idx, bool(self.token))
         now = int(time.time())
         if cache_key in self._play_cache:
             ts, res = self._play_cache[cache_key]
@@ -391,30 +439,37 @@ class Spider(Spider):
         })
 
         url = ""
+        picked = None
         if data and data.get("list"):
-            # 优先 1080, 其次按顺序取第一个
-            best = None
-            for it in data["list"]:
-                u = it.get("url") or ""
-                if not u:
-                    continue
-                if it.get("needLogin"):
-                    continue
-                if ".m3u8" not in u.lower() and ".mp4" not in u.lower():
-                    continue
-                if best is None or (it.get("resolution") or 0) > \
-                        (best.get("resolution") or 0):
-                    best = it
-            if best is None:
-                for it in data["list"]:
-                    u = it.get("url") or ""
-                    if u:
-                        best = it
+            items = [it for it in data["list"] if it.get("url")]
+            if items:
+                # 1) 优先取请求的下标对应清晰度
+                want = _RES_LINES[res_idx]["resolution"] \
+                    if 0 <= res_idx < len(_RES_LINES) else 480
+                for it in items:
+                    if (it.get("resolution") or 0) == want:
+                        picked = it
                         break
-            if best:
-                url = best["url"]
+                # 2) 取不到则从请求清晰度向下逐级回退 (1080->720->480)
+                if picked is None:
+                    order = [x["resolution"] for x in _RES_LINES]
+                    try:
+                        wi = order.index(want)
+                    except Exception:
+                        wi = len(order) - 1
+                    for r in order[wi:]:
+                        for it in items:
+                            if (it.get("resolution") or 0) == r:
+                                picked = it
+                                break
+                        if picked:
+                            break
+                # 3) 仍取不到则取第一个
+                if picked is None:
+                    picked = items[0]
+                url = picked["url"]
                 self.log("  => %sP: %s" %
-                         (best.get("resolution", "?"), url[:120]))
+                         (picked.get("resolution", "?"), url[:120]))
 
         if url:
             res = {
@@ -431,7 +486,7 @@ class Spider(Spider):
             res = {
                 "parse": 1,
                 "playUrl": "",
-                "url": "%s/vod/play/0/sid/%s" % (self.site_url, nid),
+                "url": "%s/vod/play/%s/sid/%s" % (self.site_url, vod_id, nid),
                 "header": {"User-Agent": UA, "Referer": self.site_url + "/"},
             }
         self._play_cache[cache_key] = (now, res)
