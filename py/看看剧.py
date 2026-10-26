@@ -1,7 +1,7 @@
 # coding=utf-8
 """
 看看剧 www.kkju.app | TVBox Python 爬虫
-严格依据网站真实结构编写:
+网站结构:
   站点为 Vue 单页应用 + Go 后端, 数据全部走 JSON 接口 /api/app/...
   接口需请求签名(还原自前端 request-CopgPU0g.js):
     X-Device-ID : web-<uuid>
@@ -24,7 +24,6 @@
     POST /play/token              换取真实播放地址 {videoId,episode,groupCode}
   备注: 实测该站中文 area/class/lang 筛选后端返回恒为 0(仅 year 数字筛选生效),
         因此分类筛选项只提供年份, 其余中文条件不暴露以免选不出内容。
-  简介添加指定前缀 INTRO_PREFIX。
 """
 import re
 import sys
