@@ -1,6 +1,6 @@
 # coding=utf-8
 """
-欧洲影院 51shuoshuo.com | TVBox Python 爬虫 (电影筛选完美版)
+欧洲影院 51shuoshuo.com | TVBox Python 爬虫 
 关键:
   - 列表页(vod_remarks): 彻底解决副标题抓不到的问题，使用卡片级切割
   - 详情页(vod_content): 分类/地区/年份强制排版到简介开头，完美契合原生网页
