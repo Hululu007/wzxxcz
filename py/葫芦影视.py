@@ -17,6 +17,8 @@ headerx = {
     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
 }
 
+INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
+
 
 # ---- 门页 encrypt 复现：静态表移位 3 位，每字符前后各垫一个随机表内字符，再 base64 ----
 _STATIC = "PXhw7UT1B0a9kQDKZsjIASmOezxYG4CHo5Jyfg2b8FLpEvRr3WtVnlqMidu6cN"
@@ -330,6 +332,11 @@ class Spider(Spider):
             play = '#'.join('%s$%s' % (ep, href) for href, (nid, ep) in
                             sorted(by_sid[sid].items(), key=lambda kv: kv[1][0]))
             lines.append((name, play))
+        # 简介前加统一前缀
+        if desc:
+            desc = INTRO_PREFIX + '\n' + desc
+        else:
+            desc = INTRO_PREFIX
         vod = {'vod_id': code, 'vod_name': title, 'vod_pic': pic,
                'vod_remarks': remarks, 'vod_content': desc}
         if director:
