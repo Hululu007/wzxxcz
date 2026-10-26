@@ -1,8 +1,11 @@
 # coding=utf-8
 """
-麻花影视 ynjcsj.com | TVBox Python 爬虫 (V4.0 终极降维版)
+麻花影视 ynjcsj.com | TVBox Python 爬虫 
 关键:
-  - 完美对应网页侧边栏/顶部筛选频道
+  - 完美对应网页侧边栏/顶部筛选频道（含「频道」二级子分类）
+  - 完整筛选维度: 频道/类型/地区/年份/语言/资源/版本/字母/排序
+  - vodshow 参数槽位按实测抓包对齐: tid-area-by-class-lang-letter-?-?-page-资源-?-year
+  - 版本走 /version/xxx.html 路径后缀（站点特殊设计）
   - 大类走搜索流兜底，子类走原生静态 HTML
   - 全链路防爬拦截处理
   - player_aaaa.url 直链提取
@@ -67,11 +70,32 @@ CLASSES = [
     {"type_id": "2",  "type_name": "电视剧"},
     {"type_id": "3",  "type_name": "综艺"},
     {"type_id": "4",  "type_name": "动漫"},
+    {"type_id": "35", "type_name": "动画片"},
     {"type_id": "36", "type_name": "短剧"},
 ]
 
+# 「频道」二级子分类（从首页导航栏实测抓取的真实 type_id）
+_CHANNELS_MAP = {
+    "1":  [("6", "动作片"), ("7", "喜剧片"), ("8", "爱情片"), ("9", "科幻片"), ("10", "恐怖片"),
+           ("11", "剧情片"), ("12", "战争片"), ("24", "纪录片"), ("44", "香港电影"), ("45", "动漫电影")],
+    "2":  [("13", "国产剧"), ("14", "香港剧"), ("15", "台湾剧"), ("16", "日本剧"), ("20", "泰国剧"),
+           ("21", "韩国剧"), ("22", "欧美剧"), ("23", "海外剧")],
+    "3":  [("25", "大陆综艺"), ("26", "港台综艺"), ("27", "日韩综艺"), ("28", "欧美综艺")],
+    "4":  [("29", "国产动漫"), ("30", "日韩动漫"), ("31", "港台动漫"), ("32", "欧美动漫"),
+           ("33", "有声动漫"), ("34", "海外动漫")],
+    "35": [],
+    "36": [("37", "女频恋爱"), ("38", "反转爽剧"), ("39", "年代穿越"), ("40", "脑洞悬疑"),
+           ("41", "现代都市"), ("42", "古装仙侠"), ("43", "热血剧情")],
+}
+
 _SORTS = [{"n": "时间", "v": "time"}, {"n": "人气", "v": "hits"}, {"n": "评分", "v": "score"}]
 _YEARS = [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]
+_LANGS = [{"n": "全部", "v": ""}, {"n": "国语", "v": "国语"}, {"n": "英语", "v": "英语"}, {"n": "粤语", "v": "粤语"},
+          {"n": "闽南语", "v": "闽南语"}, {"n": "韩语", "v": "韩语"}, {"n": "日语", "v": "日语"}, {"n": "其它", "v": "其它"}]
+_RESOURCES = [{"n": "全部", "v": ""}, {"n": "正片", "v": "正片"}, {"n": "预告片", "v": "预告片"}, {"n": "花絮", "v": "花絮"}]
+_VERSIONS = [{"n": "全部", "v": ""}, {"n": "高清版", "v": "高清版"}, {"n": "剧场版", "v": "剧场版"}, {"n": "抢先版", "v": "抢先版"},
+             {"n": "OVA", "v": "OVA"}, {"n": "TV", "v": "TV"}, {"n": "影院版", "v": "影院版"}]
+_LETTERS = [{"n": "全部", "v": ""}] + [{"n": chr(c), "v": chr(c)} for c in range(ord("A"), ord("Z") + 1)]
 _AREAS_TV = [{"n": "全部", "v": ""}, {"n": "内地", "v": "内地"}, {"n": "韩国", "v": "韩国"}, {"n": "香港", "v": "香港"}, {"n": "台湾", "v": "台湾"}, {"n": "日本", "v": "日本"}, {"n": "美国", "v": "美国"}, {"n": "泰国", "v": "泰国"}, {"n": "英国", "v": "英国"}, {"n": "新加坡", "v": "新加坡"}, {"n": "其他", "v": "其他"}]
 _AREAS_MOVIE = [{"n": "全部", "v": ""}, {"n": "大陆", "v": "大陆"}, {"n": "香港", "v": "香港"}, {"n": "台湾", "v": "台湾"}, {"n": "美国", "v": "美国"}, {"n": "法国", "v": "法国"}, {"n": "英国", "v": "英国"}, {"n": "日本", "v": "日本"}, {"n": "韩国", "v": "韩国"}, {"n": "德国", "v": "德国"}, {"n": "泰国", "v": "泰国"}, {"n": "印度", "v": "印度"}, {"n": "意大利", "v": "意大利"}, {"n": "西班牙", "v": "西班牙"}, {"n": "加拿大", "v": "加拿大"}, {"n": "其他", "v": "其他"}]
 
@@ -80,6 +104,7 @@ _FILTERS_MAP = {
     "2":  ["全部", "古装", "战争", "青春偶像", "喜剧", "家庭", "犯罪", "动作", "奇幻", "剧情", "历史", "经典", "乡村", "情景", "商战", "网剧", "其他"],
     "3":  ["全部", "选秀", "情感", "访谈", "播报", "旅游", "音乐", "美食", "纪实", "曲艺", "生活", "游戏互动", "财经", "求职"],
     "4":  ["全部", "情感", "科幻", "热血", "推理", "搞笑", "冒险", "萝莉", "校园", "动作", "机战", "运动", "战争", "少年", "少女", "社会", "原创", "亲子", "益智", "励志", "其他"],
+    "35": ["全部", "动画", "奇幻", "冒险", "亲子", "益智", "励志", "其他"],
     "36": ["全部", "古装", "战争", "青春偶像", "喜剧", "家庭", "犯罪", "动作", "奇幻", "剧情", "历史", "经典", "乡村", "情景", "商战", "网剧", "其他"],
 }
 
@@ -87,12 +112,23 @@ FILTERS = {}
 for c in CLASSES:
     tid = c["type_id"]
     areas = _AREAS_MOVIE if tid == "1" else _AREAS_TV
-    FILTERS[tid] = [
-        {"key": "class", "name": "类型", "value": [{"n": x, "v": "" if x == "全部" else x} for x in _FILTERS_MAP.get(tid, ["全部"])]},
-        {"key": "area", "name": "地区", "value": areas},
-        {"key": "year", "name": "年份", "value": _YEARS},
-        {"key": "sort", "name": "排序", "value": _SORTS},
+    _filter_list = [
+        {"key": "class",    "name": "类型", "value": [{"n": x, "v": "" if x == "全部" else x} for x in _FILTERS_MAP.get(tid, ["全部"])]},
+        {"key": "area",     "name": "地区", "value": areas},
+        {"key": "year",     "name": "年份", "value": _YEARS},
+        {"key": "lang",     "name": "语言", "value": _LANGS},
+        {"key": "resource", "name": "资源", "value": _RESOURCES},
+        {"key": "version",  "name": "版本", "value": _VERSIONS},
+        {"key": "letter",   "name": "字母", "value": _LETTERS},
+        {"key": "sort",     "name": "排序", "value": _SORTS},
     ]
+    # 有二级子分类的大类，在最前面加「频道」筛选
+    if _CHANNELS_MAP.get(tid):
+        _filter_list.insert(0, {
+            "key": "channel", "name": "频道",
+            "value": [{"n": name, "v": cid} for cid, name in _CHANNELS_MAP[tid]],
+        })
+    FILTERS[tid] = _filter_list
 
 # ===================== 正则 =====================
 # 静态分类页列表
@@ -116,6 +152,11 @@ _RE_ACTOR = re.compile(r'<span>演员：</span>([\s\S]*?)</p>', re.S | re.I)
 _RE_DIRECTOR = re.compile(r'<span>导演：</span>([\s\S]*?)</p>', re.S | re.I)
 _RE_STATE = re.compile(r'<span>状态：</span><em[^>]*>([^<]*)</em>', re.I)
 _RE_SCORE = re.compile(r'<h4 class="ewave-star-num[^"]*">([\d.]+)</h4>', re.I)
+_RE_LANG = re.compile(r'<span>语言：</span><a[^>]*>([^<]*)</a>', re.I)
+_RE_TYPE = re.compile(r'<span>类型：</span><a[^>]*>([^<]*)</a>', re.I)
+_RE_AREA = re.compile(r'<span>地区：</span><a[^>]*>([^<]*)</a>', re.I)
+_RE_YEAR = re.compile(r'<span>年份：</span><a[^>]*>([^<]*)</a>', re.I)
+_RE_UPDATE = re.compile(r'<span>更新时间：</span>(?:<a[^>]*>)?([^<&\s]+)', re.I)
 _RE_INTRO = re.compile(r'<div class="entry-content clearfix">([\s\S]*?)</div>', re.S | re.I)
 
 # 剧集列表解析
@@ -218,7 +259,33 @@ class Spider(Spider):
         if m:
             try: return int(m.group(1))
             except Exception: pass
+        # vodshow 筛选页分页兜底: title="第230页"
+        m = re.search(r'title="第(\d+)页"', html)
+        if m:
+            try: return int(m.group(1))
+            except Exception: pass
         return 1
+
+    def _build_show_url(self, tid, area, cls, lang, letter, resource, version, sort, year, page):
+        # 站点 vodshow 参数槽位(实测抓包对齐):
+        # /vodshow/{tid}-{area}-{by}-{class}-{lang}-{letter}--{page}-{资源}--{year}.html
+        # 版本特殊: 以 /version/{版本}.html 路径后缀追加
+        fields = [
+            urllib.parse.quote(area or ""),
+            urllib.parse.quote(sort or "time"),
+            urllib.parse.quote(cls or ""),
+            urllib.parse.quote(lang or ""),
+            urllib.parse.quote(letter or ""),
+            "", "",                       # 两个保留槽位
+            str(page),
+            urllib.parse.quote(resource or ""),
+            "",                           # 保留槽位
+            urllib.parse.quote(year or ""),
+        ]
+        url = "%s/vodshow/%s.html" % (self.site_url, "-".join([tid] + fields))
+        if version:
+            url += "/version/%s.html" % urllib.parse.quote(version)
+        return url
 
     def homeContent(self, filter=False):
         return {"class": CLASSES, "filters": FILTERS}
@@ -234,24 +301,34 @@ class Spider(Spider):
             except Exception: extend = {}
         if not extend: extend = {}
 
-        area = extend.get("area") or ""
-        cls  = extend.get("class") or ""
-        year = extend.get("year") or ""
+        area     = extend.get("area") or ""
+        cls      = extend.get("class") or ""
+        year     = extend.get("year") or ""
+        lang     = extend.get("lang") or ""
+        resource = extend.get("resource") or ""
+        version  = extend.get("version") or ""
+        letter   = extend.get("letter") or ""
+        sort     = extend.get("sort") or "time"
+        # 「频道」筛选直接切换子分类 type_id
+        channel  = extend.get("channel") or ""
+        if channel:
+            tid = channel
 
         videos = []
         html = ""
 
-        # 1. 原生静态子分类直连（有数据，且无筛选时最稳）
-        if tid not in ("1", "2", "3", "4") and not area and not cls and not year and page == 1:
+        # 1. 无任何筛选时，原生静态子分类直连（最稳）
+        if (tid not in ("1", "2", "3", "4") and not area and not cls and not year
+                and not lang and not resource and not version and not letter
+                and sort in ("time", "") and page == 1):
             url = "%s/vodtype/%s.html" % (self.site_url, tid)
             self.log("category (原生页): %s" % url)
             html = self._fetch(url)
             videos = self._extract_videos(html)
 
-        # 2. 走 /vodshow/ 路径（标准模板，能正常返回静态数据的情况下）
+        # 2. 走 /vodshow/ 完整筛选路径（参数槽位实测对齐）
         if not videos:
-            url = "%s/vodshow/%s-%s-%s-%s-%s-%s-%s-%s-%s-time.html" % (
-                self.site_url, tid, area, cls, "", "", "", "", year, page)
+            url = self._build_show_url(tid, area, cls, lang, letter, resource, version, sort, year, page)
             self.log("category (筛选页): %s" % url)
             html = self._fetch(url)
             videos = self._extract_videos(html)
@@ -259,7 +336,7 @@ class Spider(Spider):
         # 3. 终极兜底（如果上面都被 Ajax 防爬拦截了，搜索流直接干）
         if not videos:
             self.log("  ⚠️ 页面被防爬拦截，启用搜索流")
-            wd = cls or year or area or ""
+            wd = cls or year or area or lang or ""
             url2 = "%s/vodsearch/-------------.html?wd=%s&page=%d" % (self.site_url, urllib.parse.quote(wd), page)
             self.log("  (搜索兜底): %s" % url2)
             html2 = self._fetch(url2)
@@ -330,6 +407,19 @@ class Spider(Spider):
         m = _RE_SCORE.search(html)
         if m: score = m.group(1)
 
+        # 新增: 语言/类型/地区/年份/更新时间（对应详情页信息栏）
+        lang = vtype = varea = vyear = upd = ""
+        m = _RE_LANG.search(html)
+        if m: lang = self._clean(m.group(1))
+        m = _RE_TYPE.search(html)
+        if m: vtype = self._clean(m.group(1))
+        m = _RE_AREA.search(html)
+        if m: varea = self._clean(m.group(1))
+        m = _RE_YEAR.search(html)
+        if m: vyear = self._clean(m.group(1))
+        m = _RE_UPDATE.search(html)
+        if m: upd = self._clean(m.group(1))
+
         content = ""
         m = _RE_INTRO.search(html)
         if m: content = self._clean(m.group(1))
@@ -350,6 +440,11 @@ class Spider(Spider):
 
         if not lines: return {"list": []}
 
+        remarks = state or ("%d条线路" % len(lines))
+        extra = " | ".join(x for x in [vtype, varea, vyear, lang, ("更新:" + upd) if upd else ""] if x)
+        if extra:
+            remarks = (remarks + " | " + extra) if remarks else extra
+
         return {"list": [{
             "vod_id": vod_id,
             "vod_name": name,
@@ -358,7 +453,12 @@ class Spider(Spider):
             "vod_actor": actor,
             "vod_director": director,
             "vod_score": score,
-            "vod_remarks": state or ("%d条线路" % len(lines)),
+            "vod_remarks": remarks,
+            "vod_class": vtype,
+            "vod_area": varea,
+            "vod_year": vyear,
+            "vod_lang": lang,
+            "vod_time": upd,
             "vod_play_from": "$$$".join(x[0] for x in lines),
             "vod_play_url":  "$$$".join("#".join(x[1]) for x in lines),
         }]}
