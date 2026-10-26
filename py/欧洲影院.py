@@ -2,9 +2,9 @@
 """
 欧洲影院 51shuoshuo.com | TVBox Python 爬虫 
 关键:
-  - 100% 还原网站层级筛选器（含剧情、语言、字母等）
-  - 详情页“演员”栏强行拼入 地区/年份，破解 TVBox 不显示地区年份的问题
-  - 完美解析各种变体简介
+  - 列表页(vod_remarks): 彻底解决副标题抓不到的问题，使用卡片级切割
+  - 详情页(vod_content): 分类/地区/年份强制排版到简介开头，完美契合原生网页
+  - 详情页(vod_remarks): 全局兜底状态文字
 """
 import re
 import sys
@@ -67,7 +67,6 @@ CLASSES = [
     {"type_id": "24", "type_name": "短剧"},
 ]
 
-# 完美还原网页里的选项 (根据你截图里的分类)
 _SUB_CLASS = {
     "1": [("全部", ""), ("动作片", "6"), ("喜剧片", "7"), ("爱情片", "8"), ("科幻片", "9"), ("剧情片", "10"), ("战争片", "11"), ("动画片", "41"), ("记录片", "12"), ("恐怖片", "39")],
     "2": [("全部", ""), ("国产剧", "13"), ("香港剧", "14"), ("韩国剧", "15"), ("欧美剧", "16"), ("台湾剧", "22"), ("日本剧", "21"), ("泰国剧", "20"), ("海外剧", "23")],
@@ -83,7 +82,6 @@ _YEARS = [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range
 _LETTERS = ["全部"] + [chr(i) for i in range(65, 91)]
 _SORTS = [{"n": "最近更新", "v": "time"}, {"n": "最多播放", "v": "hits"}, {"n": "最好评", "v": "score"}]
 
-# 组装筛选器 (还原网页的所有筛选项)
 FILTERS = {}
 for c in CLASSES:
     tid = c["type_id"]
@@ -98,11 +96,12 @@ for c in CLASSES:
     ]
 
 # ===================== 正则 =====================
+# 卡片匹配：只用提取 ID、标题和图片
 _RE_CARD = re.compile(
     r'<a\s+href="(/p/\d+\.html)"\s+title="([^"]*)"[^>]*>'
-    r'[\s\S]{0,300}?'
-    r'(?:data-original|data-src|src)="([^"]*)"',
-    re.S | re.I)
+    r'[\s\S]{0,300}?(?:data-original|data-src|src)="([^"]*)"', re.S | re.I)
+# 卡片状态：专门提取“更新至xxx”
+_RE_CARD_STATUS = re.compile(r'<p class="[^"]*item-status[^"]*">([^<]*)</p>', re.I)
 
 _RE_PAGE_NUM = re.compile(r'num">(\d+)/(\d+)<')
 _RE_H3_TITLE = re.compile(r'<h3[^>]*>\s*<a[^>]*>([\s\S]*?)</a>', re.I)
@@ -165,20 +164,15 @@ class Spider(Spider):
             return ""
 
     def _fix_url(self, url):
-        if not url:
-            return ""
+        if not url: return ""
         url = url.strip()
-        if url.startswith("//"):
-            return "https:" + url
-        if url.startswith("http"):
-            return url
-        if url.startswith("/"):
-            return self.site_url + url
+        if url.startswith("//"): return "https:" + url
+        if url.startswith("http"): return url
+        if url.startswith("/"): return self.site_url + url
         return urllib.parse.urljoin(self.site_url + "/", url)
 
     def _clean(self, s):
-        if not s:
-            return ""
+        if not s: return ""
         s = re.sub(r"<br\s*/?>", "\n", s, flags=re.I)
         s = re.sub(r"<[^>]+>", "", s)
         s = (s.replace("&nbsp;", " ").replace("\xa0", " ")
@@ -190,19 +184,30 @@ class Spider(Spider):
 
     def _extract_videos(self, html):
         videos, seen = [], set()
-        if not html:
-            return videos
-        for href, title, pic in _RE_CARD.findall(html):
-            href = href.replace("&amp;", "&")
-            if href in seen:
-                continue
-            seen.add(href)
-            videos.append({
-                "vod_id":      href,
-                "vod_name":    self._clean(title)[:100],
-                "vod_pic":     self._fix_url(pic) or self.default_pic,
-                "vod_remarks": "",
-            })
+        if not html: return videos
+        
+        # 核心：用 <li 切割区块，精准拿到每个卡片的独立 HTML
+        blocks = re.split(r'<li[^>]*>', html)
+        for block in blocks:
+            m_card = _RE_CARD.search(block)
+            if m_card:
+                href, title, pic = m_card.groups()
+                href = href.replace("&amp;", "&")
+                if href in seen: continue
+                seen.add(href)
+                
+                # 在块内提取“更新至xx集”
+                remarks = ""
+                m_st = _RE_CARD_STATUS.search(block)
+                if m_st:
+                    remarks = self._clean(m_st.group(1))
+                
+                videos.append({
+                    "vod_id":      href,
+                    "vod_name":    self._clean(title)[:100],
+                    "vod_pic":     self._fix_url(pic) or self.default_pic,
+                    "vod_remarks": remarks,   # <--- 这里就是列表页的副标题！
+                })
         return videos
 
     def _page_count(self, html):
@@ -235,8 +240,7 @@ class Spider(Spider):
 
         cat_id = tid
         if cls:
-            if cls.isdigit():
-                cat_id = cls
+            if cls.isdigit(): cat_id = cls
             else:
                 for n, v in _SUB_CLASS.get(tid, []):
                     if v and (cls == n or cls == v):
@@ -316,8 +320,13 @@ class Spider(Spider):
         if m: d_text = self._clean(m.group(1))
         m = _RE_ACT.search(target_html)
         if m: act_text = re.sub(r"\s*,\s*", ", ", self._clean(m.group(1)))
+        
+        # 详情页副标题兜底
         m = _RE_STAT.search(html)
         if m: s_text = self._clean(m.group(1))
+        if not s_text:
+            m2 = re.search(r'(更新至[^<]+|全\d+集|已完结|HD[^<\s]*)', html)
+            if m2: s_text = self._clean(m2.group(1))
 
         # 简介
         content = ""
@@ -329,16 +338,14 @@ class Spider(Spider):
         if not content:
             m = re.search(r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', html, re.I)
             if m: content = self._clean(m.group(1))
-        
-        content = (INTRO_PREFIX + "\n" + content) if content else INTRO_PREFIX
 
-        # ======== BOSS 斩杀方案：缝合信息 ========
-        # 既然 TVBox 皮肤只显示演员，就把分类、地区、年份拼在演员后面
-        # 这样在界面上你就能完美看到全部信息了！
-        full_actor = act_text
-        extra_info = f"[{a_text} / {y_text}]" if a_text or y_text else ""
-        if extra_info:
-            full_actor = f"{full_actor} {extra_info}" if full_actor else extra_info
+        # ======== 完美缝合简介 (解决地区/年份无处显示的问题) ========
+        header_info = ""
+        if c_text: header_info += f"分类：{c_text}  "
+        if a_text or y_text: header_info += f"地区：{a_text or '未知'}  年份：{y_text or '未知'}\n"
+        header_info += "--------------------------------------------------\n"
+
+        final_content = INTRO_PREFIX + "\n\n" + header_info + (content if content else "暂无简介")
 
         # 剧集线路
         tab_names = {}
@@ -370,8 +377,8 @@ class Spider(Spider):
             "vod_id": vod_id,
             "vod_name": name,
             "vod_pic": pic,
-            "vod_content": content,
-            "vod_actor": full_actor,    # 演员里混入了地区年份！
+            "vod_content": final_content,
+            "vod_actor": act_text,
             "vod_director": d_text,
             "vod_remarks": s_text or ("%d条线路" % len(groups)), 
             "vod_play_from": "$$$".join(play_from),
