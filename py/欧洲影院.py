@@ -1,6 +1,6 @@
 # coding=utf-8
 """
-欧洲影院 51shuoshuo.com | TVBox Python 爬虫 (终极神装版)
+欧洲影院 51shuoshuo.com | TVBox Python 爬虫 
 关键:
   - 100% 还原网站层级筛选器（含剧情、语言、字母等）
   - 详情页“演员”栏强行拼入 地区/年份，破解 TVBox 不显示地区年份的问题
