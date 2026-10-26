@@ -1,6 +1,6 @@
 # coding=utf-8
 """
-欧洲影院 51shuoshuo.com | TVBox Python 爬虫 
+欧洲影院 51shuoshuo.com | TVBox Python 爬虫 (电影筛选完美版)
 关键:
   - 列表页(vod_remarks): 彻底解决副标题抓不到的问题，使用卡片级切割
   - 详情页(vod_content): 分类/地区/年份强制排版到简介开头，完美契合原生网页
@@ -75,9 +75,17 @@ _SUB_CLASS = {
     "24": [("全部", ""), ("短剧大全", "40"), ("AI漫剧", "44")],
 }
 
-_GENRES_TV = ["全部", "古装", "战争", "青春偶像", "喜剧", "家庭", "犯罪", "动作", "奇幻", "剧情", "历史", "经典", "乡村", "情景", "商战", "网剧", "其他"]
-_LANGS = ["全部", "国语", "英语", "粤语", "闽南语", "韩语", "日语", "其它"]
-_AREAS_TV = ["全部", "内地", "韩国", "香港", "台湾", "日本", "美国", "泰国", "英国", "新加坡", "其他"]
+# ================= 分离电影与电视剧的筛选参数 =================
+_GENRES_MOVIE = ["全部", "喜剧", "爱情", "恐怖", "动作", "科幻", "剧情", "战争", "警匪", "犯罪", "动画", "奇幻", "武侠", "冒险", "枪战", "悬疑", "惊悚", "经典", "青春", "文艺", "微电影", "古装", "历史", "运动", "农村", "儿童", "网络电影"]
+_GENRES_TV    = ["全部", "古装", "战争", "青春偶像", "喜剧", "家庭", "犯罪", "动作", "奇幻", "剧情", "历史", "经典", "乡村", "情景", "商战", "网剧", "其他"]
+
+_LANGS_MOVIE  = ["全部", "国语", "英语", "粤语", "闽南语", "韩语", "日语", "法语", "德语", "其它"]
+_LANGS_TV     = ["全部", "国语", "英语", "粤语", "闽南语", "韩语", "日语", "其它"]
+
+_AREAS_MOVIE  = ["全部", "大陆", "香港", "台湾", "美国", "法国", "英国", "日本", "韩国", "德国", "泰国", "印度", "意大利", "西班牙", "加拿大", "其他"]
+_AREAS_TV     = ["全部", "内地", "韩国", "香港", "台湾", "日本", "美国", "泰国", "英国", "新加坡", "其他"]
+_AREAS_OTHER  = ["全部", "内地", "港台", "日韩", "欧美", "国产", "日本", "欧美", "其他", "大陆", "香港", "台湾", "美国", "韩国", "泰国", "新加坡", "马来西亚", "印度", "英国", "法国", "加拿大", "西班牙", "俄罗斯", "其它"]
+
 _YEARS = [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]
 _LETTERS = ["全部"] + [chr(i) for i in range(65, 91)]
 _SORTS = [{"n": "最近更新", "v": "time"}, {"n": "最多播放", "v": "hits"}, {"n": "最好评", "v": "score"}]
@@ -85,11 +93,20 @@ _SORTS = [{"n": "最近更新", "v": "time"}, {"n": "最多播放", "v": "hits"}
 FILTERS = {}
 for c in CLASSES:
     tid = c["type_id"]
+    
+    # 针对不同频道分配不同的筛选数组
+    if tid == "1": # 电影
+        g_list, l_list, a_list = _GENRES_MOVIE, _LANGS_MOVIE, _AREAS_MOVIE
+    elif tid == "2": # 电视剧
+        g_list, l_list, a_list = _GENRES_TV, _LANGS_TV, _AREAS_TV
+    else: # 其他
+        g_list, l_list, a_list = _GENRES_TV, _LANGS_TV, _AREAS_OTHER
+
     FILTERS[tid] = [
         {"key": "class", "name": "分类", "value": [{"n": n, "v": v} for n, v in _SUB_CLASS.get(tid, [("全部", "")])]},
-        {"key": "area",  "name": "地区", "value": [{"n": a, "v": "" if a=="全部" else a} for a in _AREAS_TV]},
-        {"key": "genre", "name": "剧情", "value": [{"n": g, "v": "" if g=="全部" else g} for g in _GENRES_TV]},
-        {"key": "lang",  "name": "语言", "value": [{"n": l, "v": "" if l=="全部" else l} for l in _LANGS]},
+        {"key": "area",  "name": "地区", "value": [{"n": a, "v": "" if a=="全部" else a} for a in a_list]},
+        {"key": "genre", "name": "剧情", "value": [{"n": g, "v": "" if g=="全部" else g} for g in g_list]},
+        {"key": "lang",  "name": "语言", "value": [{"n": l, "v": "" if l=="全部" else l} for l in l_list]},
         {"key": "year",  "name": "年份", "value": _YEARS},
         {"key": "letter","name": "字母", "value": [{"n": l, "v": "" if l=="全部" else l} for l in _LETTERS]},
         {"key": "by",    "name": "排序", "value": _SORTS},
@@ -202,7 +219,7 @@ class Spider(Spider):
                     "vod_id":      href,
                     "vod_name":    self._clean(title)[:100],
                     "vod_pic":     self._fix_url(pic) or self.default_pic,
-                    "vod_remarks": remarks, # 图1里的“更新至xx集”
+                    "vod_remarks": remarks,
                 })
         return videos
 
@@ -299,7 +316,7 @@ class Spider(Spider):
         m = _RE_PIC.search(html)
         if m: pic = self._fix_url(m.group(1)) or self.default_pic
 
-        # 提取元信息（图5源码层面完美提取）
+        # 提取元信息
         meta_html = _RE_META_BLOCK.search(html)
         target_html = meta_html.group(1) if meta_html else html
 
@@ -340,12 +357,9 @@ class Spider(Spider):
         else:
             content = INTRO_PREFIX
 
-        # ======== 终极绝杀：解决 UI 只显示导演的问题 ========
-        # 原站有“分类、地区、年份”，TVBox皮肤没地方放。我们就把它和导演拼在一起！
-        # 效果：导演：张永新 [国产剧 / 中国大陆 / 2026]
+        # 完美微调版：只拼接地区和年份
         ui_director = d_text
         extra = []
-        if c_text: extra.append(c_text)
         if a_text: extra.append(a_text)
         if y_text: extra.append(y_text)
         if extra:
@@ -383,7 +397,7 @@ class Spider(Spider):
             "vod_pic": pic,
             "vod_content": content,
             "vod_actor": act_text,
-            "vod_director": ui_director, # <---- 这里放入了缝合信息！
+            "vod_director": ui_director,
             "vod_remarks": s_text or ("%d条线路" % len(groups)), 
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url":  "$$$".join(play_url),
