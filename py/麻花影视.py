@@ -1,9 +1,10 @@
 # coding=utf-8
 """
-麻花影视 ynjcsj.com | TVBox Python 爬虫 
+麻花影视 ynjcsj.com | TVBox Python 爬虫 (V4.0 终极降维版)
 关键:
-  - 彻底绕过前端 Ajax 防爬，直接解析原生静态 HTML
-  - 分类默认页走 /vodtype/，带筛选参数走 /vodsearch/ 兜底
+  - 完美对应网页侧边栏/顶部筛选频道
+  - 大类走搜索流兜底，子类走原生静态 HTML
+  - 全链路防爬拦截处理
   - player_aaaa.url 直链提取
 """
 import re
@@ -60,12 +61,12 @@ DEFAULT_PIC = HOST + "/upload/site/20251221-1/ac2bc08f7f6c858edf82dbb792f7734b.p
 
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
+# 完美对应网页左侧/顶部导航栏的频道
 CLASSES = [
     {"type_id": "1",  "type_name": "电影"},
     {"type_id": "2",  "type_name": "电视剧"},
     {"type_id": "3",  "type_name": "综艺"},
     {"type_id": "4",  "type_name": "动漫"},
-    {"type_id": "35", "type_name": "动画片"},
     {"type_id": "36", "type_name": "短剧"},
 ]
 
@@ -79,7 +80,6 @@ _FILTERS_MAP = {
     "2":  ["全部", "古装", "战争", "青春偶像", "喜剧", "家庭", "犯罪", "动作", "奇幻", "剧情", "历史", "经典", "乡村", "情景", "商战", "网剧", "其他"],
     "3":  ["全部", "选秀", "情感", "访谈", "播报", "旅游", "音乐", "美食", "纪实", "曲艺", "生活", "游戏互动", "财经", "求职"],
     "4":  ["全部", "情感", "科幻", "热血", "推理", "搞笑", "冒险", "萝莉", "校园", "动作", "机战", "运动", "战争", "少年", "少女", "社会", "原创", "亲子", "益智", "励志", "其他"],
-    "35": ["全部"],
     "36": ["全部", "古装", "战争", "青春偶像", "喜剧", "家庭", "犯罪", "动作", "奇幻", "剧情", "历史", "经典", "乡村", "情景", "商战", "网剧", "其他"],
 }
 
@@ -95,6 +95,7 @@ for c in CLASSES:
     ]
 
 # ===================== 正则 =====================
+# 静态分类页列表
 _RE_CARD = re.compile(
     r'<a class="video-img lazyload"\s+href="(/voddetail/[^"]+)"\s+data-original="([^"]*)"[^>]*>'
     r'[\s\S]{0,400}?'
@@ -103,10 +104,12 @@ _RE_CARD = re.compile(
     r'<p class="video-name"><a[^>]*title="([^"]*)"',
     re.S | re.I)
 
+# 搜索页列表
 _RE_SEARCH_CARD = re.compile(
     r'<a class="block-fea lazyload"\s+data-original="([^"]*)"\s+href="(/voddetail/[^"]+)"\s+title="([^"]*)"',
     re.S | re.I)
 
+# 详情页解析
 _RE_H1 = re.compile(r'<h1 class="detail-info-title[^"]*"><a[^>]*>([\s\S]*?)</a></h1>', re.I)
 _RE_DETAIL_PIC = re.compile(r'<article class="post detail-post[^"]*">[\s\S]{0,500}?<div class="block-fea lazyload"\s+data-original="([^"]*)"', re.S | re.I)
 _RE_ACTOR = re.compile(r'<span>演员：</span>([\s\S]*?)</p>', re.S | re.I)
@@ -115,9 +118,12 @@ _RE_STATE = re.compile(r'<span>状态：</span><em[^>]*>([^<]*)</em>', re.I)
 _RE_SCORE = re.compile(r'<h4 class="ewave-star-num[^"]*">([\d.]+)</h4>', re.I)
 _RE_INTRO = re.compile(r'<div class="entry-content clearfix">([\s\S]*?)</div>', re.S | re.I)
 
+# 剧集列表解析
 _RE_TAB = re.compile(r'<li class="swiper-slide ewave-tab[^"]*" data-target="#(ewave-playlist-\d+)"><a[^>]*>([^<]*)</a></li>', re.I)
 _RE_PLAYLIST = re.compile(r'<ul[^>]*id="(ewave-playlist-\d+)"[^>]*>([\s\S]*?)</ul>', re.S | re.I)
 _RE_EP = re.compile(r'<a class="text-overflow"\s+href="(/vodplay/[^"]+)">([^<]*)</a>', re.I)
+
+# 播放器解析
 _RE_PLAYER = re.compile(r'var\s+player_aaaa\s*=\s*(\{.*?\})\s*</script>', re.S)
 
 
@@ -235,25 +241,25 @@ class Spider(Spider):
         videos = []
         html = ""
 
-        # 核心战术：如果没有任何筛选，直接抓静态的 vodtype
-        if not area and not cls and not year:
-            if page == 1:
-                url = "%s/vodtype/%s.html" % (self.site_url, tid)
-            else:
-                url = "%s/vodtype/%s-%d.html" % (self.site_url, tid, page)
-            self.log("category (静态直连): %s" % url)
+        # 1. 原生静态子分类直连（有数据，且无筛选时最稳）
+        if tid not in ("1", "2", "3", "4") and not area and not cls and not year and page == 1:
+            url = "%s/vodtype/%s.html" % (self.site_url, tid)
+            self.log("category (原生页): %s" % url)
             html = self._fetch(url)
             videos = self._extract_videos(html)
-        
-        # 如果有筛选参数，或者静态直连失败了，直接上大招：用搜索流！
+
+        # 2. 走 /vodshow/ 路径（标准模板，能正常返回静态数据的情况下）
         if not videos:
-            self.log("  ⚠️ 触发终极奥义：搜索流抓取")
-            wd = ""
-            if cls and cls != "全部": wd = cls
-            elif year and year != "全部": wd = year
-            elif area and area != "全部": wd = area
-            
-            # 巧妙利用它的搜索功能，把筛选词当关键词搜
+            url = "%s/vodshow/%s-%s-%s-%s-%s-%s-%s-%s-%s-time.html" % (
+                self.site_url, tid, area, cls, "", "", "", "", year, page)
+            self.log("category (筛选页): %s" % url)
+            html = self._fetch(url)
+            videos = self._extract_videos(html)
+
+        # 3. 终极兜底（如果上面都被 Ajax 防爬拦截了，搜索流直接干）
+        if not videos:
+            self.log("  ⚠️ 页面被防爬拦截，启用搜索流")
+            wd = cls or year or area or ""
             url2 = "%s/vodsearch/-------------.html?wd=%s&page=%d" % (self.site_url, urllib.parse.quote(wd), page)
             self.log("  (搜索兜底): %s" % url2)
             html2 = self._fetch(url2)
@@ -262,8 +268,7 @@ class Spider(Spider):
 
         pagecount = self._page_count(html)
         if pagecount == 1 and videos:
-            # 搜索页如果没有页码，防止TVBox不能翻页，强行给个巨大值
-            pagecount = 999
+            pagecount = 999  # 搜索兜底情况允许无限翻页
 
         self.log("  最终: %d 条, 总页数: %d" % (len(videos), pagecount))
 
