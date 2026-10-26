@@ -96,11 +96,9 @@ for c in CLASSES:
     ]
 
 # ===================== 正则 =====================
-# 卡片匹配：只用提取 ID、标题和图片
 _RE_CARD = re.compile(
     r'<a\s+href="(/p/\d+\.html)"\s+title="([^"]*)"[^>]*>'
     r'[\s\S]{0,300}?(?:data-original|data-src|src)="([^"]*)"', re.S | re.I)
-# 卡片状态：专门提取“更新至xxx”
 _RE_CARD_STATUS = re.compile(r'<p class="[^"]*item-status[^"]*">([^<]*)</p>', re.I)
 
 _RE_PAGE_NUM = re.compile(r'num">(\d+)/(\d+)<')
@@ -186,7 +184,6 @@ class Spider(Spider):
         videos, seen = [], set()
         if not html: return videos
         
-        # 核心：用 <li 切割区块，精准拿到每个卡片的独立 HTML
         blocks = re.split(r'<li[^>]*>', html)
         for block in blocks:
             m_card = _RE_CARD.search(block)
@@ -196,7 +193,6 @@ class Spider(Spider):
                 if href in seen: continue
                 seen.add(href)
                 
-                # 在块内提取“更新至xx集”
                 remarks = ""
                 m_st = _RE_CARD_STATUS.search(block)
                 if m_st:
@@ -206,7 +202,7 @@ class Spider(Spider):
                     "vod_id":      href,
                     "vod_name":    self._clean(title)[:100],
                     "vod_pic":     self._fix_url(pic) or self.default_pic,
-                    "vod_remarks": remarks,   # <--- 这里就是列表页的副标题！
+                    "vod_remarks": remarks, # 图1里的“更新至xx集”
                 })
         return videos
 
@@ -303,7 +299,7 @@ class Spider(Spider):
         m = _RE_PIC.search(html)
         if m: pic = self._fix_url(m.group(1)) or self.default_pic
 
-        # 元信息
+        # 提取元信息（图5源码层面完美提取）
         meta_html = _RE_META_BLOCK.search(html)
         target_html = meta_html.group(1) if meta_html else html
 
@@ -321,7 +317,7 @@ class Spider(Spider):
         m = _RE_ACT.search(target_html)
         if m: act_text = re.sub(r"\s*,\s*", ", ", self._clean(m.group(1)))
         
-        # 详情页副标题兜底
+        # 副标题
         m = _RE_STAT.search(html)
         if m: s_text = self._clean(m.group(1))
         if not s_text:
@@ -338,14 +334,22 @@ class Spider(Spider):
         if not content:
             m = re.search(r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', html, re.I)
             if m: content = self._clean(m.group(1))
+        
+        if content:
+            content = INTRO_PREFIX + "\n" + content
+        else:
+            content = INTRO_PREFIX
 
-        # ======== 完美缝合简介 (解决地区/年份无处显示的问题) ========
-        header_info = ""
-        if c_text: header_info += f"分类：{c_text}  "
-        if a_text or y_text: header_info += f"地区：{a_text or '未知'}  年份：{y_text or '未知'}\n"
-        header_info += "--------------------------------------------------\n"
-
-        final_content = INTRO_PREFIX + "\n\n" + header_info + (content if content else "暂无简介")
+        # ======== 终极绝杀：解决 UI 只显示导演的问题 ========
+        # 原站有“分类、地区、年份”，TVBox皮肤没地方放。我们就把它和导演拼在一起！
+        # 效果：导演：张永新 [国产剧 / 中国大陆 / 2026]
+        ui_director = d_text
+        extra = []
+        if c_text: extra.append(c_text)
+        if a_text: extra.append(a_text)
+        if y_text: extra.append(y_text)
+        if extra:
+            ui_director = f"{ui_director} [{' / '.join(extra)}]" if ui_director else f"[{' / '.join(extra)}]"
 
         # 剧集线路
         tab_names = {}
@@ -377,9 +381,9 @@ class Spider(Spider):
             "vod_id": vod_id,
             "vod_name": name,
             "vod_pic": pic,
-            "vod_content": final_content,
+            "vod_content": content,
             "vod_actor": act_text,
-            "vod_director": d_text,
+            "vod_director": ui_director, # <---- 这里放入了缝合信息！
             "vod_remarks": s_text or ("%d条线路" % len(groups)), 
             "vod_play_from": "$$$".join(play_from),
             "vod_play_url":  "$$$".join(play_url),
