@@ -1,9 +1,9 @@
 # coding=utf-8
 """
-麻花影视 ynjcsj.com | TVBox Python 爬虫
+麻花影视 ynjcsj.com | TVBox Python 爬虫 
 关键:
-  - 破解前端 JS 伪装，直取原生 /vodtype/ 分类数据
-  - 苹果CMS 静态 HTML 极简解析
+  - 彻底绕过前端 Ajax 防爬，直接解析原生静态 HTML
+  - 分类默认页走 /vodtype/，带筛选参数走 /vodsearch/ 兜底
   - player_aaaa.url 直链提取
 """
 import re
@@ -228,25 +228,43 @@ class Spider(Spider):
             except Exception: extend = {}
         if not extend: extend = {}
 
-        # 绕过 /vodshow/ 前端防爬，直取原生 /vodtype/ 静态数据
-        if page == 1:
-            url = "%s/vodtype/%s.html" % (self.site_url, tid)
-        else:
-            url = "%s/vodtype/%s-%d.html" % (self.site_url, tid, page)
-            
-        self.log("category: %s" % url)
-        html = self._fetch(url)
-        videos = self._extract_videos(html)
+        area = extend.get("area") or ""
+        cls  = extend.get("class") or ""
+        year = extend.get("year") or ""
+
+        videos = []
+        html = ""
+
+        # 核心战术：如果没有任何筛选，直接抓静态的 vodtype
+        if not area and not cls and not year:
+            if page == 1:
+                url = "%s/vodtype/%s.html" % (self.site_url, tid)
+            else:
+                url = "%s/vodtype/%s-%d.html" % (self.site_url, tid, page)
+            self.log("category (静态直连): %s" % url)
+            html = self._fetch(url)
+            videos = self._extract_videos(html)
         
-        # 兜底：如果原生路径被墙，尝试直接走搜索空字符拉取最新
+        # 如果有筛选参数，或者静态直连失败了，直接上大招：用搜索流！
         if not videos:
-            self.log("  ⚠️ /vodtype/ 失败，启用搜索接口兜底")
-            url2 = "%s/index.php/vod/search.html?wd=&page=%d" % (self.site_url, page)
+            self.log("  ⚠️ 触发终极奥义：搜索流抓取")
+            wd = ""
+            if cls and cls != "全部": wd = cls
+            elif year and year != "全部": wd = year
+            elif area and area != "全部": wd = area
+            
+            # 巧妙利用它的搜索功能，把筛选词当关键词搜
+            url2 = "%s/vodsearch/-------------.html?wd=%s&page=%d" % (self.site_url, urllib.parse.quote(wd), page)
+            self.log("  (搜索兜底): %s" % url2)
             html2 = self._fetch(url2)
-            videos = self._extract_videos(html2)
+            videos = self._extract_search_videos(html2)
             html = html2
 
         pagecount = self._page_count(html)
+        if pagecount == 1 and videos:
+            # 搜索页如果没有页码，防止TVBox不能翻页，强行给个巨大值
+            pagecount = 999
+
         self.log("  最终: %d 条, 总页数: %d" % (len(videos), pagecount))
 
         return {
