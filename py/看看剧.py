@@ -23,7 +23,8 @@
     GET  /videos/{id}             详情(含 playGroups 全部线路与剧集)
     POST /play/token              换取真实播放地址 {videoId,episode,groupCode}
   备注: 实测该站中文 area/class/lang 筛选后端返回恒为 0(仅 year 数字筛选生效),
-        因此分类筛选项只提供年份, 其余中文条件不暴露以免选不出内容。
+        但为保持筛选项完整、界面观感统一, 仍从 /categories/{id}.filters 暴露
+        area/class/lang 合法值并把选中条件透传给列表接口。
 """
 import re
 import sys
@@ -105,6 +106,7 @@ class Spider(Spider):
         self._derive_key = hmac.new(
             _SIGN_KEY, self.device_id.encode(), hashlib.sha256).hexdigest()
         self._cat_cache = None
+        self._filters_cache = {}
         self._play_cache = {}
         self.log("init: site=%s device=%s" % (self.site_url, self.device_id))
 
@@ -209,6 +211,38 @@ class Spider(Spider):
         self._cat_cache = cats
         return cats
 
+    def _load_category_filters(self, tid):
+        """从 /categories/{id} 取 filters(area/class/lang/year 合法值) 并转为 TVBox 格式。"""
+        if self._filters_cache is None:
+            self._filters_cache = {}
+        if tid in self._filters_cache:
+            return self._filters_cache[tid]
+
+        d = self._api("GET", "/categories/%s" % tid) or {}
+        filters = d.get("filters") or {}
+        out = []
+        # 年份仍用本地生成(接口 year 可能为空), 保证选项齐全
+        out.append({"key": "year", "name": "年份", "value": _years_filter()})
+        for key, label in (("area", "地区"), ("class", "剧情"),
+                           ("lang", "语言")):
+            vals = filters.get(key) or []
+            if not vals:
+                continue
+            opts = [{"n": "全部", "v": ""}]
+            for v in vals:
+                if isinstance(v, dict):
+                    n = v.get("name") or v.get("n") or v.get("value")
+                    val = v.get("value", v.get("v"))
+                else:
+                    n = val = v
+                if val is None or str(val) == "":
+                    continue
+                opts.append({"n": self._clean(n) or str(val), "v": str(val)})
+            if len(opts) > 1:
+                out.append({"key": key, "name": label, "value": opts})
+        self._filters_cache[tid] = out
+        return out
+
     def _video_card(self, v):
         # 备注优先用接口 remarks(如 更新至HD / 已完结)
         remarks = self._clean(v.get("remarks"))
@@ -222,10 +256,8 @@ class Spider(Spider):
     # ================= TVBox 接口 =================
     def homeContent(self, filter=False):
         cats = self._load_categories()
-        # 实测中文 area/class/lang 筛选后端恒返回 0, 仅暴露年份
-        filters = {c["type_id"]: [
-            {"key": "year", "name": "年份", "value": _years_filter()}
-        ] for c in cats}
+        filters = {c["type_id"]: self._load_category_filters(c["type_id"])
+                   for c in cats}
         return {"class": cats, "filters": filters}
 
     def homeVideoContent(self):
@@ -264,8 +296,11 @@ class Spider(Spider):
         extend = extend or {}
 
         params = {"page": page, "page_size": _PAGE_SIZE}
-        if extend.get("year"):
-            params["year"] = extend["year"]
+        # 年份 + 中文筛选(area/class/lang) 都带上, 与前端请求保持一致
+        for k in ("year", "area", "class", "lang"):
+            v = extend.get(k)
+            if v:
+                params[k] = v
 
         data = self._api("GET", "/categories/%s/videos" % tid, params) or {}
         lst = data.get("list") or []
