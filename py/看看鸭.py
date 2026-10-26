@@ -1,3 +1,11 @@
+# coding=utf-8
+"""
+看看鸭 kankanya.me | TVBox Python 爬虫 
+关键:
+  - 破解服务端人机验证 (encrypt + robot.php 换取 Cookie)
+  - 解析 player_aaaa -> POST /kkyplayer/api.php -> 自定义 Base64 解码真实直链
+  - 支持 分类/筛选(地区·类型·语言·年份·排序)/搜索/多播放源
+"""
 import sys
 sys.path.append('..')
 import re
