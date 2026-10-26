@@ -7,7 +7,6 @@
   - 滑块验证 + 图形验证码 OCR 兜底
   - 弹幕 JSON -> XML 转换 (localProxy)
   - 自定义播放 UA (ua2)
-  - 简介添加指定前缀
 """
 import sys
 import json
@@ -283,26 +282,42 @@ class Spider(Spider):
 
     # ------------------------- 首页 -------------------------
     def homeContent(self, filter=False):
+        self.log("====== [BOSS战] 开始请求首页数据 ======")
         init_url = "%s/%s/%s" % (self.site_url, self.api_prefix, self.init_suffix)
+        self.log("请求URL: %s" % init_url)
+        
         raw = self._request(init_url)
+        if not raw:
+            self.log("❌ 失败: 接口返回为空，可能是网络问题、域名被墙或 Host 配置错误！")
+            return {'class': [], 'filters': {}}
+
         try:
             rets = json.loads(raw).get('data', '')
-        except Exception:
-            self.log("home init 解析失败")
+        except Exception as e:
+            self.log("❌ 失败: 接口返回的不是合法JSON! 原始返回: %s" % raw[:200])
+            return {'class': [], 'filters': {}}
+
+        if not rets:
+            self.log("❌ 失败: 返回的 JSON 中没有 'data' 字段!")
             return {'class': [], 'filters': {}}
 
         decoded = self.aes_decode(rets, self.key, self.iv)
+        if not decoded:
+            self.log("❌ 失败: AES 解密失败! 请检查 key(%s) 和 iv(%s) 是否正确!" % (self.key, self.iv))
+            return {'class': [], 'filters': {}}
+
         try:
             data = json.loads(decoded)
-        except Exception:
-            self.log("home data 解密失败")
+        except Exception as e:
+            self.log("❌ 失败: 解密后的数据不是合法 JSON! 解密内容: %s" % decoded[:200])
             return {'class': [], 'filters': {}}
+
+        self.log("✅ 成功解密首页数据，准备解析分类...")
 
         # 弹幕地址
         raw_danmu = (data.get('config') or {}).get('third_danmu_url', '')
         if isinstance(raw_danmu, list):
-            raw_danmu = next((u for u in raw_danmu
-                              if isinstance(u, str) and u.strip()), '')
+            raw_danmu = next((u for u in raw_danmu if isinstance(u, str) and u.strip()), '')
         elif not isinstance(raw_danmu, str):
             raw_danmu = ''
         if raw_danmu:
@@ -316,23 +331,23 @@ class Spider(Spider):
         # box_config 解密
         box_config = data.get('box_config')
         if box_config:
-            original_key = self.key
-            swapped_key = original_key[::-1]
-            md5_key = self.md5(swapped_key)
-            dynamic_iv = md5_key[:16]
-            decrypted = self.aes_decode(box_config, swapped_key, dynamic_iv)
             try:
+                original_key = self.key
+                swapped_key = original_key[::-1]
+                md5_key = self.md5(swapped_key)
+                dynamic_iv = md5_key[:16]
+                decrypted = self.aes_decode(box_config, swapped_key, dynamic_iv)
                 box_json = json.loads(decrypted)
-            except Exception:
-                box_json = {}
-            if box_json.get('search_name'):
-                self.search_api_suffix = box_json['search_name']
-            if box_json.get('signature_name') and box_json.get('signature_value'):
-                self.sou_param_name = box_json['signature_name']
-                self.sou_salt = self._process_signature_value(box_json['signature_value'])
-            api_header = box_json.get('api_header') or {}
-            if api_header.get('key') and api_header.get('value'):
-                self.extra_search_headers[api_header['key']] = api_header['value']
+                if box_json.get('search_name'):
+                    self.search_api_suffix = box_json['search_name']
+                if box_json.get('signature_name') and box_json.get('signature_value'):
+                    self.sou_param_name = box_json['signature_name']
+                    self.sou_salt = self._process_signature_value(box_json['signature_value'])
+                api_header = box_json.get('api_header') or {}
+                if api_header.get('key') and api_header.get('value'):
+                    self.extra_search_headers[api_header['key']] = api_header['value']
+            except Exception as e:
+                self.log("⚠️ box_config 解密失败，跳过高级搜索配置: %s" % e)
         else:
             self.search_api_suffix = 'searchList'
             self.sou_param_name = ''
@@ -344,16 +359,25 @@ class Spider(Spider):
         classes = []
         self.home_vods = []
 
-        for item in data.get('type_list') or []:
+        type_list = data.get('type_list') or []
+        self.log("解析到分类数量: %d" % len(type_list))
+
+        for item in type_list:
             tid = item.get('type_id')
-            if tid is not None and int(tid) > 0:
-                rec = item.get('recommend_list')
-                if isinstance(rec, list):
-                    self.home_vods.extend(rec)
+            if tid is None:
+                continue
+                
+            try:
+                if int(tid) > 0:
+                    rec = item.get('recommend_list')
+                    if isinstance(rec, list):
+                        self.home_vods.extend(rec)
+            except Exception:
+                pass
 
             classes.append({
                 'type_id': tid,
-                'type_name': item.get('type_name'),
+                'type_name': item.get('type_name') or '未知分类',
             })
 
             filter_list = []
@@ -371,9 +395,11 @@ class Spider(Spider):
             if filter_list:
                 filters[str(tid)] = filter_list
 
+        self.log("====== [BOSS战] 首页解析完成，返回分类: %d 个 ======" % len(classes))
         return {'class': classes, 'filters': filters}
 
     def homeVideoContent(self):
+        self.log("====== [BOSS战] 返回首页推荐视频 (数量: %d) ======" % len(self.home_vods))
         return {'list': self.home_vods}
 
     @staticmethod
