@@ -1,6 +1,6 @@
 # coding=utf-8
 """
-看看鸭 kankanya.me | TVBox Python 爬虫 
+看看鸭 kankanya.cc | TVBox Python 爬虫
 关键:
   - 破解服务端人机验证 (encrypt + robot.php 换取 Cookie)
   - 解析 player_aaaa -> POST /kkyplayer/api.php -> 自定义 Base64 解码真实直链
@@ -62,7 +62,7 @@ except ImportError:
     Spider = _BaseSpider
 
 
-HOST = "https://www.kankanya.me"
+HOST = "https://www.kankanya.cc"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 DEFAULT_PIC = HOST + "/mxtheme/images/logo.png"
@@ -128,11 +128,11 @@ for c in CLASSES:
 
 
 # ===================== 正则 =====================
-# 首页/分类/搜索卡片
+# 首页/分类/搜索卡片 (title 可选, 窗口放宽到 800)
 _RE_CARD = re.compile(
     r'<a\s[^>]*?href="(/detail/[^"]+?\.html)"[^>]*?'
-    r'title="([^"]*)"[^>]*?>'
-    r'[\s\S]{0,600}?'
+    r'(?:title="([^"]*)")?[^>]*?>'
+    r'[\s\S]{0,800}?'
     r'(?:data-original|src)="([^"]*(?:upload|jpg|png|webp)[^"]*)"',
     re.S | re.I)
 _RE_HREF = re.compile(r'href="(/detail/[^"]+?\.html)"', re.I)
@@ -255,7 +255,6 @@ class Spider(Spider):
             if _CHALLENGE_KEY not in text:
                 return text
             self.log("⚠️ 人机验证, 正在破解...")
-            # 对应 JS: post robot.php -> setTimeout reload
             for attempt in range(3):
                 m = _RE_TOKEN.search(text)
                 token = m.group(1) if m else str(int(time.time()))
@@ -266,7 +265,7 @@ class Spider(Spider):
                                        **{"Content-Type":
                                           "application/x-www-form-urlencoded",
                                           "Referer": url}), timeout=20)
-                time.sleep(2.0)  # 对应 JS 端 setTimeout 后 reload
+                time.sleep(2.0)
                 rsp2 = self.fetch(url, headers=self.headers, timeout=20)
                 text = rsp2.text or ""
                 if _CHALLENGE_KEY not in text:
@@ -340,7 +339,6 @@ class Spider(Spider):
                 continue
             seen.add(href)
             alt, pic = "", ""
-            # 在 href 位置向后的小窗口内找标题(strong)与图片
             pos = html.find('href="%s"' % href)
             if pos >= 0:
                 win = html[pos:pos + 2500]
@@ -367,15 +365,16 @@ class Spider(Spider):
         return videos
 
     def _page_count(self, html):
+        """匹配 /show/xxx-----N---YYYY.html 或 /show/xxx-----N---.html"""
         if not html:
             return 1
-        pages = re.findall(r'/show/[^"]*?-(\d+)---\.html', html)
+        pages = re.findall(r'/show/[^"]*?-(\d+)---\d*\.html', html)
         if pages:
             try:
                 return max(int(p) for p in pages)
             except Exception:
                 pass
-        return 9999
+        return 1
 
     # -------- TVBox 接口 --------
     def homeContent(self, filter=False):
@@ -387,9 +386,12 @@ class Spider(Spider):
         return {"list": self._extract_videos(html)}
 
     def _build_show_url(self, tid, pg, ext):
-        """构造 /show/{tid}-{area}-{by}-{class}-{lang}-{letter}-------{page}---{year}.html"""
-        fields = ["", "", "", "", "", "", "", "", "", "", ""]  # 11 个占位
-        # 索引: 0=area 1=by 2=class 3=lang 4=letter 7=page 10=year
+        """
+        真实格式:
+        /show/{tid}-{area}-{by}-{class}-{lang}-{letter}-----{pg}---{year}.html
+        空字段保留, 共 11 段 (0~10)
+        """
+        fields = [""] * 11
         if ext.get("area"):
             fields[0] = urllib.parse.quote(str(ext["area"]))
         if ext.get("by"):
@@ -400,7 +402,8 @@ class Spider(Spider):
             fields[3] = urllib.parse.quote(str(ext["lang"]))
         if ext.get("letter"):
             fields[4] = str(ext["letter"])
-        fields[7] = str(pg)
+        # 页码在 index 8, 年份在 index 10
+        fields[8] = str(pg) if pg and str(pg) != "1" else ""
         if ext.get("year"):
             fields[10] = str(ext["year"])
         return "%s/show/%s-%s.html" % (self.site_url, tid, "-".join(fields))
@@ -462,7 +465,6 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # 标题
         name = ""
         m = _RE_H1.search(html)
         if m:
@@ -473,13 +475,11 @@ class Spider(Spider):
                 name = self._clean(m.group(1).split("_")[0].split("-")[0])
         name = re.sub(r"\s*[(（]\d{4}[)）]\s*$", "", name).strip() or vod_id
 
-        # 封面
         pic = self.default_pic
         m = _RE_PIC.search(html)
         if m:
             pic = self._fix_url(m.group(1))
 
-        # 简介
         content = ""
         for rx in (_RE_INTRO, _RE_INTRO_DIV, _RE_META_DESC):
             m = rx.search(html)
@@ -489,7 +489,6 @@ class Spider(Spider):
                     break
         content = (INTRO_PREFIX + "\n" + content) if content else INTRO_PREFIX
 
-        # 元信息(导演/主演/年份/地区/类型...)
         meta = {}
         for title, body in _RE_INFO_ITEM.findall(html):
             meta[title.strip()] = self._clean(body)
@@ -508,9 +507,8 @@ class Spider(Spider):
 
         remarks = " ".join(x for x in (vtype, year, area) if x)
 
-        # ===== 剧集提取(多播放源) =====
-        sources = _RE_SOURCE.findall(html)  # data-dropdown-value 顺序即面板顺序
-        panels = {}   # sid -> [(name, href)]
+        sources = _RE_SOURCE.findall(html)
+        panels = {}
         panel_order = []
         for ep_href, ep_inner in _RE_EPISODE.findall(html):
             mh = _RE_PLAY_SID.search(ep_href)
@@ -526,7 +524,6 @@ class Spider(Spider):
                 ep_name = "第%s集" % (len(panels[sid]) + 1)
             panels[sid].append((ep_name, ep_href))
 
-        # 源名与面板按顺序对齐
         play_from, play_url = [], []
         for i, sid in enumerate(panel_order):
             src = sources[i] if i < len(sources) else ("播放源%d" % (i + 1))
@@ -577,7 +574,6 @@ class Spider(Spider):
 
                 purl = pdata.get("url", "")
 
-                # 情况 A: player_aaaa.url 已是明文直链
                 if purl.startswith("http"):
                     res = {"parse": 0, "playUrl": "", "url": purl,
                            "header": header}
@@ -585,7 +581,6 @@ class Spider(Spider):
                     self.log("  => 明文直链: %s" % purl[:160])
                     return res
 
-                # 情况 B: 加密 vid -> POST kkyplayer/api.php
                 if purl:
                     try:
                         rsp = self.post(
@@ -602,7 +597,6 @@ class Spider(Spider):
                         enc_url = data.get("url", "")
                         mode = data.get("urlmode", 2)
                         if enc_url:
-                            # urlmode=2 -> Decode2; 其他(含 1) -> Decode1
                             if str(mode) == "2":
                                 real = _custom_decode(enc_url)
                             else:
@@ -619,7 +613,6 @@ class Spider(Spider):
                     except Exception as e:
                         self.log("  api.php 解析失败: %s" % e)
 
-        # 兜底: 交给 TVBox 嗅探播放页
         res = {"parse": 1, "playUrl": "", "url": play_page, "header": header}
         self._play_cache[play_page] = (now, res)
         return res
