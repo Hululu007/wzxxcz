@@ -1538,14 +1538,7 @@
             "key": "葫芦影视",
             "name": "💡葫芦影视",
             "type": 3,
-            "api": "./js/葫芦影视.js",
-            "ext": {
-                "host": "./JS/maccos_config.txt",
-                "key": "8R33VQSxzmCaHpEX",
-                "init": "V122",
-                "api": 2,
-                "ua": "okhttp/3.10.0"
-            }
+            "api": "./py/葫芦影视.py"
         },
         {
             "key": "多瑙影视",
