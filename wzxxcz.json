@@ -393,6 +393,12 @@
             "api": "./py/央视频.py"
         },
         {
+            "key": "ysp",
+            "name": "🍊小橙子ysp",
+            "type": 3,
+            "api": "./py/ysp-live.py"
+        },
+        {
             "key": "hipy_js_好趣网",
             "name": "🍊小橙子电视",
             "type": 3,
