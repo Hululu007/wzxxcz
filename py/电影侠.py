@@ -1,6 +1,6 @@
 # coding=utf-8
 """
-电影侠 (dyxia / hhkan.tv)  | TVBox Python 爬虫 
+电影侠 (dyxia / hhkan.tv) 融合版 | TVBox Python 爬虫 
 ==============================================================
 融合三条链路，任一可用即能出结果：
 
@@ -86,6 +86,112 @@ except ImportError:
     except ImportError:
         AES = None
         unpad = None
+
+
+# ---- 纯 Python AES-256-CBC 解密兜底（设备无 pycryptodome 时 API 线照样能活）----
+def _gf_mul(a, b):
+    p = 0
+    for _ in range(8):
+        if b & 1:
+            p ^= a
+        hi = a & 0x80
+        a = (a << 1) & 0xFF
+        if hi:
+            a ^= 0x1B
+        b >>= 1
+    return p
+
+
+def _build_sbox():
+    sbox = [0] * 256
+    inv = [0] * 256
+    p = q = 1
+    while True:
+        # p 乘 3
+        p = p ^ ((p << 1) & 0xFF) ^ (0x1B if p & 0x80 else 0)
+        # q 除以 3
+        q ^= (q << 1) & 0xFF
+        q ^= (q << 2) & 0xFF
+        q ^= (q << 4) & 0xFF
+        if q & 0x80:
+            q ^= 0x09
+        x = q ^ ((q << 1) | (q >> 7)) ^ ((q << 2) | (q >> 6)) \
+            ^ ((q << 3) | (q >> 5)) ^ ((q << 4) | (q >> 4))
+        sbox[p] = (x ^ 0x63) & 0xFF
+        if p == 1:
+            break
+    for i in range(256):
+        inv[sbox[i]] = i
+    return sbox, inv
+
+
+_SBOX, _INV_SBOX = _build_sbox()
+_RCON = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36, 0x6C]
+
+
+class _PyAES256CBC(object):
+    """仅解密用：AES-256 CBC。"""
+
+    def __init__(self, key, iv):
+        self.iv = iv
+        words = [list(key[i:i + 4]) for i in range(0, 32, 4)]   # Nk=8
+        for i in range(8, 60):                                   # 4*(14+1)
+            t = list(words[i - 1])
+            if i % 8 == 0:
+                t = t[1:] + t[:1]
+                t = [_SBOX[b] for b in t]
+                t[0] ^= _RCON[i // 8 - 1]
+            elif i % 8 == 4:
+                t = [_SBOX[b] for b in t]
+            words.append([words[i - 8][j] ^ t[j] for j in range(4)])
+        self.rk = [b"".join(bytes(w) for w in words[r * 4:r * 4 + 4])
+                   for r in range(15)]
+
+    def _dec_block(self, blk):
+        s = [blk[i] ^ self.rk[14][i] for i in range(16)]
+        for rnd in range(13, -1, -1):
+            # InvShiftRows
+            t = list(s)
+            for r in range(1, 4):
+                for c in range(4):
+                    s[(c + r) % 4 * 4 + r] = t[c * 4 + r]
+            # InvSubBytes
+            s = [_INV_SBOX[b] for b in s]
+            # AddRoundKey
+            k = self.rk[rnd]
+            s = [s[i] ^ k[i] for i in range(16)]
+            if rnd:
+                # InvMixColumns
+                t = list(s)
+                for c in range(4):
+                    a = t[c * 4:c * 4 + 4]
+                    s[c * 4 + 0] = _gf_mul(a[0], 14) ^ _gf_mul(a[1], 11) \
+                        ^ _gf_mul(a[2], 13) ^ _gf_mul(a[3], 9)
+                    s[c * 4 + 1] = _gf_mul(a[0], 9) ^ _gf_mul(a[1], 14) \
+                        ^ _gf_mul(a[2], 11) ^ _gf_mul(a[3], 13)
+                    s[c * 4 + 2] = _gf_mul(a[0], 13) ^ _gf_mul(a[1], 9) \
+                        ^ _gf_mul(a[2], 14) ^ _gf_mul(a[3], 11)
+                    s[c * 4 + 3] = _gf_mul(a[0], 11) ^ _gf_mul(a[1], 13) \
+                        ^ _gf_mul(a[2], 9) ^ _gf_mul(a[3], 14)
+        return bytes(s)
+
+    def decrypt_cbc(self, data):
+        out = bytearray()
+        prev = self.iv
+        for i in range(0, len(data) - len(data) % 16, 16):
+            blk = data[i:i + 16]
+            out += bytes(a ^ b for a, b in zip(self._dec_block(blk), prev))
+            prev = blk
+        return bytes(out)
+
+
+def _pkcs7_unpad(data):
+    if not data:
+        return b""
+    n = data[-1]
+    if 1 <= n <= 16 and data[-n:] == bytes([n]) * n:
+        return data[:-n]
+    return data
 
 
 # ══════════════════════════ 常量 ══════════════════════════
@@ -472,10 +578,14 @@ class Spider(Spider):
 
     @staticmethod
     def _decrypt(raw):
-        if not raw or len(raw) % 16 != 0 or AES is None:
+        if not raw or len(raw) % 16 != 0:
             return None
         try:
-            pt = unpad(AES.new(_AES_KEY, AES.MODE_CBC, _AES_IV).decrypt(raw), 16)
+            if AES is not None:
+                pt = unpad(AES.new(_AES_KEY, AES.MODE_CBC, _AES_IV).decrypt(raw), 16)
+            else:
+                # 设备无 pycryptodome：纯 Python 兜底（慢但能用）
+                pt = _pkcs7_unpad(_PyAES256CBC(_AES_KEY, _AES_IV).decrypt_cbc(raw))
         except Exception:
             return None
         try:
@@ -910,16 +1020,31 @@ class Spider(Spider):
             # 主线：API 详情
             j = self._api("/v2/vod/detail.capi", {"vodId": vid})
             if j and j.get("id"):
-                return self._detail_api(vid, j)
+                return self._ensure_intro(self._detail_api(vid, j))
 
             # 备用：网页详情
             self.log("详情走网页线 vid=%s" % vid)
             if re.match(r"^\d+$", vid):
-                return self._detail_web(vid)
+                res = self._detail_web(vid)
+                return self._ensure_intro(res)
         except Exception as e:
             import traceback
             self.log("detailContent ERR: %s\n%s" % (e, traceback.format_exc()))
         return result
+
+    @staticmethod
+    def _ensure_intro(res):
+        """出口统一保证简介带 INTRO_PREFIX（去重，不重复叠加）。"""
+        try:
+            for v in (res or {}).get("list") or []:
+                c = (v.get("vod_content") or "").strip()
+                if not c:
+                    v["vod_content"] = INTRO_PREFIX
+                elif not c.startswith(INTRO_PREFIX):
+                    v["vod_content"] = INTRO_PREFIX + "\n" + c
+        except Exception:
+            pass
+        return res
 
     def _detail_api(self, vid, j):
         content = (j.get("summary") or "").strip()
@@ -1573,10 +1698,63 @@ class Spider(Spider):
             self.log("fetch FAIL %s -> %s" % (url[-60:], e))
             return ""
 
+    # 网页线图片 CDN：cyscyy 已 TLS 抽风，运行时探活自动切换可用镜像
+    _WEB_PIC_BASES = [
+        "https://vres.cyscyy.com",
+        "https://vres.xqdhkqt.cn",
+        "https://vres.mppcdrr.cn",
+        "https://vres.kbksn.com",
+    ]
+    _web_pic_base = None          # [base, ts] 探活结果缓存
+    _WEB_PIC_TTL = 1800
+
     def _web_pic(self, p):
         if not p or "logo_placeholder" in p:
             return ""
-        return p if p.startswith("http") else WEB_PIC_CDN + p
+        if p.startswith("http"):
+            return p
+        if not p.startswith("/"):
+            p = "/" + p
+        base = self._probe_web_pic_base(p)
+        return (base or self._WEB_PIC_BASES[0]) + p
+
+    def _probe_web_pic_base(self, path):
+        """对真实图片路径做 HEAD 探活，返回第一个能出图的 base。"""
+        hit = Spider._web_pic_base
+        now = time.time()
+        if hit and now - hit[1] < Spider._WEB_PIC_TTL:
+            # 缓存的是域名，但单条路径可能只存在部分镜像，失败时回退重探
+            try:
+                r = self.sess.head(hit[0] + path, headers={"User-Agent": WEB_UA},
+                                   timeout=6, verify=False, allow_redirects=True)
+                if r.status_code == 200:
+                    return hit[0]
+            except Exception:
+                pass
+            Spider._web_pic_base = None
+
+        # 候选：硬编码列表 + appInit 图片组里的国内域名
+        cands = list(Spider._WEB_PIC_BASES)
+        for doms in (self.img_groups or {}).values():
+            for d in (doms or []):
+                try:
+                    host = urlparse(str(d)).hostname or ""
+                except Exception:
+                    continue
+                if host.endswith(".cn") and str(d) not in cands:
+                    # img 组域名带 /vod1 后缀，去掉路径只留站点
+                    cands.append(str(d).split("/vod")[0].rstrip("/"))
+        for c in cands:
+            try:
+                r = self.sess.head(c + path, headers={"User-Agent": WEB_UA},
+                                   timeout=6, verify=False, allow_redirects=True)
+                if r.status_code == 200:
+                    Spider._web_pic_base = (c, now)
+                    self.log("图片镜像 -> %s" % c)
+                    return c
+            except Exception:
+                continue
+        return Spider._WEB_PIC_BASES[0]
 
     def _parse_web_items(self, html, search=False):
         """网页卡片解析。search=True 时走 search-result-item 结构。"""
