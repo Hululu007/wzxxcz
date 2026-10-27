@@ -1,6 +1,6 @@
 # coding=utf-8
 """
-电影侠 dyx00.com | TVBox Python 
+电影侠 dyx00.com | TVBox Python 爬虫 
 域名: https://www.dyx00.com  (备用跳转 dyxia.app)
 
 站点要点:
@@ -116,12 +116,20 @@ _FILTER_TYPES = {
           "穿越", "重生", "剧情", "科幻", "武侠", "爱情", "动作", "战争", "冒险", "其它"],
 }
 
-_FILTER_AREAS = ["全部", "大陆", "香港", "台湾", "美国", "日本", "韩国", "英国",
-                 "法国", "德国", "印度", "泰国", "丹麦", "瑞典", "巴西", "加拿大",
-                 "俄罗斯", "意大利", "比利时", "爱尔兰", "西班牙", "澳大利亚", "其他"]
+# 地区：显示名 -> 站点真实参数（站点界面显示"大陆"，URL 里实际是"中国大陆"！）
+_AREA_ITEMS = [("全部", ""), ("大陆", "中国大陆"), ("香港", "中国香港"),
+               ("台湾", "中国台湾"), ("美国", "美国"), ("日本", "日本"),
+               ("韩国", "韩国"), ("英国", "英国"), ("法国", "法国"),
+               ("德国", "德国"), ("印度", "印度"), ("泰国", "泰国"),
+               ("丹麦", "丹麦"), ("瑞典", "瑞典"), ("巴西", "巴西"),
+               ("加拿大", "加拿大"), ("俄罗斯", "俄罗斯"), ("意大利", "意大利"),
+               ("比利时", "比利时"), ("爱尔兰", "爱尔兰"), ("西班牙", "西班牙"),
+               ("澳大利亚", "澳大利亚"), ("其他", "其他")]
 
-# 短剧频道没有地区/语言筛选
-_FILTER_AREAS_MIN = ["全部", "大陆", "香港", "台湾", "美国", "日本", "韩国", "其他"]
+# 综艺纪录的地区少一些
+_AREA_ITEMS_MIN = [("全部", ""), ("大陆", "中国大陆"), ("香港", "中国香港"),
+                   ("台湾", "中国台湾"), ("美国", "美国"), ("日本", "日本"),
+                   ("韩国", "韩国"), ("其他", "其他")]
 
 _FILTER_LANGS = ["全部", "国语", "粤语", "英语", "日语", "韩语", "法语", "其他"]
 
@@ -139,6 +147,49 @@ _FILTER_SORTS = [("综合", "1"), ("最新", "2"), ("最热", "3"), ("评分", "
 # 动态抓取的筛选缓存 {ch: {...}}
 _DYN_FILTERS = {}
 
+# ==========================================================================
+# 图片资源域（关键！）
+# 站点封面主域 www.dyx00.com/vod1/... 有防盗链（任何直连都是 403 openresty），
+# 真实图片走 rdul.js 下发的资源镜像域（window.RDUL），同一 /vod1/ 路径直接 200。
+# 实测可用: https://vres.wkcyvs.cn / https://103.39.111.180:51050 / ...:51050
+# ==========================================================================
+_RDUL_JS = "https://vf.wkcyvs.cn/vod_pc_static_dyxia/js/rdul.js?ver=123456666"
+_RDUL_DOMAINS = ["https://vres.wkcyvs.cn",
+                 "https://103.39.111.180:51050",
+                 "https://103.39.111.184:51050"]
+_RDUL_TS = 0
+_RDUL_IDX = 0
+
+
+def _load_rdul(fetch_fn=None):
+    """从站点 rdul.js 里刷新图片资源域列表（1 小时一次）"""
+    global _RDUL_DOMAINS, _RDUL_TS
+    now = time.time()
+    if now - _RDUL_TS < 3600 or not _RDUL_DOMAINS:
+        return
+    if fetch_fn is None:
+        return
+    try:
+        js = fetch_fn(_RDUL_JS, timeout=10)
+        domains = re.findall(r'"(https?://[^"]+)"', js or "")
+        domains = [d for d in domains if "http" in d]
+        if domains:
+            _RDUL_DOMAINS = domains
+        _RDUL_TS = now
+    except Exception:
+        _RDUL_TS = now
+
+
+def _pic_domain():
+    global _RDUL_IDX
+    return _RDUL_DOMAINS[_RDUL_IDX % len(_RDUL_DOMAINS)]
+
+
+def _rotate_pic_domain():
+    global _RDUL_IDX
+    _RDUL_IDX += 1
+    return _pic_domain()
+
 
 def _build_filters():
     out = {}
@@ -153,8 +204,8 @@ def _build_filters():
              "value": [{"n": x, "v": "" if x == "全部" else x}
                        for x in _FILTER_TYPES[tid]]},
             {"key": "area", "name": "地区",
-             "value": [{"n": x, "v": "" if x == "全部" else x}
-                       for x in (_FILTER_AREAS_MIN if tid == "4" else _FILTER_AREAS)]},
+             "value": [{"n": n, "v": v} for n, v in
+                       (_AREA_ITEMS_MIN if tid == "4" else _AREA_ITEMS)]},
             {"key": "lang", "name": "语言",
              "value": [{"n": x, "v": "" if x == "全部" else x}
                        for x in _FILTER_LANGS]},
@@ -335,12 +386,23 @@ class Spider(Spider):
             return ""
         url = url.strip().replace("&amp;", "&")
         if url.startswith("//"):
-            return "https:" + url
-        if url.startswith("http"):
-            return url
-        if not url.startswith("/"):
-            url = "/" + url
-        return self.site_url + url
+            url = "https:" + url
+        if not url.startswith("http"):
+            if not url.startswith("/"):
+                url = "/" + url
+            url = self.site_url + url
+        return url
+
+    def _pic_url(self, url):
+        """封面地址改写：主域 /vod1/ 图片有防盗链(403)，
+        必须换成 rdul.js 下发的资源镜像域，才能正常显示"""
+        if not url:
+            return ""
+        url = self._fix_url(url)
+        m = re.match(r'^https?://[^/]+(/vod1/.+)$', url, re.I)
+        if m:
+            return _pic_domain() + m.group(1)
+        return url
 
     def _clean(self, s):
         if not s:
@@ -356,14 +418,16 @@ class Spider(Spider):
         return s.strip()
 
     def _warm_up(self):
-        """预热 + 顺便抓取搜索 token"""
+        """预热 + 顺便抓取搜索 token + 刷新图片资源域"""
         if self._warmed:
             return
         html = self._fetch(self.site_url + "/", timeout=20)
         if html:
             self._warmed = True
             self._dump_search_token(html)
-            self.log("预热完成, token=%s" % (self._search_token[:12] or "NONE"))
+            _load_rdul(self._fetch)
+            self.log("预热完成, token=%s, 图片域=%s" %
+                     (self._search_token[:12] or "NONE", _pic_domain()))
 
     def _dump_search_token(self, html):
         """从页面中任意 /search?k=xxx&amp;t=yyy 链接里取 token"""
@@ -416,7 +480,7 @@ class Spider(Spider):
             if _RE_NONE_COVER.search(tag):
                 continue
             cand.append(u)
-        return self._fix_url(cand[0]) if cand else ""
+        return self._pic_url(cand[0]) if cand else ""
 
     def _pick_title(self, block):
         """v-item-title 里有隐藏的干扰标题（display:none），只取可见那个"""
@@ -627,6 +691,11 @@ class Spider(Spider):
         year = extend.get("year") or ""
         sort = extend.get("sort") or "3"
 
+        # 保险：兼容旧版 UI 缓存传回"显示名"而不是真实值
+        _area_alias = {"大陆": "中国大陆", "香港": "中国香港", "台湾": "中国台湾"}
+        if area in _area_alias:
+            area = _area_alias[area]
+
         # 聚合页
         if tid == "new":
             url = "%s/new/%d.html" % (self.site_url, page)
@@ -807,7 +876,7 @@ class Spider(Spider):
         pic = self.default_pic
         mp = _RE_DETAIL_PIC.search(html)
         if mp and mp.group(1):
-            pic = self._fix_url(mp.group(1))
+            pic = self._pic_url(mp.group(1))
 
         # 简介
         content = ""
