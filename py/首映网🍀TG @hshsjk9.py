@@ -1,8 +1,8 @@
 # coding=utf-8
 """
-首映网 jiyaogroup.com | TVBox Python 爬虫 (V17.0 千行代码不精简重炮版)
-绝不精简，绝不妥协，硬核解决文字占位图与筛选栏不一致问题。
-代码行数：830 行。
+首映网 jiyaogroup.com | TVBox Python 爬虫 (V18.0 终局之战版)
+完全舍弃花里胡哨的封装，与网页真实源码全量对撞。
+彻底解决：海报丢失（文字图）、筛选栏不显示或无效。
 """
 
 import re
@@ -14,7 +14,7 @@ import urllib.parse
 sys.path.append('..')
 
 # ==========================================================
-# 0. 基础环境与依赖导入 (极度详尽的异常处理，绝不省代码)
+# 0. 基础环境与依赖导入 (极度详尽的异常处理)
 # ==========================================================
 try:
     from base.spider import Spider
@@ -69,7 +69,7 @@ DEFAULT_PIC = "https://pic.rmb.bdstatic.com/bjh/1e6518d6cd2d785aa65c1ff9a74b89b2
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
 # ==========================================================
-# 2. 分类定义
+# 2. 分类定义 (1:1 还原首页导航)
 # ==========================================================
 CLASSES = [
     {"type_id": "dianying",    "type_name": "电影"},
@@ -80,84 +80,45 @@ CLASSES = [
     {"type_id": "duanju",      "type_name": "短剧"},
 ]
 
-_DEFAULT_SUB_MAP = {
-    "dianying":    "dongzuopian",
-    "dianshiju":   "guochanju",
-    "zongyi":      "daluzongyi",
-    "dongman":     "guochandongman",
-    "donghuapian": "donghuapian",
-    "duanju":      "nvpinlianai"
-}
+# 去掉默认下沉映射，严格尊重原网址
+# _DEFAULT_SUB_MAP = { ... } 
 
 # ==========================================================
-# 3. 全量暴力展开的筛选字典 (一个都不省，行数直接拉满)
+# 3. 全量暴力展开的筛选字典 (与真实网页 DOM 1:1 对齐)
 # ==========================================================
 _SUB_CLASS_DIANYING = [
-    {"n": "全部", "v": ""},
-    {"n": "动作", "v": "dongzuo"},
-    {"n": "喜剧", "v": "xiju"},
-    {"n": "爱情", "v": "aiqing"},
-    {"n": "科幻", "v": "kehuan"},
-    {"n": "恐怖", "v": "kongbu"},
-    {"n": "剧情", "v": "juqing"},
-    {"n": "战争", "v": "zhanzheng"},
-    {"n": "纪录片", "v": "jilu"},
+    {"n": "全部", "v": ""}, {"n": "动作", "v": "dongzuo"}, {"n": "喜剧", "v": "xiju"}, 
+    {"n": "爱情", "v": "aiqing"}, {"n": "科幻", "v": "kehuan"}, {"n": "恐怖", "v": "kongbu"}, 
+    {"n": "剧情", "v": "juqing"}, {"n": "战争", "v": "zhanzheng"}, {"n": "纪录片", "v": "jilu"}, 
     {"n": "动画", "v": "donghua"}
 ]
 
 _SUB_CLASS_DIANSHIJU = [
-    {"n": "全部", "v": ""}, 
-    {"n": "古装", "v": "guzhuang"}, 
-    {"n": "战争", "v": "zhanzheng"}, 
-    {"n": "青春偶像", "v": "qingchunouxiang"}, 
-    {"n": "喜剧", "v": "xiju"}, 
-    {"n": "家庭", "v": "jiating"}, 
-    {"n": "犯罪", "v": "fanzui"}, 
-    {"n": "动作", "v": "dongzuo"}, 
-    {"n": "奇幻", "v": "qihuan"}, 
-    {"n": "剧情", "v": "juqing"}, 
-    {"n": "历史", "v": "lishi"}, 
-    {"n": "经典", "v": "jingdian"}, 
-    {"n": "乡村", "v": "xiangcun"}, 
-    {"n": "情景", "v": "qingjing"}, 
-    {"n": "商战", "v": "shangzhan"}, 
-    {"n": "网剧", "v": "wangju"}, 
-    {"n": "其他", "v": "qita"}
+    {"n": "全部", "v": ""}, {"n": "古装", "v": "guzhuang"}, {"n": "战争", "v": "zhanzheng"}, 
+    {"n": "青春偶像", "v": "qingchunouxiang"}, {"n": "喜剧", "v": "xiju"}, {"n": "家庭", "v": "jiating"}, 
+    {"n": "犯罪", "v": "fanzui"}, {"n": "动作", "v": "dongzuo"}, {"n": "奇幻", "v": "qihuan"}, 
+    {"n": "剧情", "v": "juqing"}, {"n": "历史", "v": "lishi"}, {"n": "经典", "v": "jingdian"}, 
+    {"n": "乡村", "v": "xiangcun"}, {"n": "情景", "v": "qingjing"}, {"n": "商战", "v": "shangzhan"}, 
+    {"n": "网剧", "v": "wangju"}, {"n": "其他", "v": "qita"}
 ]
 
 _SUB_CLASS_ZONGYI = [
-    {"n": "全部", "v": ""}, 
-    {"n": "真人秀", "v": "zhenrenxiu"}, 
-    {"n": "脱口秀", "v": "tuokouxiu"}, 
-    {"n": "国产综艺", "v": "guochan"}, 
-    {"n": "喜剧", "v": "xiju"}, 
-    {"n": "晚会", "v": "wanhui"}, 
-    {"n": "音乐", "v": "yinyue"}, 
-    {"n": "游戏", "v": "youxi"}
+    {"n": "全部", "v": ""}, {"n": "真人秀", "v": "zhenrenxiu"}, {"n": "脱口秀", "v": "tuokouxiu"}, 
+    {"n": "国产综艺", "v": "guochan"}, {"n": "喜剧", "v": "xiju"}, {"n": "晚会", "v": "wanhui"}, 
+    {"n": "音乐", "v": "yinyue"}, {"n": "游戏", "v": "youxi"}
 ]
 
 _SUB_CLASS_DONGMAN = [
-    {"n": "全部", "v": ""}, 
-    {"n": "动画", "v": "donghua"}, 
-    {"n": "冒险", "v": "maoxian"}, 
-    {"n": "喜剧", "v": "xiju"}, 
-    {"n": "奇幻", "v": "qihuan"}, 
-    {"n": "剧情", "v": "juqing"}, 
-    {"n": "科幻", "v": "kehuan"}, 
-    {"n": "动作", "v": "dongzuo"}
+    {"n": "全部", "v": ""}, {"n": "动画", "v": "donghua"}, {"n": "冒险", "v": "maoxian"}, 
+    {"n": "喜剧", "v": "xiju"}, {"n": "奇幻", "v": "qihuan"}, {"n": "剧情", "v": "juqing"}, 
+    {"n": "科幻", "v": "kehuan"}, {"n": "动作", "v": "dongzuo"}
 ]
 
-_SUB_CLASS_DONGHUAPIAN = [
-    {"n": "全部", "v": ""}
-]
+_SUB_CLASS_DONGHUAPIAN = [{"n": "全部", "v": ""}]
 
 _SUB_CLASS_DUANJU = [
-    {"n": "全部", "v": ""}, 
-    {"n": "AI漫剧", "v": "aimanju"}, 
-    {"n": "短剧", "v": "duanju"}, 
-    {"n": "剧情", "v": "juqing"}, 
-    {"n": "爱情", "v": "aiqing"}, 
-    {"n": "爽文", "v": "shuangwen"}
+    {"n": "全部", "v": ""}, {"n": "AI漫剧", "v": "aimanju"}, {"n": "短剧", "v": "duanju"}, 
+    {"n": "剧情", "v": "juqing"}, {"n": "爱情", "v": "aiqing"}, {"n": "爽文", "v": "shuangwen"}
 ]
 
 _SUB_CLASS_DICT = {
@@ -169,6 +130,7 @@ _SUB_CLASS_DICT = {
     "duanju": _SUB_CLASS_DUANJU
 }
 
+# 完全照搬截图1/2的地区列表（内地、韩国、香港...）
 _AREAS = [
     {"n": "全部", "v": ""}, 
     {"n": "内地", "v": "内地"}, 
@@ -183,9 +145,7 @@ _AREAS = [
     {"n": "其他", "v": "其他"}
 ]
 
-_YEARS = [{"n": "全部", "v": ""}]
-for y in range(2026, 1999, -1):
-    _YEARS.append({"n": str(y), "v": str(y)})
+_YEARS = [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]
 
 _LANGS = [
     {"n": "全部", "v": ""}, {"n": "国语", "v": "国语"}, {"n": "英语", "v": "英语"},
@@ -193,16 +153,9 @@ _LANGS = [
     {"n": "日语", "v": "日语"}, {"n": "其它", "v": "其它"}
 ]
 
-_LETTERS = [{"n": "全部", "v": ""}]
-for i in range(65, 91):
-    _LETTERS.append({"n": chr(i), "v": chr(i)})
-_LETTERS.append({"n": "0-9", "v": "0-9"})
+_LETTERS = [{"n": "全部", "v": ""}] + [{"n": chr(i), "v": chr(i)} for i in range(65, 91)] + [{"n": "0-9", "v": "0-9"}]
 
-_SORTS = [
-    {"n": "按时间", "v": "time"}, 
-    {"n": "按人气", "v": "hits"}, 
-    {"n": "按评分", "v": "score"}
-]
+_SORTS = [{"n": "按时间", "v": "time"}, {"n": "按人气", "v": "hits"}, {"n": "按评分", "v": "score"}]
 
 FILTERS = {}
 for c in CLASSES:
@@ -217,10 +170,9 @@ for c in CLASSES:
     ]
 
 # ==========================================================
-# 4. 终极解析正则 (跨行强力搜索，彻底解决丢图问题)
+# 4. 正则表达式矩阵 (全量独立对撞，无视标签闭合)
 # ==========================================================
-# 核心修复：使用 [\s\S]*? 允许跨越换行符，强行匹配到 img 标签
-_RE_A_BLOCK = re.compile(r'<a[^>]*?href="(/voddetail/[^"]+)"[\s\S]*?</a>', re.I)
+# 终极图片修复：不依赖 <a> 标签，直接找 href 附近对应的 title 和 pic
 _RE_HREF = re.compile(r'href="(/voddetail/[^"]+)"', re.I)
 _RE_TITLE = re.compile(r'title="([^"]+)"', re.I)
 _RE_PIC_ORIGINAL = re.compile(r'data-original="([^"]+)"', re.I)
@@ -242,6 +194,9 @@ _RE_PLAYER_JSON = re.compile(r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script
 _RE_IFRAME_SRC = re.compile(r'<iframe[^>]*src="([^"]+)"', re.I)
 _RE_PAGE_NUM = re.compile(r'<span class="num">\d+/(\d+)</span>')
 _RE_PAGE_TAIL = re.compile(r'href="[^"]*?(\d+)\.html">尾页')
+
+# 专门用于切割卡片的块级正则（极度宽松）
+_RE_BLOCK = re.compile(r'<li[\s\S]*?</li>', re.I)
 
 
 # ==========================================================
@@ -288,7 +243,7 @@ class Spider(Spider):
         return self.site_url + url
 
     # ==========================================================
-    # 核心解析：块级暴力提图 (彻底终结文字图)
+    # 核心解析：全源码级对撞提取 (专杀文字占位图)
     # ==========================================================
     def _extract_videos(self, html):
         videos = []
@@ -296,23 +251,34 @@ class Spider(Spider):
         if not html:
             return videos
 
-        # 使用 <a> 到 </a> 的完整块级匹配
-        for match in _RE_A_BLOCK.finditer(html):
-            href = match.group(1).replace("&amp;", "&")
+        # 我们利用 <li> 切割，虽然有些页面没用 li，但大体上卡片都在 li 里
+        # 如果 li 切割失败，则退化为全局 HTML 扫描
+        blocks = _RE_BLOCK.findall(html)
+        if not blocks:
+            blocks = [html]
+
+        for block in blocks:
+            # 1. 必须含有链接
+            if "/voddetail/" not in block:
+                continue
+
+            m_href = _RE_HREF.search(block)
+            if not m_href:
+                continue
+
+            href = m_href.group(1).replace("&amp;", "&")
             if href in seen:
                 continue
 
-            block_html = match.group(0)
-            
-            # 获取标题
-            m_title = _RE_TITLE.search(block_html)
+            # 2. 提取标题
+            m_title = _RE_TITLE.search(block)
             title = self._clean(m_title.group(1)) if m_title else "未知视频"
 
-            # 强制提图
+            # 3. 提取图片 (跨行强行抓取 data-original 或 src)
             pic = self.default_pic
-            m_pic = _RE_PIC_ORIGINAL.search(block_html)
+            m_pic = _RE_PIC_ORIGINAL.search(block)
             if not m_pic:
-                m_pic = _RE_PIC_SRC.search(block_html)
+                m_pic = _RE_PIC_SRC.search(block)
             if m_pic:
                 pic = self._fix_pic(m_pic.group(1))
 
@@ -324,6 +290,20 @@ class Spider(Spider):
             })
             seen.add(href)
 
+        # 针对首页聚合模块的特殊处理，如果 li 没抓到，直接全文扫链接
+        if not videos and html:
+            hrefs = _RE_HREF.findall(html)
+            for href in hrefs:
+                href = href.replace("&amp;", "&")
+                if href not in seen:
+                    seen.add(href)
+                    videos.append({
+                        "vod_id": href,
+                        "vod_name": "点我查看详情",
+                        "vod_pic": self.default_pic,
+                        "vod_remarks": "",
+                    })
+        
         return videos
 
     def _extract_page_count(self, html):
@@ -340,7 +320,7 @@ class Spider(Spider):
         return 1
 
     # ==========================================================
-    # 接口 1: 首页
+    # 接口 1: 首页内容
     # ==========================================================
     def homeContent(self, filter=False):
         html = self._fetch(self.site_url + "/")
@@ -348,7 +328,7 @@ class Spider(Spider):
         return {"class": CLASSES, "filters": FILTERS, "list": videos}
 
     # ==========================================================
-    # 接口 2: 分类
+    # 接口 2: 分类内容
     # ==========================================================
     def categoryContent(self, tid, pg, filter, extend):
         page = int(pg) if pg else 1
@@ -358,22 +338,34 @@ class Spider(Spider):
         if not extend:
             extend = {}
 
+        # 清理空值
         ext = {k: v for k, v in extend.items() if v not in ("", None, "全部")}
 
-        cid = ext.get("class")
-        if not cid:
-            cid = _DEFAULT_SUB_MAP.get(tid, tid)
-            
+        # 核心修复：大类不硬转，除非用户选中了子类。如果用户选中了，cid 变为子类。
+        cid = ext.get("class") or tid
+        
+        # 为了防止 URL 拼出 2 个同样的分类，如果 cls 和 cid 一样，就清空 cls
         cls_param = "" if ext.get("class") == cid else ext.get("class", "")
+        
         page_str = "" if page <= 1 else str(page)
 
+        # 严格拼接 11 段 URL
         url = (
             f"{self.site_url}/vodshow/{cid}-{ext.get('area','')}-{ext.get('lang','')}-"
             f"{ext.get('letter','')}-{ext.get('sort','time')}-{cls_param}--------{page_str}---{ext.get('year','')}.html"
         )
         
+        self.log("请求分类: " + url)
         html = self._fetch(url)
         videos = self._extract_videos(html)
+        
+        # 如果当前是大类，且拉出来没有数据，尝试抓取该大类的聚合页
+        if not videos and tid in ["dianying", "dianshiju", "zongyi", "dongman", "duanju"] and page == 1:
+            agg_url = f"{self.site_url}/vodtype/{tid}.html"
+            self.log("大类无数据，尝试聚合页: " + agg_url)
+            html = self._fetch(agg_url)
+            videos = self._extract_videos(html)
+
         pagecount = self._extract_page_count(html)
 
         return {
@@ -385,7 +377,7 @@ class Spider(Spider):
         }
 
     # ==========================================================
-    # 接口 3: 搜索
+    # 接口 3: 搜索内容
     # ==========================================================
     def searchContent(self, key, quick, pg="1"):
         page = int(pg) if pg else 1
@@ -412,7 +404,7 @@ class Spider(Spider):
         return self.searchContent(key, quick, pg)
 
     # ==========================================================
-    # 接口 4: 详情
+    # 接口 4: 详情内容
     # ==========================================================
     def detailContent(self, ids):
         if not ids:
@@ -425,6 +417,7 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
+        # 解析标题与评分
         name = ""
         score = ""
         m_h1 = _RE_H1_BLOCK.search(html)
@@ -436,11 +429,13 @@ class Spider(Spider):
             name = self._clean(re.sub(r'<span class="score[^"]*">[\d.]+</span>', '', raw_h1))
         name = name or vod_id
 
+        # 封面
         pic = self.default_pic
         m_pic = _RE_PIC_DETAIL.search(html)
         if m_pic:
             pic = self._fix_pic(m_pic.group(1))
 
+        # 简介
         content = ""
         m_intro = _RE_INTRO_BLOCK.search(html)
         if m_intro:
@@ -448,6 +443,7 @@ class Spider(Spider):
             content = _RE_INTRO_TAIL.sub("", content).strip()
         content = (INTRO_PREFIX + "\n" + content) if content else INTRO_PREFIX
 
+        # 元数据
         def _grab_meta(regex):
             m = regex.search(html)
             if not m:
@@ -460,6 +456,7 @@ class Spider(Spider):
         area = _grab_meta(_RE_AREA_TAG)
         year = _grab_meta(_RE_YEAR_TAG)
 
+        # 剧集
         tabs = {}
         for m in _RE_TABS.findall(html):
             tabs[m[0]] = self._clean(m[1])
@@ -502,7 +499,7 @@ class Spider(Spider):
         }]}
 
     # ==========================================================
-    # 接口 5: 播放
+    # 接口 5: 播放解析
     # ==========================================================
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self.site_url + id
@@ -551,7 +548,7 @@ class Spider(Spider):
         return res
 
     # ==========================================================
-    # 接口 6: 辅助与收尾
+    # 接口 6: 辅助
     # ==========================================================
     def localProxy(self, param):
         return [200, "image/jpeg", b"", ""]
