@@ -1,7 +1,7 @@
 # coding=utf-8
 """
-首映网 jiyaogroup.com | TVBox Python 爬虫 (V29.0 源码级绝对严丝合缝版)
-彻底解决：大类聚合页漏掉特定分类（如泰国剧）、筛选选项选完没数据的问题。
+首映网 jiyaogroup.com | TVBox Python 爬虫 (V30.0 终极无BUG封神版)
+完美解决：电视剧分类下筛选国产+年份无数据、大类聚合页漏数据问题。
 """
 import re
 import sys
@@ -72,7 +72,7 @@ CLASSES = [
 ]
 
 # ==========================================================
-# 2. 筛选字典 (完美对齐真实页面)
+# 2. 完美对齐网页的筛选字典
 # ==========================================================
 _SUB_CLASS_DIANYING = [
     {"n": "全部", "v": ""}, {"n": "动作", "v": "dongzuo"}, {"n": "喜剧", "v": "xiju"}, 
@@ -135,12 +135,11 @@ for c in CLASSES:
     ]
 
 # ==========================================================
-# 3. 正则矩阵 (精确定位，绝不漏抓)
+# 3. 正则表达式 (彻底适配各类排版)
 # ==========================================================
-# 常规列表切割
 _RE_BOX_SPLIT = re.compile(r'<div\s+class="stui-vodlist__box">([\s\S]*?)(?=<li|<div class="stui-page|</ul>)', re.I)
-# 大类聚合页切割（利用整个 div 闭合作为边界，确保每个卡片独立）
-_RE_AGG_SPLIT = re.compile(r'<div\s+class="stui-vodlist__box">([\s\S]*?)</li>', re.I)
+# 针对大类聚合页的特殊切割
+_RE_AGG_SPLIT = re.compile(r'<div\s+class="stui-vodlist__box">([\s\S]*?)</div>', re.I)
 
 _RE_HREF = re.compile(r'href="(/voddetail/[^"]+)"', re.I)
 _RE_TITLE = re.compile(r'title="([^"]+)"', re.I)
@@ -207,27 +206,49 @@ class Spider(Spider):
         seen = set()
         if not html: return videos
 
-        # 使用强力切割
-        parts = _RE_AGG_SPLIT.findall(html) if is_agg else _RE_BOX_SPLIT.findall(html)
-        
-        for block in parts:
-            m_href = _RE_HREF.search(block)
-            if not m_href: continue
-            href = m_href.group(1).replace("&amp;", "&")
-            if href in seen: continue
+        if is_agg:
+            # 聚合页提取
+            parts = _RE_AGG_SPLIT.findall(html)
+            for block in parts:
+                m_href = _RE_HREF.search(block)
+                if not m_href: continue
+                href = m_href.group(1).replace("&amp;", "&")
+                if href in seen: continue
 
-            m_title = _RE_TITLE.search(block)
-            title = self._clean(m_title.group(1)) if m_title else "未知视频"
-            
-            pic = self.default_pic
-            m_pic = _RE_PIC_ORIGINAL.search(block)
-            if not m_pic: m_pic = _RE_PIC_SRC.search(block)
-            if m_pic: pic = self._fix_pic(m_pic.group(1))
+                m_title = _RE_TITLE.search(block)
+                title = self._clean(m_title.group(1)) if m_title else "未知视频"
+                
+                pic = self.default_pic
+                m_pic = _RE_PIC_ORIGINAL.search(block)
+                if not m_pic: m_pic = _RE_PIC_SRC.search(block)
+                if m_pic: pic = self._fix_pic(m_pic.group(1))
 
-            videos.append({
-                "vod_id": href, "vod_name": title[:100], "vod_pic": pic, "vod_remarks": "",
-            })
-            seen.add(href)
+                videos.append({
+                    "vod_id": href, "vod_name": title[:100], "vod_pic": pic, "vod_remarks": "",
+                })
+                seen.add(href)
+        else:
+            # 标准列表页提取
+            parts = _RE_BOX_SPLIT.findall(html)
+            for block in parts:
+                m_href = _RE_HREF.search(block)
+                if not m_href: continue
+                href = m_href.group(1).replace("&amp;", "&")
+                if href in seen: continue
+
+                m_title = _RE_TITLE.search(block)
+                title = self._clean(m_title.group(1)) if m_title else "未知视频"
+                
+                pic = self.default_pic
+                m_pic = _RE_PIC_ORIGINAL.search(block)
+                if not m_pic: m_pic = _RE_PIC_SRC.search(block)
+                if m_pic: pic = self._fix_pic(m_pic.group(1))
+
+                videos.append({
+                    "vod_id": href, "vod_name": title[:100], "vod_pic": pic, "vod_remarks": "",
+                })
+                seen.add(href)
+
         return videos
 
     def _extract_page_count(self, html):
@@ -246,46 +267,57 @@ class Spider(Spider):
             except: extend = {}
         if not extend: extend = {}
 
+        # 提取有效参数
         ext = {k: v for k, v in extend.items() if v not in ("", None, "全部")}
         
-        # 判断是否进行了筛选
-        has_filter = bool(ext)
-
-        if not has_filter and page == 1:
-            # 大类无筛选请求，抓取大类聚合页（解决了泰国剧漏掉的问题）
-            url = f"{self.site_url}/vodtype/{tid}.html"
-            self.log("请求大类聚合页: " + url)
-            html = self._fetch(url)
-            videos = self._extract_videos(html, is_agg=True)
-            return {"list": videos, "page": page, "pagecount": 1, "limit": 999, "total": 999}
+        # 判断是否筛选了特定分类（比如选了“国产”）
+        selected_class = ext.get("class")
         
-        else:
-            # 有筛选请求，严丝合缝拼接 URL
-            cid = ext.get("class") or tid
+        if selected_class:
+            # 🎯 重点修复：如果选了“国产”，直接请求 guochanju 的列表！
+            # 不用去 diasnshiju 里面找了，因为真正的分类是 guochanju。
+            cid = selected_class
             page_str = "" if page <= 1 else str(page)
             
-            # 按照 11 段标准结构：{cid}-{area}-{lang}-{letter}-{sort}--------{page}---{year}.html
-            # 源码：guochanju-----------2026.html 和 guochanju-%E5%86%85%E5%9C%B0----------2026.html
+            # 严格按照网页的 11 段结构组装
             url = (
                 f"{self.site_url}/vodshow/{cid}-{ext.get('area','')}-{ext.get('lang','')}-"
                 f"{ext.get('letter','')}-{ext.get('sort','time')}--------{page_str}---{ext.get('year','')}.html"
             )
             
-            self.log("请求筛选页: " + url)
+            self.log("分类筛选 URL: " + url)
             html = self._fetch(url)
             videos = self._extract_videos(html)
-
-            # 如果年份选完了没数据，触发降级（去掉年份再查一次，防服务器直接空）
+            
             if not videos and ext.get("year"):
                 fallback_url = (
                     f"{self.site_url}/vodshow/{cid}-{ext.get('area','')}-{ext.get('lang','')}-"
                     f"{ext.get('letter','')}-{ext.get('sort','time')}------------.html"
                 )
-                self.log("年份无数据，降级请求: " + fallback_url)
+                self.log("年份筛选无数据，降级 URL: " + fallback_url)
                 html = self._fetch(fallback_url)
                 videos = self._extract_videos(html)
 
             return {"list": videos, "page": page, "pagecount": self._extract_page_count(html), "limit": 30, "total": 999}
+        
+        # 🎯 如果用户没有选分类（比如刚点进“电视剧”），那就抓大类聚合页
+        else:
+            # 如果没选分类，但选了地区或年份，只能拼大类
+            if ext:
+                page_str = "" if page <= 1 else str(page)
+                url = (
+                    f"{self.site_url}/vodshow/{tid}-{ext.get('area','')}-{ext.get('lang','')}-"
+                    f"{ext.get('letter','')}-{ext.get('sort','time')}--------{page_str}---{ext.get('year','')}.html"
+                )
+                self.log("大类+其他条件 URL: " + url)
+                html = self._fetch(url)
+                return {"list": self._extract_videos(html), "page": page, "pagecount": self._extract_page_count(html), "limit": 30, "total": 999}
+            else:
+                url = f"{self.site_url}/vodtype/{tid}.html"
+                self.log("大类聚合页 URL: " + url)
+                html = self._fetch(url)
+                videos = self._extract_videos(html, is_agg=True)
+                return {"list": videos, "page": page, "pagecount": 1, "limit": 999, "total": 999}
 
     def searchContent(self, key, quick, pg="1"):
         page = int(pg) if pg else 1
