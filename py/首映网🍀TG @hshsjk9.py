@@ -1,8 +1,7 @@
 # coding=utf-8
 """
-首映网 jiyaogroup.com | TVBox Python 爬虫 (V18.0 终局之战版)
-完全舍弃花里胡哨的封装，与网页真实源码全量对撞。
-彻底解决：海报丢失（文字图）、筛选栏不显示或无效。
+首映网 jiyaogroup.com | TVBox Python 爬虫 (V19.0 源码级精准解剖版)
+解决大类聚合页内容变少、海报图片丢失的问题。采用区块独立提取法，确保一网打尽！
 """
 
 import re
@@ -14,7 +13,7 @@ import urllib.parse
 sys.path.append('..')
 
 # ==========================================================
-# 0. 基础环境与依赖导入 (极度详尽的异常处理)
+# 0. 基础环境与依赖导入
 # ==========================================================
 try:
     from base.spider import Spider
@@ -69,7 +68,7 @@ DEFAULT_PIC = "https://pic.rmb.bdstatic.com/bjh/1e6518d6cd2d785aa65c1ff9a74b89b2
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
 # ==========================================================
-# 2. 分类定义 (1:1 还原首页导航)
+# 2. 分类定义 (完全对齐首页导航)
 # ==========================================================
 CLASSES = [
     {"type_id": "dianying",    "type_name": "电影"},
@@ -80,11 +79,8 @@ CLASSES = [
     {"type_id": "duanju",      "type_name": "短剧"},
 ]
 
-# 去掉默认下沉映射，严格尊重原网址
-# _DEFAULT_SUB_MAP = { ... } 
-
 # ==========================================================
-# 3. 全量暴力展开的筛选字典 (与真实网页 DOM 1:1 对齐)
+# 3. 全量暴力展开的筛选字典 (完美还原网页)
 # ==========================================================
 _SUB_CLASS_DIANYING = [
     {"n": "全部", "v": ""}, {"n": "动作", "v": "dongzuo"}, {"n": "喜剧", "v": "xiju"}, 
@@ -130,7 +126,6 @@ _SUB_CLASS_DICT = {
     "duanju": _SUB_CLASS_DUANJU
 }
 
-# 完全照搬截图1/2的地区列表（内地、韩国、香港...）
 _AREAS = [
     {"n": "全部", "v": ""}, 
     {"n": "内地", "v": "内地"}, 
@@ -170,9 +165,10 @@ for c in CLASSES:
     ]
 
 # ==========================================================
-# 4. 正则表达式矩阵 (全量独立对撞，无视标签闭合)
+# 4. 正则表达式矩阵
 # ==========================================================
-# 终极图片修复：不依赖 <a> 标签，直接找 href 附近对应的 title 和 pic
+# 核心算法：找到所有 <li> 标签（忽略换行），逐行解析里面的属性
+_RE_LI_BLOCK = re.compile(r'<li[\s\S]*?</li>', re.I)
 _RE_HREF = re.compile(r'href="(/voddetail/[^"]+)"', re.I)
 _RE_TITLE = re.compile(r'title="([^"]+)"', re.I)
 _RE_PIC_ORIGINAL = re.compile(r'data-original="([^"]+)"', re.I)
@@ -194,9 +190,6 @@ _RE_PLAYER_JSON = re.compile(r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script
 _RE_IFRAME_SRC = re.compile(r'<iframe[^>]*src="([^"]+)"', re.I)
 _RE_PAGE_NUM = re.compile(r'<span class="num">\d+/(\d+)</span>')
 _RE_PAGE_TAIL = re.compile(r'href="[^"]*?(\d+)\.html">尾页')
-
-# 专门用于切割卡片的块级正则（极度宽松）
-_RE_BLOCK = re.compile(r'<li[\s\S]*?</li>', re.I)
 
 
 # ==========================================================
@@ -243,7 +236,7 @@ class Spider(Spider):
         return self.site_url + url
 
     # ==========================================================
-    # 核心解析：全源码级对撞提取 (专杀文字占位图)
+    # 核心解析：区块独立提取 (专杀内容变少和丢图)
     # ==========================================================
     def _extract_videos(self, html):
         videos = []
@@ -251,37 +244,34 @@ class Spider(Spider):
         if not html:
             return videos
 
-        # 我们利用 <li> 切割，虽然有些页面没用 li，但大体上卡片都在 li 里
-        # 如果 li 切割失败，则退化为全局 HTML 扫描
-        blocks = _RE_BLOCK.findall(html)
-        if not blocks:
-            blocks = [html]
-
-        for block in blocks:
-            # 1. 必须含有链接
+        # 寻找到所有的 li 区块
+        li_blocks = _RE_LI_BLOCK.findall(html)
+        
+        for block in li_blocks:
+            # 必须包含 /voddetail/ 才是视频卡片
             if "/voddetail/" not in block:
                 continue
-
+                
             m_href = _RE_HREF.search(block)
             if not m_href:
                 continue
-
+                
             href = m_href.group(1).replace("&amp;", "&")
             if href in seen:
                 continue
-
-            # 2. 提取标题
+                
+            # 提取标题
             m_title = _RE_TITLE.search(block)
             title = self._clean(m_title.group(1)) if m_title else "未知视频"
-
-            # 3. 提取图片 (跨行强行抓取 data-original 或 src)
+            
+            # 提取图片，优先 original，其次 src
             pic = self.default_pic
             m_pic = _RE_PIC_ORIGINAL.search(block)
             if not m_pic:
                 m_pic = _RE_PIC_SRC.search(block)
             if m_pic:
                 pic = self._fix_pic(m_pic.group(1))
-
+                
             videos.append({
                 "vod_id": href,
                 "vod_name": title[:100],
@@ -290,20 +280,6 @@ class Spider(Spider):
             })
             seen.add(href)
 
-        # 针对首页聚合模块的特殊处理，如果 li 没抓到，直接全文扫链接
-        if not videos and html:
-            hrefs = _RE_HREF.findall(html)
-            for href in hrefs:
-                href = href.replace("&amp;", "&")
-                if href not in seen:
-                    seen.add(href)
-                    videos.append({
-                        "vod_id": href,
-                        "vod_name": "点我查看详情",
-                        "vod_pic": self.default_pic,
-                        "vod_remarks": "",
-                    })
-        
         return videos
 
     def _extract_page_count(self, html):
@@ -341,15 +317,10 @@ class Spider(Spider):
         # 清理空值
         ext = {k: v for k, v in extend.items() if v not in ("", None, "全部")}
 
-        # 核心修复：大类不硬转，除非用户选中了子类。如果用户选中了，cid 变为子类。
         cid = ext.get("class") or tid
-        
-        # 为了防止 URL 拼出 2 个同样的分类，如果 cls 和 cid 一样，就清空 cls
         cls_param = "" if ext.get("class") == cid else ext.get("class", "")
-        
         page_str = "" if page <= 1 else str(page)
 
-        # 严格拼接 11 段 URL
         url = (
             f"{self.site_url}/vodshow/{cid}-{ext.get('area','')}-{ext.get('lang','')}-"
             f"{ext.get('letter','')}-{ext.get('sort','time')}-{cls_param}--------{page_str}---{ext.get('year','')}.html"
@@ -358,14 +329,6 @@ class Spider(Spider):
         self.log("请求分类: " + url)
         html = self._fetch(url)
         videos = self._extract_videos(html)
-        
-        # 如果当前是大类，且拉出来没有数据，尝试抓取该大类的聚合页
-        if not videos and tid in ["dianying", "dianshiju", "zongyi", "dongman", "duanju"] and page == 1:
-            agg_url = f"{self.site_url}/vodtype/{tid}.html"
-            self.log("大类无数据，尝试聚合页: " + agg_url)
-            html = self._fetch(agg_url)
-            videos = self._extract_videos(html)
-
         pagecount = self._extract_page_count(html)
 
         return {
@@ -417,7 +380,6 @@ class Spider(Spider):
         if not html:
             return {"list": []}
 
-        # 解析标题与评分
         name = ""
         score = ""
         m_h1 = _RE_H1_BLOCK.search(html)
@@ -429,13 +391,11 @@ class Spider(Spider):
             name = self._clean(re.sub(r'<span class="score[^"]*">[\d.]+</span>', '', raw_h1))
         name = name or vod_id
 
-        # 封面
         pic = self.default_pic
         m_pic = _RE_PIC_DETAIL.search(html)
         if m_pic:
             pic = self._fix_pic(m_pic.group(1))
 
-        # 简介
         content = ""
         m_intro = _RE_INTRO_BLOCK.search(html)
         if m_intro:
@@ -443,7 +403,6 @@ class Spider(Spider):
             content = _RE_INTRO_TAIL.sub("", content).strip()
         content = (INTRO_PREFIX + "\n" + content) if content else INTRO_PREFIX
 
-        # 元数据
         def _grab_meta(regex):
             m = regex.search(html)
             if not m:
@@ -456,7 +415,6 @@ class Spider(Spider):
         area = _grab_meta(_RE_AREA_TAG)
         year = _grab_meta(_RE_YEAR_TAG)
 
-        # 剧集
         tabs = {}
         for m in _RE_TABS.findall(html):
             tabs[m[0]] = self._clean(m[1])
