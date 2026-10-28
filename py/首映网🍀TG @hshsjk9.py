@@ -1,7 +1,7 @@
 # coding=utf-8
 """
-首映网 jiyaogroup.com | TVBox Python 爬虫 (V9.0 斩首行动版)
-彻底解决：大类聚合页解析为空、漏斗图标无数据、正则被换行截断的问题。
+首映网 jiyaogroup.com | TVBox Python 爬虫 (V10.0 源码级精准定位版)
+彻底解决：分类拼接冲突、li 误伤解析、空盒子问题。
 """
 import re
 import sys
@@ -44,13 +44,11 @@ except ImportError:
     Spider = _BaseSpider
 
 HOST = "https://jiyaogroup.com"
-UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 DEFAULT_PIC = "https://pic.rmb.bdstatic.com/bjh/1e6518d6cd2d785aa65c1ff9a74b89b2.jpeg"
-
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
-# 绝对不再乱改大类 ID，完全遵循首页源码
+# 1. 严格分类
 CLASSES = [
     {"type_id": "dianying",    "type_name": "电影"},
     {"type_id": "dianshiju",   "type_name": "电视剧"},
@@ -60,7 +58,7 @@ CLASSES = [
     {"type_id": "duanju",      "type_name": "短剧"},
 ]
 
-# 筛选结构（把子类作为剧情筛选，大类保留）
+# 2. 完整无阉割的筛选字典
 _SUB_CLASS = {
     "dianying":    [("全部", ""), ("动作", "dongzuopian"), ("喜剧", "xijupian"), ("爱情", "aiqingpian"), ("科幻", "kehuanpian"), ("恐怖", "kongbupian"), ("剧情", "juqingpian"), ("战争", "zhanzhengpian"), ("纪录", "jilupian")],
     "dianshiju":   [("全部", ""), ("国产", "guochanju"), ("香港", "xianggangju"), ("台湾", "taiwanju"), ("日本", "ribenju"), ("泰国", "taiguoju"), ("韩国", "hanguoju"), ("欧美", "oumeiju"), ("海外", "haiwaiju")],
@@ -69,7 +67,6 @@ _SUB_CLASS = {
     "donghuapian": [("全部", "")],
     "duanju":      [("全部", ""), ("女频", "nvpinlianai"), ("反转", "fanzhuanshuangju"), ("穿越", "niandaichuanyue"), ("悬疑", "naodongxuanyi"), ("都市", "xiandaidushi"), ("仙侠", "guzhuangxianxia"), ("热血", "rexuejuqing")],
 }
-
 _AREAS = [("全部", ""), ("内地", "内地"), ("大陆", "大陆"), ("香港", "香港"), ("台湾", "台湾"), ("美国", "美国"), ("日本", "日本"), ("韩国", "韩国"), ("英国", "英国"), ("法国", "法国"), ("泰国", "泰国"), ("印度", "印度"), ("意大利", "意大利"), ("西班牙", "西班牙"), ("加拿大", "加拿大"), ("德国", "德国"), ("新加坡", "新加坡"), ("其他", "其他")]
 _YEARS = [("全部", "")] + [(str(y), str(y)) for y in range(2026, 1999, -1)]
 _LANGS = [("全部", ""), ("国语", "国语"), ("英语", "英语"), ("粤语", "粤语"), ("闽南语", "闽南语"), ("韩语", "韩语"), ("日语", "日语"), ("其它", "其它")]
@@ -88,17 +85,15 @@ for c in CLASSES:
         {"key": "sort", "name": "排序", "value": [{"n": n, "v": v} for n, v in _SORTS]},
     ]
 
-# ===================== 终极三段式解析法 =====================
-# 为什么之前失败？因为源码里 <a> 标签可能会换行，属性顺序也可能变！
-# 下面用独立的正则，先把链接、标题、图片分别抓出来，再进行组合。
-_RE_ITEM_LINK = re.compile(r'href="(/voddetail/[^"]+\.html)"', re.I)
-_RE_ITEM_TITLE = re.compile(r'title="([^"]+)"', re.I)
-_RE_ITEM_PIC = re.compile(r'data-original="([^"]+)"', re.I)
+# 3. 最底层的精准切割
+_RE_BOX = re.compile(r'<div class="stui-vodlist__box">([\s\S]*?)</li>', re.I)
+_RE_HREF = re.compile(r'href="(/voddetail/[^"]+)"', re.I)
+_RE_TITLE = re.compile(r'title="([^"]+)"', re.I)
+_RE_PIC = re.compile(r'data-original="([^"]+)"', re.I)
 
-# 详情页正则
 _RE_H1 = re.compile(r'<h1 class="title">([\s\S]*?)</h1>', re.I)
 _RE_H1_SCORE = re.compile(r'<span class="score[^"]*">([\d.]+)</span>', re.I)
-_RE_PIC = re.compile(r'<div class="stui-content__thumb">[\s\S]*?<img[^>]*?data-original="([^"]+)"', re.S | re.I)
+_RE_PIC_DETAIL = re.compile(r'<div class="stui-content__thumb">[\s\S]*?<img[^>]*?data-original="([^"]+)"', re.S | re.I)
 _RE_INTRO = re.compile(r'<p class="desc hidden-xs">\s*<span class="left text-muted">简介：</span>([\s\S]*?)</p>', re.S | re.I)
 _RE_INTRO_TAIL = re.compile(r'想看更多的.*?请关注我们的网站：[\s\S]*$', re.S | re.I)
 _RE_DIRECTOR = re.compile(r'导演：</span>([\s\S]*?)</p>', re.S | re.I)
@@ -114,17 +109,14 @@ _RE_TAIL = re.compile(r'href="[^"]*?(\d+)\.html">尾页')
 
 
 class Spider(Spider):
-
-    def getName(self):
-        return "首映网"
-
+    def getName(self): return "首映网"
     def init(self, extend=""):
         self.site_url = HOST
         self.headers = {"User-Agent": UA, "Referer": self.site_url + "/"}
         self.default_pic = DEFAULT_PIC
         self._play_cache = {}
 
-    def _fetch(self, url, timeout=20):
+    def _fetch(self, url, timeout=15):
         try:
             rsp = self.fetch(url, headers=self.headers, timeout=timeout)
             return rsp.text if hasattr(rsp, "text") else rsp.content.decode("utf-8", "ignore")
@@ -134,9 +126,8 @@ class Spider(Spider):
 
     def _clean(self, s):
         if not s: return ""
-        s = re.sub(r"<br\s*/?>", "\n", s, flags=re.I)
         s = re.sub(r"<[^>]+>", "", s)
-        return s.replace("&nbsp;", " ").replace("\xa0", " ").replace("&amp;", "&").replace("&quot;", '"').strip()
+        return s.replace("&nbsp;", " ").replace("\xa0", " ").replace("&amp;", "&").strip()
 
     def _valid_pic(self, url):
         if not url or url.startswith("file:///") or url == "/": return self.default_pic
@@ -146,29 +137,25 @@ class Spider(Spider):
         videos, seen = [], set()
         if not html: return videos
         
-        # 核心修复：不再依赖 <a> 标签的整体匹配，而是按块扫描
-        # 先把网页切成以 <li 为边界的块，然后在每个块里找链接、标题、图片
-        blocks = re.findall(r'<li[\s\S]*?</li>', html, re.I)
+        # 核心修复：只切割 class="stui-vodlist__box" 的区块，绝对不会被导航栏和侧边栏干扰！
+        blocks = _RE_BOX.findall(html)
         for block in blocks:
-            m_link = _RE_ITEM_LINK.search(block)
-            if not m_link: continue
+            m_href = _RE_HREF.search(block)
+            if not m_href: continue
             
-            href = m_link.group(1).replace("&amp;", "&")
+            href = m_href.group(1).replace("&amp;", "&")
             if href in seen: continue
             
-            m_title = _RE_ITEM_TITLE.search(block)
-            m_pic = _RE_ITEM_PIC.search(block)
+            m_title = _RE_TITLE.search(block)
+            m_pic = _RE_PIC.search(block)
             
-            title = self._clean(m_title.group(1)) if m_title else "未知视频"
-            pic = self._valid_pic(m_pic.group(1)) if m_pic else self.default_pic
-            
-            seen.add(href)
             videos.append({
-                "vod_id": href, 
-                "vod_name": title[:100], 
-                "vod_pic": pic, 
+                "vod_id": href,
+                "vod_name": self._clean(m_title.group(1))[:100] if m_title else "未知",
+                "vod_pic": self._valid_pic(m_pic.group(1)) if m_pic else self.default_pic,
                 "vod_remarks": ""
             })
+            seen.add(href)
             
         return videos
 
@@ -188,16 +175,20 @@ class Spider(Spider):
             except: extend = {}
         if not extend: extend = {}
 
-        for k in list(extend.keys()):
-            if extend[k] in ("", None, "全部"): del extend[k]
+        # 清理空值
+        ext = {k: v for k, v in extend.items() if v not in ("", None, "全部")}
+        
+        # 核心修复：解决大类与剧情冲突。如果选了剧情就用剧情做 cid，没选就用大类。
+        cid = ext.get("class", tid)
+        
+        # 防止 "class" 参数被重复拼接到第 1 段和第 6 段
+        cls_param = "" if ext.get("class") == cid else ext.get("class", "")
 
-        # 如果选了具体的剧情（子分类），cid 用剧情；否则用大类 tid
-        cid = extend.get("class") or tid
         page_s = "" if page <= 1 else str(page)
         
-        # 严格拼接 11 段 URL
-        url = (f"{self.site_url}/vodshow/{cid}-{extend.get('area','')}-{extend.get('lang','')}-"
-               f"{extend.get('letter','')}-{extend.get('sort','time')}--------{page_s}---{extend.get('year','')}.html")
+        # 11段 URL 拼接
+        url = (f"{self.site_url}/vodshow/{cid}-{ext.get('area','')}-{ext.get('lang','')}-"
+               f"{ext.get('letter','')}-{ext.get('sort','time')}-{cls_param}--------{page_s}---{ext.get('year','')}.html")
         
         self.log(f"category: {url}")
         html = self._fetch(url)
@@ -231,7 +222,7 @@ class Spider(Spider):
         name = name or vod_id
 
         pic = self.default_pic
-        m = _RE_PIC.search(html)
+        m = _RE_PIC_DETAIL.search(html)
         if m: pic = self._valid_pic(m.group(1))
 
         content = ""
