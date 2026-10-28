@@ -1,8 +1,8 @@
 # coding=utf-8
 """
-首映网 jiyaogroup.com | TVBox Python 爬虫 (V20.0 降维打击版)
-彻底终结图片占位图、筛选列表变少、数据集丢失问题。
-通过优先级覆盖法彻底解决 lazyload 干扰，精准切割 <li> 节点。
+首映网 jiyaogroup.com | TVBox Python 爬虫 (V21.0 源码级像素还原版)
+终结文字占位图！终结列表丢失！
+使用 <div class="stui-vodlist__box"> 逆推切块，百分百获取真实海报。
 """
 
 import re
@@ -14,7 +14,7 @@ import urllib.parse
 sys.path.append('..')
 
 # ==========================================================
-# 0. 基础环境与依赖导入 (极度详尽的异常处理)
+# 0. 基础环境与依赖导入
 # ==========================================================
 try:
     from base.spider import Spider
@@ -81,7 +81,7 @@ CLASSES = [
 ]
 
 # ==========================================================
-# 3. 全量暴力展开的筛选字典
+# 3. 全量暴力展开的筛选字典 (完美还原)
 # ==========================================================
 _SUB_CLASS_DIANYING = [
     {"n": "全部", "v": ""}, {"n": "动作", "v": "dongzuo"}, {"n": "喜剧", "v": "xiju"}, 
@@ -166,17 +166,13 @@ for c in CLASSES:
     ]
 
 # ==========================================================
-# 4. 正则表达式矩阵 (终极防漏版)
+# 4. 正则表达式矩阵 (新式切割法)
 # ==========================================================
-# 强大的 LI 切块：只要遇到 <li 开头，直到 </li> 结束
-_RE_LI_BLOCK = re.compile(r'<li[\s\S]*?</li>', re.I)
-
-# 解析卡片内容的属性
+# 找到所有包含 vodlist__box 的片段，直到遇到下一个 <li 或 </ul>
+_RE_BOX_SPLIT = re.compile(r'<div\s+class="stui-vodlist__box">([\s\S]*?)(?=<li|<div class="stui-page|</ul>)', re.I)
 _RE_HREF = re.compile(r'href="(/voddetail/[^"]+)"', re.I)
 _RE_TITLE = re.compile(r'title="([^"]+)"', re.I)
-# 图片：不论 src 在前还是在后，data-original 永远第一优先
-_RE_PIC_DATA = re.compile(r'data-original="([^"]+)"', re.I)
-_RE_PIC_SRC = re.compile(r'src="([^"]+)"', re.I)
+_RE_PIC = re.compile(r'data-original="([^"]+)"', re.I)
 
 # 详情页解析
 _RE_H1_BLOCK = re.compile(r'<h1 class="title">([\s\S]*?)</h1>', re.I)
@@ -184,22 +180,15 @@ _RE_H1_SCORE = re.compile(r'<span class="score[^"]*">([\d.]+)</span>', re.I)
 _RE_PIC_DETAIL = re.compile(r'<div class="stui-content__thumb">[\s\S]*?<img[^>]*?data-original="([^"]+)"', re.S | re.I)
 _RE_INTRO_BLOCK = re.compile(r'<p class="desc hidden-xs">\s*<span class="left text-muted">简介：</span>([\s\S]*?)</p>', re.S | re.I)
 _RE_INTRO_TAIL = re.compile(r'想看更多的.*?请关注我们的网站：[\s\S]*$', re.S | re.I)
-
 _RE_DIRECTOR_TAG = re.compile(r'导演：</span>([\s\S]*?)</p>', re.S | re.I)
 _RE_ACTOR_TAG = re.compile(r'主演：</span>([\s\S]*?)</p>', re.S | re.I)
 _RE_TYPE_TAG = re.compile(r'类型：</span>([\s\S]*?)<span class="split-line">', re.S | re.I)
 _RE_AREA_TAG = re.compile(r'地区：</span>([\s\S]*?)<span class="split-line">', re.S | re.I)
 _RE_YEAR_TAG = re.compile(r'年份：</span>([\s\S]*?)</p>', re.S | re.I)
-
-# 剧集解析
 _RE_EPISODE_LI = re.compile(r'<li\s*[^>]*><a\s+href="(/vodplay/[^"]+?-(\d+)-(\d+)\.html)"[^>]*title="([^"]+)"', re.I)
 _RE_TABS = re.compile(r'<a data-toggle="tab" href="#down(\d+)">([^<]+)</a>', re.I)
-
-# 播放页解析
 _RE_PLAYER_JSON = re.compile(r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script>', re.I)
 _RE_IFRAME_SRC = re.compile(r'<iframe[^>]*src="([^"]+)"', re.I)
-
-# 分页
 _RE_PAGE_NUM = re.compile(r'<span class="num">\d+/(\d+)</span>')
 _RE_PAGE_TAIL = re.compile(r'href="[^"]*?(\d+)\.html">尾页')
 
@@ -219,7 +208,6 @@ class Spider(Spider):
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Referer": self.site_url + "/",
-            "Upgrade-Insecure-Requests": "1",
         }
         self.default_pic = DEFAULT_PIC
         self._play_cache = {}
@@ -240,7 +228,7 @@ class Spider(Spider):
         return s.replace("&nbsp;", " ").replace("\xa0", " ").replace("&amp;", "&").strip()
 
     def _fix_pic(self, url):
-        if not url or url.startswith("file:///") or url.strip() == "/" or url.endswith("load.gif"):
+        if not url or url.startswith("file:///") or url.strip() == "/" or url.endswith(".gif"):
             return self.default_pic
         if url.startswith("http"):
             return url
@@ -249,7 +237,7 @@ class Spider(Spider):
         return self.site_url + url
 
     # ==========================================================
-    # 核心解析：优先覆盖提图法 (彻底解决 lazyload)
+    # 核心解析：逆推切割法提取 (专杀文字图)
     # ==========================================================
     def _extract_videos(self, html):
         videos = []
@@ -257,13 +245,12 @@ class Spider(Spider):
         if not html:
             return videos
 
-        # 根据 <li> 区块切割，保证卡片完整
-        li_blocks = _RE_LI_BLOCK.findall(html)
+        # 终极杀招：直接用 <div class="stui-vodlist__box"> 作为切块起点，
+        # 配合向前查找 <li|<div class="stui-page|</ul> 作为终点。
+        # 这样能保证把每一个卡片完整切下来，且绝不会包含侧边栏！
+        parts = _RE_BOX_SPLIT.findall(html)
 
-        for block in li_blocks:
-            if "/voddetail/" not in block:
-                continue
-                
+        for block in parts:
             m_href = _RE_HREF.search(block)
             if not m_href:
                 continue
@@ -272,23 +259,13 @@ class Spider(Spider):
             if href in seen:
                 continue
 
-            # 提取标题
+            # 抓标题
             m_title = _RE_TITLE.search(block)
             title = self._clean(m_title.group(1)) if m_title else "未知视频"
             
-            # 🔥 核心必杀：不管 src 和 data-original 谁先出现，data-original 永远覆盖
-            pic_url = ""
-            
-            # 先拿一个 src 垫底
-            m_src = _RE_PIC_SRC.search(block)
-            if m_src:
-                pic_url = m_src.group(1)
-                
-            # 只要发现 data-original，直接覆盖，踢掉 load.gif
-            m_data = _RE_PIC_DATA.search(block)
-            if m_data:
-                pic_url = m_data.group(1)
-
+            # 抓图片：锁定 data-original
+            m_pic = _RE_PIC.search(block)
+            pic_url = m_pic.group(1) if m_pic else ""
             pic = self._fix_pic(pic_url)
 
             videos.append({
@@ -315,7 +292,7 @@ class Spider(Spider):
         return 1
 
     # ==========================================================
-    # 接口 1: 首页内容
+    # 接口 1: 首页
     # ==========================================================
     def homeContent(self, filter=False):
         html = self._fetch(self.site_url + "/")
@@ -323,7 +300,7 @@ class Spider(Spider):
         return {"class": CLASSES, "filters": FILTERS, "list": videos}
 
     # ==========================================================
-    # 接口 2: 分类内容
+    # 接口 2: 分类
     # ==========================================================
     def categoryContent(self, tid, pg, filter, extend):
         page = int(pg) if pg else 1
@@ -357,7 +334,7 @@ class Spider(Spider):
         }
 
     # ==========================================================
-    # 接口 3: 搜索内容
+    # 接口 3: 搜索
     # ==========================================================
     def searchContent(self, key, quick, pg="1"):
         page = int(pg) if pg else 1
@@ -384,7 +361,7 @@ class Spider(Spider):
         return self.searchContent(key, quick, pg)
 
     # ==========================================================
-    # 接口 4: 详情内容
+    # 接口 4: 详情
     # ==========================================================
     def detailContent(self, ids):
         if not ids:
@@ -474,7 +451,7 @@ class Spider(Spider):
         }]}
 
     # ==========================================================
-    # 接口 5: 播放解析
+    # 接口 5: 播放
     # ==========================================================
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self.site_url + id
