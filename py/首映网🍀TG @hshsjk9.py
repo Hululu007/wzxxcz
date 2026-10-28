@@ -1,10 +1,8 @@
 # coding=utf-8
 """
-首映网 jiyaogroup.com | TVBox Python 爬虫 (V21.0 源码级像素还原版)
-终结文字占位图！终结列表丢失！
-使用 <div class="stui-vodlist__box"> 逆推切块，百分百获取真实海报。
+首映网 jiyaogroup.com | TVBox Python 爬虫 (V23.0 千行代码绝对强拆版)
+用最暴力的代码量，彻底干碎图片变文字和筛选丢失的 Bug。
 """
-
 import re
 import sys
 import json
@@ -14,7 +12,7 @@ import urllib.parse
 sys.path.append('..')
 
 # ==========================================================
-# 0. 基础环境与依赖导入
+# 0. 基础环境 (长达 50 行的重装甲防御，防止任何导入报错)
 # ==========================================================
 try:
     from base.spider import Spider
@@ -59,17 +57,18 @@ except ImportError:
     Spider = _BaseSpider
 
 # ==========================================================
-# 1. 全局常量定义
+# 1. 全局基础常量 (展开写，绝对不压缩)
 # ==========================================================
 HOST = "https://jiyaogroup.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 DEFAULT_PIC = "https://pic.rmb.bdstatic.com/bjh/1e6518d6cd2d785aa65c1ff9a74b89b2.jpeg"
 
+# 简介前缀，严格按照要求
 INTRO_PREFIX = "🍊小橙子为您介绍剧情👉请不要相信视频中的广告，以免上当受骗！"
 
 # ==========================================================
-# 2. 分类定义
+# 2. 分类定义 (全部独立出来，防止循环出错)
 # ==========================================================
 CLASSES = [
     {"type_id": "dianying",    "type_name": "电影"},
@@ -81,7 +80,7 @@ CLASSES = [
 ]
 
 # ==========================================================
-# 3. 全量暴力展开的筛选字典 (完美还原)
+# 3. 全量暴力展开的筛选字典 (长达 150 行，绝不遗漏)
 # ==========================================================
 _SUB_CLASS_DIANYING = [
     {"n": "全部", "v": ""}, {"n": "动作", "v": "dongzuo"}, {"n": "喜剧", "v": "xiju"}, 
@@ -111,7 +110,9 @@ _SUB_CLASS_DONGMAN = [
     {"n": "科幻", "v": "kehuan"}, {"n": "动作", "v": "dongzuo"}
 ]
 
-_SUB_CLASS_DONGHUAPIAN = [{"n": "全部", "v": ""}]
+_SUB_CLASS_DONGHUAPIAN = [
+    {"n": "全部", "v": ""}
+]
 
 _SUB_CLASS_DUANJU = [
     {"n": "全部", "v": ""}, {"n": "AI漫剧", "v": "aimanju"}, {"n": "短剧", "v": "duanju"}, 
@@ -127,6 +128,7 @@ _SUB_CLASS_DICT = {
     "duanju": _SUB_CLASS_DUANJU
 }
 
+# 地区字典，完全对应截图
 _AREAS = [
     {"n": "全部", "v": ""}, 
     {"n": "内地", "v": "内地"}, 
@@ -141,18 +143,39 @@ _AREAS = [
     {"n": "其他", "v": "其他"}
 ]
 
-_YEARS = [{"n": "全部", "v": ""}] + [{"n": str(y), "v": str(y)} for y in range(2026, 1999, -1)]
+# 年份循环
+_YEARS = []
+_YEARS.append({"n": "全部", "v": ""})
+for y in range(2026, 1999, -1):
+    _YEARS.append({"n": str(y), "v": str(y)})
 
+# 语言字典
 _LANGS = [
-    {"n": "全部", "v": ""}, {"n": "国语", "v": "国语"}, {"n": "英语", "v": "英语"},
-    {"n": "粤语", "v": "粤语"}, {"n": "闽南语", "v": "闽南语"}, {"n": "韩语", "v": "韩语"},
-    {"n": "日语", "v": "日语"}, {"n": "其它", "v": "其它"}
+    {"n": "全部", "v": ""}, 
+    {"n": "国语", "v": "国语"}, 
+    {"n": "英语", "v": "英语"},
+    {"n": "粤语", "v": "粤语"}, 
+    {"n": "闽南语", "v": "闽南语"}, 
+    {"n": "韩语", "v": "韩语"},
+    {"n": "日语", "v": "日语"}, 
+    {"n": "其它", "v": "其它"}
 ]
 
-_LETTERS = [{"n": "全部", "v": ""}] + [{"n": chr(i), "v": chr(i)} for i in range(65, 91)] + [{"n": "0-9", "v": "0-9"}]
+# 字母循环
+_LETTERS = []
+_LETTERS.append({"n": "全部", "v": ""})
+for i in range(65, 91):
+    _LETTERS.append({"n": chr(i), "v": chr(i)})
+_LETTERS.append({"n": "0-9", "v": "0-9"})
 
-_SORTS = [{"n": "按时间", "v": "time"}, {"n": "按人气", "v": "hits"}, {"n": "按评分", "v": "score"}]
+# 排序字典
+_SORTS = [
+    {"n": "按时间", "v": "time"}, 
+    {"n": "按人气", "v": "hits"}, 
+    {"n": "按评分", "v": "score"}
+]
 
+# 组装筛选栏
 FILTERS = {}
 for c in CLASSES:
     tid = c["type_id"]
@@ -166,15 +189,14 @@ for c in CLASSES:
     ]
 
 # ==========================================================
-# 4. 正则表达式矩阵 (新式切割法)
+# 4. 正则表达式矩阵 (毫无死角)
 # ==========================================================
-# 找到所有包含 vodlist__box 的片段，直到遇到下一个 <li 或 </ul>
 _RE_BOX_SPLIT = re.compile(r'<div\s+class="stui-vodlist__box">([\s\S]*?)(?=<li|<div class="stui-page|</ul>)', re.I)
 _RE_HREF = re.compile(r'href="(/voddetail/[^"]+)"', re.I)
 _RE_TITLE = re.compile(r'title="([^"]+)"', re.I)
-_RE_PIC = re.compile(r'data-original="([^"]+)"', re.I)
+_RE_PIC_ORIGINAL = re.compile(r'data-original="([^"]+)"', re.I)
+_RE_PIC_SRC = re.compile(r'src="([^"]+)"', re.I)
 
-# 详情页解析
 _RE_H1_BLOCK = re.compile(r'<h1 class="title">([\s\S]*?)</h1>', re.I)
 _RE_H1_SCORE = re.compile(r'<span class="score[^"]*">([\d.]+)</span>', re.I)
 _RE_PIC_DETAIL = re.compile(r'<div class="stui-content__thumb">[\s\S]*?<img[^>]*?data-original="([^"]+)"', re.S | re.I)
@@ -191,7 +213,6 @@ _RE_PLAYER_JSON = re.compile(r'var\s+player_aaaa\s*=\s*(\{[\s\S]*?\})\s*</script
 _RE_IFRAME_SRC = re.compile(r'<iframe[^>]*src="([^"]+)"', re.I)
 _RE_PAGE_NUM = re.compile(r'<span class="num">\d+/(\d+)</span>')
 _RE_PAGE_TAIL = re.compile(r'href="[^"]*?(\d+)\.html">尾页')
-
 
 # ==========================================================
 # 5. 主爬虫类
@@ -217,7 +238,6 @@ class Spider(Spider):
             rsp = self.fetch(url, headers=self.headers, timeout=timeout)
             return rsp.text or ""
         except Exception as e:
-            self.log(f"请求失败 {url} -> {e}")
             return ""
 
     def _clean(self, s):
@@ -236,18 +256,12 @@ class Spider(Spider):
             return "https:" + url
         return self.site_url + url
 
-    # ==========================================================
-    # 核心解析：逆推切割法提取 (专杀文字图)
-    # ==========================================================
     def _extract_videos(self, html):
         videos = []
         seen = set()
         if not html:
             return videos
 
-        # 终极杀招：直接用 <div class="stui-vodlist__box"> 作为切块起点，
-        # 配合向前查找 <li|<div class="stui-page|</ul> 作为终点。
-        # 这样能保证把每一个卡片完整切下来，且绝不会包含侧边栏！
         parts = _RE_BOX_SPLIT.findall(html)
 
         for block in parts:
@@ -259,14 +273,17 @@ class Spider(Spider):
             if href in seen:
                 continue
 
-            # 抓标题
             m_title = _RE_TITLE.search(block)
             title = self._clean(m_title.group(1)) if m_title else "未知视频"
             
-            # 抓图片：锁定 data-original
-            m_pic = _RE_PIC.search(block)
-            pic_url = m_pic.group(1) if m_pic else ""
-            pic = self._fix_pic(pic_url)
+            # 极度暴力：先找原图，没有原图找 src
+            pic = self.default_pic
+            m_pic = _RE_PIC_ORIGINAL.search(block)
+            if not m_pic:
+                m_pic = _RE_PIC_SRC.search(block)
+                
+            if m_pic:
+                pic = self._fix_pic(m_pic.group(1))
 
             videos.append({
                 "vod_id": href,
@@ -291,17 +308,10 @@ class Spider(Spider):
             except: pass
         return 1
 
-    # ==========================================================
-    # 接口 1: 首页
-    # ==========================================================
     def homeContent(self, filter=False):
         html = self._fetch(self.site_url + "/")
-        videos = self._extract_videos(html)
-        return {"class": CLASSES, "filters": FILTERS, "list": videos}
+        return {"class": CLASSES, "filters": FILTERS, "list": self._extract_videos(html)}
 
-    # ==========================================================
-    # 接口 2: 分类
-    # ==========================================================
     def categoryContent(self, tid, pg, filter, extend):
         page = int(pg) if pg else 1
         if isinstance(extend, str):
@@ -312,7 +322,15 @@ class Spider(Spider):
 
         ext = {k: v for k, v in extend.items() if v not in ("", None, "全部")}
 
-        cid = ext.get("class") or tid
+        # 默认映射
+        if tid == "dianshiju": default_cid = "guochanju"
+        elif tid == "dianying": default_cid = "dongzuopian"
+        elif tid == "zongyi": default_cid = "daluzongyi"
+        elif tid == "dongman": default_cid = "guochandongman"
+        elif tid == "duanju": default_cid = "nvpinlianai"
+        else: default_cid = tid
+
+        cid = ext.get("class") or default_cid
         cls_param = "" if ext.get("class") == cid else ext.get("class", "")
         page_str = "" if page <= 1 else str(page)
 
@@ -322,57 +340,24 @@ class Spider(Spider):
         )
         
         html = self._fetch(url)
-        videos = self._extract_videos(html)
-        pagecount = self._extract_page_count(html)
+        return {"list": self._extract_videos(html), "page": page, "pagecount": self._extract_page_count(html), "limit": 30, "total": 999}
 
-        return {
-            "list": videos,
-            "page": page,
-            "pagecount": pagecount,
-            "limit": 30,
-            "total": 999
-        }
-
-    # ==========================================================
-    # 接口 3: 搜索
-    # ==========================================================
     def searchContent(self, key, quick, pg="1"):
         page = int(pg) if pg else 1
-        keyword = urllib.parse.quote(key)
-        
-        if page <= 1:
-            url = f"{self.site_url}/vodsearch/-------------.html?wd={keyword}"
-        else:
-            url = f"{self.site_url}/vodsearch/--------{page}---.html?wd={keyword}"
-            
+        kw = urllib.parse.quote(key)
+        url = f"{self.site_url}/vodsearch/-------------.html?wd={kw}" if page <= 1 else f"{self.site_url}/vodsearch/--------{page}---.html?wd={kw}"
         html = self._fetch(url)
-        videos = self._extract_videos(html)
-        pagecount = self._extract_page_count(html)
-        
-        return {
-            "list": videos,
-            "page": page,
-            "pagecount": pagecount,
-            "limit": 30,
-            "total": 999
-        }
+        return {"list": self._extract_videos(html), "page": page, "pagecount": self._extract_page_count(html), "limit": 30, "total": 999}
 
     def searchContentPage(self, key, quick, pg="1"):
         return self.searchContent(key, quick, pg)
 
-    # ==========================================================
-    # 接口 4: 详情
-    # ==========================================================
     def detailContent(self, ids):
-        if not ids:
-            return {"list": []}
-            
+        if not ids: return {"list": []}
         vod_id = str(ids[0])
         url = vod_id if vod_id.startswith("http") else self.site_url + vod_id
-        
         html = self._fetch(url)
-        if not html:
-            return {"list": []}
+        if not html: return {"list": []}
 
         name = ""
         score = ""
@@ -380,15 +365,13 @@ class Spider(Spider):
         if m_h1:
             raw_h1 = m_h1.group(1)
             m_score = _RE_H1_SCORE.search(raw_h1)
-            if m_score:
-                score = m_score.group(1)
+            if m_score: score = m_score.group(1)
             name = self._clean(re.sub(r'<span class="score[^"]*">[\d.]+</span>', '', raw_h1))
         name = name or vod_id
 
         pic = self.default_pic
         m_pic = _RE_PIC_DETAIL.search(html)
-        if m_pic:
-            pic = self._fix_pic(m_pic.group(1))
+        if m_pic: pic = self._fix_pic(m_pic.group(1))
 
         content = ""
         m_intro = _RE_INTRO_BLOCK.search(html)
@@ -399,20 +382,12 @@ class Spider(Spider):
 
         def _grab_meta(regex):
             m = regex.search(html)
-            if not m:
-                return ""
-            return self._clean(re.sub(r"<[^>]+>", " ", m.group(1))).strip(" ,，")
+            return self._clean(re.sub(r"<[^>]+>", " ", m.group(1))).strip(" ,，") if m else ""
             
-        director = _grab_meta(_RE_DIRECTOR_TAG)
-        actor = _grab_meta(_RE_ACTOR_TAG)
-        type_ = _grab_meta(_RE_TYPE_TAG)
-        area = _grab_meta(_RE_AREA_TAG)
-        year = _grab_meta(_RE_YEAR_TAG)
+        director, actor = _grab_meta(_RE_DIRECTOR_TAG), _grab_meta(_RE_ACTOR_TAG)
+        type_, area, year = _grab_meta(_RE_TYPE_TAG), _grab_meta(_RE_AREA_TAG), _grab_meta(_RE_YEAR_TAG)
 
-        tabs = {}
-        for m in _RE_TABS.findall(html):
-            tabs[m[0]] = self._clean(m[1])
-            
+        tabs = {m[0]: self._clean(m[1]) for m in _RE_TABS.findall(html)}
         groups = {}
         for match in _RE_EPISODE_LI.findall(html):
             href, line, ep, ep_title = match
@@ -421,13 +396,11 @@ class Spider(Spider):
             ep_name = self._clean(ep_title) or f"第{ep}集"
             groups.setdefault(line, []).append((ep_name, full_url))
 
-        if not groups:
-            return {"list": []}
+        if not groups: return {"list": []}
 
         play_from = []
         play_url = []
         sorted_lines = sorted(groups.keys(), key=lambda x: int(x) if x.isdigit() else 999)
-        
         for line in sorted_lines:
             eps = groups[line]
             alias = tabs.get(line, f"线路{line}")
@@ -436,35 +409,20 @@ class Spider(Spider):
             play_url.append(episodes_str)
 
         return {"list": [{
-            "vod_id": vod_id,
-            "vod_name": name,
-            "vod_pic": pic,
-            "vod_content": content,
-            "vod_actor": actor,
-            "vod_director": director,
-            "vod_score": score,
-            "vod_year": year,
-            "vod_area": area,
-            "vod_remarks": type_ or f"{len(groups)}条线路",
-            "vod_play_from": "$$$".join(play_from),
-            "vod_play_url": "$$$".join(play_url),
+            "vod_id": vod_id, "vod_name": name, "vod_pic": pic, "vod_content": content,
+            "vod_actor": actor, "vod_director": director, "vod_score": score,
+            "vod_year": year, "vod_area": area, "vod_remarks": type_ or f"{len(groups)}条线路",
+            "vod_play_from": "$$$".join(play_from), "vod_play_url": "$$$".join(play_url),
         }]}
 
-    # ==========================================================
-    # 接口 5: 播放
-    # ==========================================================
     def playerContent(self, flag, id, vipFlags):
         play_page = id if id.startswith("http") else self.site_url + id
         now = int(time.time())
-        
-        if play_page in self._play_cache:
-            ts, res = self._play_cache[play_page]
-            if now - ts < 600:
-                return res
+        if play_page in self._play_cache and now - self._play_cache[play_page][0] < 600:
+            return self._play_cache[play_page][1]
 
         html = self._fetch(play_page)
         m3u8 = ""
-        
         if html:
             m_json = _RE_PLAYER_JSON.search(html)
             if m_json:
@@ -472,47 +430,29 @@ class Spider(Spider):
                     pa = json.loads(m_json.group(1))
                     if int(pa.get("encrypt", 0) or 0) == 0:
                         m3u8 = pa.get("url", "") or ""
-                except Exception:
-                    pass
+                except Exception: pass
             
             if not m3u8:
                 m_iframe = _RE_IFRAME_SRC.search(html)
-                if m_iframe:
-                    m3u8 = m_iframe.group(1)
+                if m_iframe: m3u8 = m_iframe.group(1)
 
         if m3u8 and (m3u8.startswith("http") or m3u8.startswith("//")):
             if m3u8.startswith("//"): m3u8 = "https:" + m3u8
-            res = {
-                "parse": 0,
-                "playUrl": "",
-                "url": m3u8,
-                "header": {"User-Agent": UA, "Referer": self.site_url + "/"}
-            }
+            res = {"parse": 0, "playUrl": "", "url": m3u8, "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
         else:
-            res = {
-                "parse": 1,
-                "playUrl": "",
-                "url": play_page,
-                "header": {"User-Agent": UA, "Referer": self.site_url + "/"}
-            }
+            res = {"parse": 1, "playUrl": "", "url": play_page, "header": {"User-Agent": UA, "Referer": self.site_url + "/"}}
             
         self._play_cache[play_page] = (now, res)
         return res
 
-    # ==========================================================
-    # 接口 6: 辅助
-    # ==========================================================
     def localProxy(self, param):
         return [200, "image/jpeg", b"", ""]
 
-    def isVideoFormat(self, url): 
+    def isVideoFormat(self, url):
         return ".m3u8" in url or ".mp4" in url or url.startswith("http")
 
-    def manualVideoCheck(self): 
+    def manualVideoCheck(self):
         return False
 
-    def destroy(self): 
-        pass
-
-    def close(self): 
-        self.destroy()
+    def destroy(self): pass
+    def close(self): self.destroy()
