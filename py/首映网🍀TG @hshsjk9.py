@@ -1,8 +1,7 @@
 # coding=utf-8
 """
-首映网 jiyaogroup.com | TVBox Python 爬虫 (V28.0 源码级全真实对齐版)
-彻底解决：电视剧大类缺分类、年份筛选无数据、海报图片丢失问题。
-所有分类映射和 URL 拼接 100% 严格对齐网页源码。
+首映网 jiyaogroup.com | TVBox Python 爬虫 (V29.0 源码级绝对严丝合缝版)
+彻底解决：大类聚合页漏掉特定分类（如泰国剧）、筛选选项选完没数据的问题。
 """
 import re
 import sys
@@ -73,7 +72,7 @@ CLASSES = [
 ]
 
 # ==========================================================
-# 2. 完美对齐网页的筛选字典
+# 2. 筛选字典 (完美对齐真实页面)
 # ==========================================================
 _SUB_CLASS_DIANYING = [
     {"n": "全部", "v": ""}, {"n": "动作", "v": "dongzuo"}, {"n": "喜剧", "v": "xiju"}, 
@@ -84,7 +83,7 @@ _SUB_CLASS_DIANYING = [
 _SUB_CLASS_DIANSHIJU = [
     {"n": "全部", "v": ""}, {"n": "国产", "v": "guochanju"}, {"n": "香港", "v": "xianggangju"},
     {"n": "台湾", "v": "taiwanju"}, {"n": "日本", "v": "ribenju"}, {"n": "韩国", "v": "hanguoju"},
-    {"n": "欧美", "v": "oumeiju"}, {"n": "海外", "v": "haiwaiju"}
+    {"n": "泰国", "v": "taiguoju"}, {"n": "欧美", "v": "oumeiju"}, {"n": "海外", "v": "haiwaiju"}
 ]
 _SUB_CLASS_ZONGYI = [
     {"n": "全部", "v": ""}, {"n": "真人秀", "v": "zhenrenxiu"}, {"n": "脱口秀", "v": "tuokouxiu"}, 
@@ -136,12 +135,12 @@ for c in CLASSES:
     ]
 
 # ==========================================================
-# 3. 极限双轨正则
+# 3. 正则矩阵 (精确定位，绝不漏抓)
 # ==========================================================
-# 用于常规页面
+# 常规列表切割
 _RE_BOX_SPLIT = re.compile(r'<div\s+class="stui-vodlist__box">([\s\S]*?)(?=<li|<div class="stui-page|</ul>)', re.I)
-# 用于大类聚合页（无 li 包裹）
-_RE_AGG_SPLIT = re.compile(r'<div\s+class="stui-vodlist__box">([\s\S]*?)(?=<div\s+class="stui-vodlist__box">|</ul>)', re.I)
+# 大类聚合页切割（利用整个 div 闭合作为边界，确保每个卡片独立）
+_RE_AGG_SPLIT = re.compile(r'<div\s+class="stui-vodlist__box">([\s\S]*?)</li>', re.I)
 
 _RE_HREF = re.compile(r'href="(/voddetail/[^"]+)"', re.I)
 _RE_TITLE = re.compile(r'title="([^"]+)"', re.I)
@@ -208,12 +207,9 @@ class Spider(Spider):
         seen = set()
         if not html: return videos
 
-        # 如果是大类聚合页，使用无 li 包裹的提取器
-        if is_agg:
-            parts = _RE_AGG_SPLIT.findall(html)
-        else:
-            parts = _RE_BOX_SPLIT.findall(html)
-
+        # 使用强力切割
+        parts = _RE_AGG_SPLIT.findall(html) if is_agg else _RE_BOX_SPLIT.findall(html)
+        
         for block in parts:
             m_href = _RE_HREF.search(block)
             if not m_href: continue
@@ -250,14 +246,13 @@ class Spider(Spider):
             except: extend = {}
         if not extend: extend = {}
 
-        # 清理参数
         ext = {k: v for k, v in extend.items() if v not in ("", None, "全部")}
         
-        # 判断是否有筛选
+        # 判断是否进行了筛选
         has_filter = bool(ext)
 
         if not has_filter and page == 1:
-            # 情况 A：无筛选，请求大类聚合页（完美填补国产、香港等模块数据）
+            # 大类无筛选请求，抓取大类聚合页（解决了泰国剧漏掉的问题）
             url = f"{self.site_url}/vodtype/{tid}.html"
             self.log("请求大类聚合页: " + url)
             html = self._fetch(url)
@@ -265,12 +260,12 @@ class Spider(Spider):
             return {"list": videos, "page": page, "pagecount": 1, "limit": 999, "total": 999}
         
         else:
-            # 情况 B：有筛选，严格按照苹果 CMS 11 段 URL 规范拼接
+            # 有筛选请求，严丝合缝拼接 URL
             cid = ext.get("class") or tid
-            # 拼接：cid-area-lang-letter-sort-----------page---year.html
-            # 注意：这里的空段位极其严谨，完全对齐源码
             page_str = "" if page <= 1 else str(page)
             
+            # 按照 11 段标准结构：{cid}-{area}-{lang}-{letter}-{sort}--------{page}---{year}.html
+            # 源码：guochanju-----------2026.html 和 guochanju-%E5%86%85%E5%9C%B0----------2026.html
             url = (
                 f"{self.site_url}/vodshow/{cid}-{ext.get('area','')}-{ext.get('lang','')}-"
                 f"{ext.get('letter','')}-{ext.get('sort','time')}--------{page_str}---{ext.get('year','')}.html"
@@ -280,7 +275,7 @@ class Spider(Spider):
             html = self._fetch(url)
             videos = self._extract_videos(html)
 
-            # 如果加了年份导致无数据，触发降级
+            # 如果年份选完了没数据，触发降级（去掉年份再查一次，防服务器直接空）
             if not videos and ext.get("year"):
                 fallback_url = (
                     f"{self.site_url}/vodshow/{cid}-{ext.get('area','')}-{ext.get('lang','')}-"
